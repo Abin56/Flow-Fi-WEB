@@ -274,8 +274,8 @@ const BANK_STATUS: Record<EmiRowStatus, string> = {
 };
 
 const TH =
-  "sticky top-0 z-[2] border-b border-r border-b-border-strong/70 border-r-border-strong/50 bg-secondary/90 px-2.5 py-1.5 text-left text-[10.5px] font-bold tracking-[0.07em] whitespace-nowrap text-foreground/55 uppercase backdrop-blur last:border-r-0";
-const TD = "border-b border-r border-b-border-strong/60 border-r-border-strong/40 px-2.5 py-1 align-middle last:border-r-0";
+  "sticky top-0 z-[2] border-b border-border bg-secondary/95 px-3 py-2.5 text-left text-xs font-semibold whitespace-nowrap text-muted-foreground backdrop-blur";
+const TD = "border-b border-border px-3 py-2 align-middle";
 const NUM = "text-right tabular-nums whitespace-nowrap";
 
 const isPaymentKind = (k: SettlementKind) => k === "paymentReceived" || k === "paymentMade" || k === "advance" || k === "advanceApplied";
@@ -295,6 +295,9 @@ export interface MoneyFlow {
 
 export function flowOf(v: Pick<SettlementRowView, "kind" | "row" | "typeLabel">): MoneyFlow | null {
   const { kind, row } = v;
+  if (row.recordedLoanCash) return row.recordedLoanCash.dir === "out"
+    ? { dir: "out", label: "Money out · Lent", noun: "lent" }
+    : { dir: "in", label: "Money in · Borrowed", noun: "borrowed" };
   const repays = row.statementRow?.settles != null;
   switch (kind) {
     case "moneyGiven":
@@ -443,8 +446,8 @@ export function completionLabel(v: SettlementRowView): string | null {
  */
 export function lenderChipOf(inst: { amountDue: number; amountPaid: number; dueDate: Date }, today: Date = new Date()): { label: string; title: string; tone: "paid" | "part" | "overdue" | "due" } {
   const left = Math.max(0, inst.amountDue - inst.amountPaid);
-  if (left <= 0.005) return { label: "Bank paid", title: "You already paid this installment to the bank. Their share to you is separate.", tone: "paid" };
-  if (inst.amountPaid > 0.005) return { label: "Bank part paid", title: `You paid ${money(inst.amountPaid)} of ${money(inst.amountDue)} to the bank. Their share to you is separate.`, tone: "part" };
+  if (left <= 0.005) return { label: "Bank paid", title: "The lender installment is fully paid. Track the person's reimbursement in People.", tone: "paid" };
+  if (inst.amountPaid > 0.005) return { label: "Bank part paid", title: `${money(inst.amountPaid)} of ${money(inst.amountDue)} has been paid to the lender. Track the person's reimbursement in People.`, tone: "part" };
   const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
   const due = inst.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
   if (inst.dueDate.getTime() < new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime())
@@ -646,8 +649,11 @@ export function StatusPill({ status, kind, postponed = false, balance = false }:
 }
 
 /** The row's status — a live postponement reads "Moved to Nov cycle" (still owed: the remaining stays shown). */
-function RowStatus({ v }: { v: SettlementRowView }) {
+function RowStatus({ v, showResult = false }: { v: SettlementRowView; showResult?: boolean }) {
   const deferral = useRowDeferral(v.row.key, v.row.date);
+  if (showResult && v.kind === "loan") {
+    return <StatusPill status={{ ...v.status, label: v.row.recordedLoanCash ? "Funding posted" : "Agreement recorded" }} kind={v.kind} />;
+  }
   if (deferral?.status === "postponed" && v.row.state !== "settled") {
     const until = deferral.date ? formatStatementDate(deferral.date, true) : null;
     const detail = until ? `${v.status.label} · was due ${formatStatementDate(v.row.date, true)}` : `${v.status.label} · first due in the ${deferral.from} cycle`;
@@ -659,12 +665,12 @@ function RowStatus({ v }: { v: SettlementRowView }) {
     return <StatusPill status={{ ...v.status, label: "Postponed", detail: `${full}. ${detail}` }} postponed />;
   }
   // The row's completion stamp already says "Received ₹375" — Status stays short.
-  if (completionLabel(v) != null) return <StatusPill status={{ ...v.status, label: "Fully paid" }} kind={v.kind} />;
+  if (completionLabel(v) != null) return <StatusPill status={{ ...v.status, label: showResult ? "Cleared" : "Fully paid" }} kind={v.kind} />;
   // Inside an overall balance that general payments reduced: the item isn't paid on its own — say what is owed overall.
   if (v.balance) {
     return (
       <span data-testid="balance-status">
-        <StatusPill status={{ ...v.status, label: "Partial", detail: balanceExplanation(v) }} kind={v.kind} balance />
+        <StatusPill status={{ ...v.status, label: showResult ? "Overall payment" : "Partial", detail: balanceExplanation(v) }} kind={v.kind} balance />
       </span>
     );
   }
@@ -673,6 +679,22 @@ function RowStatus({ v }: { v: SettlementRowView }) {
   // Untouched and not overdue: "Pending" — what is owed is in the supporting line and the tooltip.
   if (v.row.state === "open" && (v.status.tone === "due" || v.status.tone === "payable")) return <StatusPill status={{ ...v.status, label: "Pending", detail: v.status.label }} kind={v.kind} />;
   return <StatusPill status={v.status} kind={v.kind} />;
+}
+
+/** Keep an item's own remaining amount beside its status, using the statement's existing open balance. */
+function HistoryResult({ v }: { v: SettlementRowView }) {
+  const { row } = v;
+  const outstanding = v.balance
+    ? `${money(v.balance.owed)} left overall`
+    : (row.state === "open" || row.state === "partial") && v.status.label !== "Balance cleared"
+      ? `${money(row.remaining ?? 0)} ${row.direction === "iOwe" ? "to pay" : "to receive"}`
+      : null;
+  return (
+    <div className="flex flex-col items-start gap-0.5">
+      <RowStatus v={v} showResult />
+      {outstanding && <span className="text-[11px] font-medium text-muted-foreground tabular-nums">{outstanding}</span>}
+    </div>
+  );
 }
 
 /**
@@ -775,10 +797,10 @@ function MobileFigure({ v }: { v: SettlementRowView }) {
 // ---------------------------------------------------------------------------------------------------
 
 /** The cash a row moved, for the Money in / Money out columns — only where money really changed hands. */
-function cashOf(v: SettlementRowView): { dir: "in" | "out"; amount: number } | null {
+export function cashOf(v: Pick<SettlementRowView, "kind" | "row" | "typeLabel">): { dir: "in" | "out"; amount: number } | null {
   const flow = flowOf(v);
   if (!flow) return null;
-  return { dir: flow.dir, amount: v.row.state == null ? (v.paid ?? v.row.amount) : v.row.amount };
+  return { dir: flow.dir, amount: v.row.amount };
 }
 
 /**
@@ -1378,13 +1400,13 @@ function ExpansionCard({ v, personId, personName, lookups, accountForEntry, hand
   const paymentCount = row.payments.length;
   const hint = paymentCount > 0 ? `${paymentCount} ${paymentCount === 1 ? "payment" : "payments"}` : null;
   return (
-    <div data-testid="row-expansion" className={cn("rounded-[8px] border border-l-[3px] border-border-strong/70 bg-card", FAMILY[v.family].edge)}>
+    <div data-testid="row-expansion" className={cn("rounded-xl border border-l-[3px] border-border bg-card shadow-e1", FAMILY[v.family].edge)}>
       {/* What it is + the one primary action. The full description wraps here — the collapsed row only truncates it. */}
-      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1.5 px-3 pt-2">
+      <div className="flex flex-wrap items-start justify-between gap-3 px-3 pt-3 sm:px-4">
         {/* basis-48: on a narrow screen the action drops below the title instead of squeezing it into a column. */}
         <div className="min-w-0 flex-1 basis-48">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-            <p className="min-w-0 text-[14px] leading-snug font-semibold break-words text-foreground">{v.title}</p>
+            <h3 className="min-w-0 font-heading text-base leading-snug font-semibold break-words text-foreground">{v.title}</h3>
             <TypeBadge kind={v.kind} family={v.typeFamily} label={v.typeLabel} flow={flowOf(v)} />
           </div>
           <p className="mt-0.5 text-[12px] leading-snug text-foreground/75" data-testid="row-explanation">
@@ -1396,7 +1418,7 @@ function ExpansionCard({ v, personId, personName, lookups, accountForEntry, hand
       </div>
 
       {/* The money at a glance. */}
-      <div className="space-y-2 px-3 pt-2 pb-2">
+      <div className="space-y-2 px-3 py-3 sm:px-4">
         {row.state != null && !isPaymentKind(v.kind) ? <SettlementSummary v={v} personName={personName} /> : <Breakdown v={v} personName={personName} />}
         <EmiStatusChips v={v} personName={personName} />
         <RowContextNote v={v} personName={personName} />
@@ -1411,7 +1433,7 @@ function ExpansionCard({ v, personId, personName, lookups, accountForEntry, hand
       </div>
 
       {/* Payment timing (only where it applies) and the two disclosure controls share one quiet line. */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border-strong/50 px-3 py-1">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-b-xl border-t border-border bg-secondary/30 px-3 py-1.5 sm:px-4">
         <DeferralControl row={row} title={v.title} compact hideReceived={recordActionShown(row, lookups)} />
         <div className="ml-auto flex items-center gap-0.5">
           <button type="button" aria-expanded={detailsOpen} aria-controls={detailsId} onClick={() => setDetailsOpen((o) => !o)} className={FOOTER_BTN} data-testid="row-more-details">
@@ -1429,7 +1451,7 @@ function ExpansionCard({ v, personId, personName, lookups, accountForEntry, hand
       </div>
 
       {detailsOpen && (
-        <div id={detailsId} data-testid="row-details" className="space-y-3 border-t border-border-strong/50 px-3 py-2.5 duration-150 animate-in fade-in-0">
+        <div id={detailsId} data-testid="row-details" className="space-y-3 border-t border-border px-3 py-3 duration-150 animate-in fade-in-0 motion-reduce:animate-none sm:px-4">
           <div className="grid gap-x-8 gap-y-3 md:grid-cols-2">
             <DetailFacts v={v} cycleLabelOf={cycleLabelOf} />
             <div className="min-w-0 space-y-3">
@@ -1470,6 +1492,7 @@ export interface SettlementTableProps {
   paymentLines?: readonly PaymentLine[];
   /** Running outstanding balance after every line, by line key. */
   balances?: ReadonlyMap<string, StatementBalance>;
+  compactDesktop?: boolean;
 }
 
 /** A lump payment applied to many installments reads as one folded line, not a wall of identical rows. */
@@ -1489,7 +1512,7 @@ export function foldPaymentRows(rows: readonly LedgerRow[]): FoldItem[] {
   return out;
 }
 
-export function SettlementTable({ personId, personName, rows, carriedRows = [], isLoading, lookups, accountForEntry, handlers, empty, cycleLabelOf, className, linkedTrail, paymentLines = [], balances }: SettlementTableProps) {
+export function SettlementTable({ personId, personName, rows, carriedRows = [], isLoading, lookups, accountForEntry, handlers, empty, cycleLabelOf, className, linkedTrail, paymentLines = [], balances, compactDesktop = false }: SettlementTableProps) {
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [openFolds, setOpenFolds] = useState<ReadonlySet<string>>(new Set());
   // Deep link from a lender-payment screen (`?obligation=<row key>`): open and scroll to that row once.
@@ -1599,8 +1622,26 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
   const foldMeta = (f: Extract<FoldItem, { kind: "fold" }>) => `${f.rows.length} installments · ${money(f.rows.reduce((sum, r) => sum + r.amount, 0))} in total`;
 
   const first = personName.split(" ")[0];
-  const payTitle = (p: PaymentRecord) => (p.source === "advance" ? "Advance applied" : p.direction === "youPaid" ? `Payment to ${first}` : `Payment from ${first}`);
-  const payLeft = (l: PaymentLine) => (l.payment.remainingAfter < 0.005 ? "now cleared" : `${money(l.payment.remainingAfter)} left on it`);
+  const payTitle = (p: PaymentRecord) => p.source === "advance" ? "Advance applied" : p.direction === "youPaid"
+    ? (compactDesktop ? `Paid back to ${first}` : `Payment to ${first}`)
+    : (compactDesktop ? `Received back from ${first}` : `Payment from ${first}`);
+  const payLeft = (l: PaymentLine) => (l.payment.remainingAfter < 0.005 ? "Cleared this item" : `${money(l.payment.remainingAfter)} left on this item`);
+  const columnCount = compactDesktop ? 6 : 7;
+  const cell = cn(TD, compactDesktop && "py-1.5");
+  const cashCells = (cash: ReturnType<typeof cashOf>) => compactDesktop ? (
+    <td className={cn(cell, NUM, "w-[7rem]")}>
+      {cash ? (
+        <span title={cash.dir === "in" ? "Money in" : "Money out"} className={cn("text-[13px] font-semibold", cash.dir === "in" ? "text-success" : "text-expense")}>
+          {cash.dir === "in" ? "+" : "−"}{money(cash.amount)}
+        </span>
+      ) : <span className="text-muted-foreground/45">—</span>}
+    </td>
+  ) : (
+    <>
+      <td className={cn(cell, NUM, "w-[6rem]")}>{cash?.dir === "in" ? <span className="text-[13.5px] font-semibold text-success">{money(cash.amount)}</span> : <span className="text-foreground/25">—</span>}</td>
+      <td className={cn(cell, NUM, "w-[6rem]")}>{cash?.dir === "out" ? <span className="text-[13.5px] font-semibold text-expense">{money(cash.amount)}</span> : <span className="text-foreground/25">—</span>}</td>
+    </>
+  );
   const payActions = (l: PaymentLine) => {
     const p = l.payment;
     const edit = handlers.editablePayment?.(p) && handlers.onEditPayment ? () => handlers.onEditPayment!(p) : null;
@@ -1630,31 +1671,37 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
     const inbound = p.direction === "theyPaid";
     const cash = p.source === "cash";
     const Icon = inbound ? ArrowDownLeft : ArrowUpRight;
+    const entry = p.entryId ? lookups.entriesById.get(p.entryId) : null;
+    const date = entry?.receivedDateKnown === false ? "Date not known" : formatStatementDate(p.date);
+    const account = cash ? accountForEntry(p.entryId) : null;
+    const paymentSource = entry?.recordedEarlier ? "Recorded earlier · no account change" : account ? `${inbound ? "To" : "From"} ${account}` : l.parent.category === "loan" ? "Recorded in Loan & EMI" : null;
     return (
       <tr key={`pay:${l.key}`} data-payment-line={l.key} className="transition-colors duration-150 hover:bg-secondary/45">
-        <td className={cn(TD, "w-[5rem]")}>
-          <span className="text-[13px] leading-tight font-medium whitespace-nowrap text-foreground/80 tabular-nums">{formatStatementDate(p.date)}</span>
+        <td className={cn(cell, "w-[5rem]")}>
+          <span className="text-[13px] leading-tight font-medium text-foreground/80 tabular-nums">{date}</span>
         </td>
-        <td className={cn(TD, "w-full max-w-0")}>
+        <td className={cn(cell, "w-full max-w-0")}>
           <div className="flex min-w-0 items-center gap-2">
             <span aria-hidden className={cn("inline-flex size-6 shrink-0 items-center justify-center rounded-full", cash ? (inbound ? "bg-success/10 text-success" : "bg-expense/10 text-expense") : "bg-settle-advance-tint text-settle-advance-text")}>
               <Icon className="size-3.5" strokeWidth={2.25} />
             </span>
-            <span className="shrink-0 truncate text-[13.5px] leading-tight font-semibold text-foreground">{payTitle(p)}</span>
-            <span className="min-w-0 truncate text-[11.5px] leading-tight text-foreground/60" title={`Applied to ${l.parent.title} · ${payLeft(l)}`}>
-              Applied to {l.parent.title} · {payLeft(l)}
-            </span>
+            <div className={cn("min-w-0", !compactDesktop && "flex items-baseline gap-2")}>
+              <p className="truncate text-[13.5px] leading-tight font-semibold text-foreground">{compactDesktop && entry?.recordedEarlier ? "Earlier repayment" : payTitle(p)}</p>
+              <p className="min-w-0 truncate text-[11.5px] leading-tight text-muted-foreground" title={`Applied to ${l.parent.title}${paymentSource ? ` · ${paymentSource}` : ""}`}>
+                Applied to {l.parent.title}{compactDesktop ? (paymentSource ? ` · ${paymentSource}` : "") : ` · ${payLeft(l)}`}
+              </p>
+            </div>
           </div>
         </td>
-        <td className={cn(TD, NUM, "w-[6rem]")}>{cash && inbound ? <span className="text-[13.5px] font-semibold text-success">{money(p.amount)}</span> : <span className="text-foreground/25">—</span>}</td>
-        <td className={cn(TD, NUM, "w-[6rem]")}>{cash && !inbound ? <span className="text-[13.5px] font-semibold text-expense">{money(p.amount)}</span> : <span className="text-foreground/25">—</span>}</td>
-        <td className={cn(TD, NUM, "w-[6.5rem]")}>{cash ? <span className="text-foreground/25">—</span> : <span className="text-[13.5px] font-semibold text-settle-advance-text" title="Advance applied — no cash moved">{money(p.amount)}</span>}</td>
-        <td className={cn(TD, "w-[8rem]")}>
+        {cashCells(cash ? { dir: inbound ? "in" : "out", amount: p.amount } : null)}
+        <td className={cn(cell, NUM, "w-[6.5rem]")}>{cash ? <span className="text-foreground/25">—</span> : <span className="text-[13.5px] font-semibold text-settle-advance-text" title="Advance applied — no cash moved">{money(p.amount)}</span>}</td>
+        <td className={cn(cell, compactDesktop ? "w-[9.5rem]" : "w-[8rem]")}>
           <span className="inline-flex h-5 items-center gap-1 rounded-full bg-success/10 px-2 text-[11px] leading-none font-semibold whitespace-nowrap text-success">
-            {cash ? (inbound ? "Received" : "Paid") : "Advance used"}
+            {cash ? (compactDesktop && entry?.recordedEarlier ? "Recorded earlier" : inbound ? "Received" : "Paid") : "Advance used"}
           </span>
+          {compactDesktop && <span className={cn("mt-0.5 block text-[11px] font-medium tabular-nums", p.remainingAfter < 0.005 ? "text-success" : "text-muted-foreground")}>{payLeft(l)}</span>}
         </td>
-        <td className={cn(TD, "w-[9rem] py-0.5 2xl:w-[15rem]")}>{payActions(l)}</td>
+        <td className={cn(cell, "w-[9rem] py-0.5 2xl:w-[15rem]")}>{payActions(l)}</td>
       </tr>
     );
   };
@@ -1694,7 +1741,8 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
     const obligation = row.state != null;
     // The item's amount has its own column and a running balance is not shown here — only what this line IS, and, for a
     // part-paid item, its own paid / left split.
-    const head = [v.carried && cycleLabelOf ? `From ${cycleLabelOf(row.date)}` : null, v.typeLabel].filter(Boolean).join(" · ");
+    const typeAlreadyInTitle = compactDesktop && v.title.toLowerCase().endsWith(v.typeLabel.toLowerCase());
+    const head = [v.carried && cycleLabelOf ? `From ${cycleLabelOf(row.date)}` : null, typeAlreadyInTitle ? null : v.typeLabel].filter(Boolean).join(" · ");
     const progress = obligation && !v.balance && row.state === "partial" ? `${money(v.paid ?? 0)} paid · ${money(row.remaining ?? 0)} left` : null;
     return [head, v.relation, progress].filter(Boolean).join(" · ");
   };
@@ -1708,6 +1756,21 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
     const fam = FAMILY[v.family];
     const muted = row.state === "settled";
     const cash = cashOf(v);
+    const hasRepaymentNote = v.row.statementRow?.settles && (v.kind === "paymentReceived" || v.kind === "paymentMade");
+    const account = row.recordedLoanCash?.account ?? accountForEntry(row.entryId);
+    const earlier = row.entryId ? lookups.entriesById.get(row.entryId)?.recordedEarlier : false;
+    const source = earlier ? "Recorded earlier · no account change" : cash && account ? `${cash.dir === "in" ? "To" : "From"} ${account}` : null;
+    const cashLabel = cash && flowOf(v)?.noun;
+    const installment = row.statementRow?.emi?.installmentNumber ?? row.statementRow?.loan?.installmentNumber;
+    const supporting = compactDesktop ? [
+      v.carried && cycleLabelOf ? `From ${cycleLabelOf(row.date)}` : null,
+      installment != null ? `Installment #${installment}` : null,
+      cashLabel ? cashLabel.charAt(0).toUpperCase() + cashLabel.slice(1) : v.title.toLowerCase().endsWith(v.typeLabel.toLowerCase()) ? null : v.typeLabel,
+      source,
+      row.key.startsWith("loan:") && !row.recordedLoanCash ? "Agreement amount" : null,
+      v.kind === "paymentReceived" || v.kind === "paymentMade" ? (hasRepaymentNote ? null : "Toward overall balance") : null,
+      row.state === "partial" && !v.balance ? `${money(v.paid ?? 0)} ${row.direction === "iOwe" ? "paid" : "received"} so far` : null,
+    ].filter(Boolean).join(" · ") : supportingText(v);
     return (
       <Fragment key={row.key}>
         <tr
@@ -1725,26 +1788,32 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
           }}
           className={cn("group cursor-pointer transition-colors duration-150", rowTint(v), "hover:bg-secondary/55 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring", open && "bg-secondary/45")}
         >
-          <td className={cn(TD, "w-[5rem] border-l-[3px]", fam.edge)}>
+          <td className={cn(cell, "w-[5rem] border-l-[3px]", fam.edge)}>
             <RowDate v={v} className="text-[13px] leading-tight font-medium text-foreground/85" />
           </td>
-          <td className={cn(TD, "w-full max-w-0")}>
+          <td className={cn(cell, "w-full max-w-0")}>
             <div className="flex min-w-0 items-center gap-2">
               <FlowMark v={v} className="size-6" />
               <div className="min-w-0 flex-1">
                 {/* One line: title · chips · what it is. Postponement / follow-up notes drop to a second line only when they exist. */}
                 <div className="flex min-w-0 items-center gap-1.5">
-                  <span title={supportingText(v) || undefined} className={cn("max-w-[60%] shrink-0 truncate text-[13.5px] leading-tight font-semibold", muted ? "text-foreground/80" : "text-foreground")}>{v.title}</span>
+                  <span title={[v.title, supporting].filter(Boolean).join(" · ")} className={cn("truncate text-[13.5px] leading-tight font-semibold", !compactDesktop && "max-w-[60%] shrink-0", muted ? "text-foreground/80" : "text-foreground")}>{v.title}</span>
                   {(v.kind === "emi" || v.kind === "loanEmi") && <BankPaidChip rowKey={v.row.key} />}
                   <ChevronDown className={cn("size-3.5 shrink-0 text-foreground/40 transition-transform", open && "rotate-180")} strokeWidth={2} aria-hidden />
-                  {v.split ? (
+                  {!compactDesktop && (v.split ? (
                     <SplitSummary split={v.split} className="min-w-0 flex-nowrap overflow-hidden" />
-                  ) : v.row.statementRow?.settles && (v.kind === "paymentReceived" || v.kind === "paymentMade") ? (
+                  ) : hasRepaymentNote ? (
                     <RepaysLine v={v} />
                   ) : (
                     progressText(v) && <p className="min-w-0 truncate text-[11.5px] leading-tight text-foreground/60">{progressText(v)}</p>
-                  )}
+                  ))}
                 </div>
+                {compactDesktop && (v.split ? <SplitSummary split={v.split} className="min-w-0 flex-wrap" /> : (
+                  <>
+                    {supporting && <p className="truncate text-[11px] leading-snug text-muted-foreground">{supporting}</p>}
+                    {hasRepaymentNote && <RepaysLine v={v} />}
+                  </>
+                ))}
                 <div className="flex min-w-0 items-baseline gap-x-3 empty:hidden">
                   {row.state !== "settled" && <DeferralNote rowKey={row.key} rowDate={row.date} hidePostponed className="shrink-0 whitespace-nowrap" />}
                   <PostponedTrail v={v} className="shrink-0" />
@@ -1754,16 +1823,15 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
               </div>
             </div>
           </td>
-          <td className={cn(TD, NUM, "w-[6rem]")}>{cash?.dir === "in" ? <span className="text-[13.5px] font-semibold text-success">{money(cash.amount)}</span> : <span className="text-foreground/25">—</span>}</td>
-          <td className={cn(TD, NUM, "w-[6rem]")}>{cash?.dir === "out" ? <span className="text-[13.5px] font-semibold text-expense">{money(cash.amount)}</span> : <span className="text-foreground/25">—</span>}</td>
-          <td className={cn(TD, NUM, "w-[6.5rem]")}>
+          {cashCells(cash)}
+          <td className={cn(cell, NUM, "w-[6.5rem]")}>
             <ItemAmount v={v} />
           </td>
-          <td className={cn(TD, "w-[8rem] max-w-[8rem]")}><RowStatus v={v} /></td>
-          <td className={cn(TD, "w-[9rem] py-0.5 2xl:w-[15rem]")}><RowActionButtons v={v} handlers={handlers} lookups={lookups} compact detailsOpen={open} onToggleDetails={() => toggle(row)} /></td>
+          <td className={cn(cell, compactDesktop ? "w-[9.5rem]" : "w-[8rem] max-w-[8rem]")}>{compactDesktop ? <HistoryResult v={v} /> : <RowStatus v={v} />}</td>
+          <td className={cn(cell, "w-[9rem] py-0.5", !compactDesktop && "2xl:w-[15rem]")}><RowActionButtons v={v} handlers={handlers} lookups={lookups} compact detailsOpen={open} onToggleDetails={() => toggle(row)} /></td>
         </tr>
         <tr aria-hidden={!open}>
-          <td colSpan={7} className={cn("p-0", open && "border-b border-border-strong/45 bg-secondary/45")}>
+          <td colSpan={columnCount} className={cn("p-0", open && "border-b border-border-strong/45 bg-secondary/45")}>
             <InlineReveal open={open}>
               <div className="px-3 pt-0.5 pb-2.5 lg:pl-[5.75rem]">
                 <Expansion v={v} {...expansionProps} onCollapse={() => toggle(row)} />
@@ -1826,16 +1894,16 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
   const countLabel = (g: MonthGroup) => `${g.rows.length} ${g.rows.length === 1 ? "transaction" : "transactions"}`;
   const monthHeadingRow = (g: MonthGroup) => (
     <tr>
-      <td colSpan={7} className="border-b border-b-border-strong/40 bg-secondary/35 px-3 py-1">
-        <span className="text-[11px] font-bold tracking-[0.08em] whitespace-nowrap text-foreground/80 uppercase">{g.label}</span>
-        <span className="ml-2 rounded-full bg-card px-2 py-px text-[10.5px] font-medium whitespace-nowrap text-foreground/55 ring-1 ring-border-strong/50 ring-inset">{countLabel(g)}</span>
+      <td colSpan={columnCount} className={cn("border-b border-border bg-secondary/45 px-3 py-2", compactDesktop && "py-1.5")}>
+        <span className="text-xs font-semibold whitespace-nowrap text-foreground">{g.label}</span>
+        <span className="ml-2 text-[11px] font-medium whitespace-nowrap text-muted-foreground">{countLabel(g)}</span>
       </td>
     </tr>
   );
   const monthHeadingItem = (g: MonthGroup) => (
-    <li className="sticky top-0 z-[1] flex items-baseline justify-between border-t-2 border-b border-t-border-strong border-b-border-strong/70 bg-secondary px-3 py-1">
-      <span className="text-[12px] font-bold tracking-[0.08em] whitespace-nowrap text-foreground uppercase">{g.label}</span>
-      <span className="text-[11px] font-medium whitespace-nowrap text-foreground/70">{countLabel(g)}</span>
+    <li className="sticky top-0 z-[1] flex items-baseline justify-between gap-2 border-b border-border bg-secondary px-3 py-2">
+      <span className="text-xs font-semibold whitespace-nowrap text-foreground">{g.label}</span>
+      <span className="text-[11px] font-medium whitespace-nowrap text-muted-foreground">{countLabel(g)}</span>
     </li>
   );
 
@@ -1843,16 +1911,18 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
     <TooltipProvider>
     <div className={className}>
       {/* md+: the reconciliation table */}
-      <table className="hidden w-full border-separate border-spacing-0 text-sm xl:table">
+      <table className={cn("hidden w-full border-separate border-spacing-0 text-sm", compactDesktop ? "@min-[46rem]:table" : "xl:table")}>
         <thead>
           <tr>
             <th className={cn(TH, "w-[5rem]")}>Date</th>
             <th className={cn(TH, "w-full")}>Transaction</th>
-            <th className={cn(TH, "w-[6rem] text-right")} title="Cash that came in on this line">Money in</th>
-            <th className={cn(TH, "w-[6rem] text-right")} title="Cash that went out on this line">Money out</th>
-            <th className={cn(TH, "w-[6.5rem] text-right")} title="This line's own amount — the transaction or installment share where no cash moved. Not a running balance.">Amount</th>
-            <th className={cn(TH, "w-[8rem]")}>Status</th>
-            <th className={cn(TH, "w-[9rem] text-right 2xl:w-[15rem]")}>Actions</th>
+            {compactDesktop ? <th className={cn(TH, "w-[7rem] text-right")} title="Positive amounts are money in. Negative amounts are money out.">Cash flow</th> : <>
+              <th className={cn(TH, "w-[6rem] text-right")} title="Cash that came in on this line">Money in</th>
+              <th className={cn(TH, "w-[6rem] text-right")} title="Cash that went out on this line">Money out</th>
+            </>}
+            <th className={cn(TH, "w-[6.5rem] text-right")} title="This line's own amount — the transaction or installment share where no cash moved. Not a running balance.">{compactDesktop ? "Item amount" : "Amount"}</th>
+            <th className={cn(TH, compactDesktop ? "w-[9.5rem]" : "w-[8rem]")}>{compactDesktop ? "Status / balance" : "Status"}</th>
+            <th className={cn(TH, "w-[9rem] text-right", !compactDesktop && "2xl:w-[15rem]")}>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -1867,7 +1937,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
                 return (
                   <Fragment key={item.id}>
                     <tr onClick={() => toggleFold(item.id)} className="cursor-pointer bg-muted/40 hover:bg-muted/60" data-testid="payment-fold">
-                      <td colSpan={7} className="border-b border-border px-3 py-2">
+                      <td colSpan={columnCount} className="border-b border-border px-3 py-2">
                         <button type="button" aria-expanded={open} className="flex w-full items-center gap-2 text-left text-sm font-semibold text-foreground">
                           <ChevronDown className={cn("size-4 transition-transform", !open && "-rotate-90")} aria-hidden />
                           {foldTitle(item)}
@@ -1885,7 +1955,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
       </table>
 
       {/* Phone: compact financial rows */}
-      <ul className="flex flex-col xl:hidden">
+      <ul className={cn("flex flex-col", compactDesktop ? "@min-[46rem]:hidden" : "xl:hidden")}>
         {groups.map((g) => (
           <Fragment key={g.key}>
             {monthHeadingItem(g)}

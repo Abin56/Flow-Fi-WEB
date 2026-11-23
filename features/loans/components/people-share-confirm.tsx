@@ -36,6 +36,7 @@ export function PeopleShareConfirm({
   answer,
   onAnswer,
   dense = false,
+  compactCopy = false,
 }: {
   names: readonly string[];
   /** The people's combined still-open share, for the question's own hint. */
@@ -44,6 +45,7 @@ export function PeopleShareConfirm({
   onAnswer: (a: PeopleShareAnswer) => void;
   /** One line: the question with its two answers beside it (inside a titled section, so no heading of its own). */
   dense?: boolean;
+  compactCopy?: boolean;
 }) {
   const who = peopleNames(names);
   if (dense) {
@@ -54,7 +56,7 @@ export function PeopleShareConfirm({
           <p className="min-w-0 flex-1 basis-52 text-[13px] text-foreground">
             Has {who} already paid you their share{amount > 0.005 ? ` — ${formatCurrencyExact(amount)}` : ""}?
           </p>
-          <div role="radiogroup" aria-label={`Has ${who} paid their share?`} className="flex shrink-0 gap-1.5">
+          <div role="radiogroup" aria-label={`Has ${who} paid their share?`} className="flex max-w-full flex-wrap gap-1.5">
             <button type="button" role="radio" aria-checked={answer === "yes"} onClick={() => onAnswer("yes")} className={cn(choice, answer === "yes" ? "border-success bg-success/10 text-success" : "border-border-strong text-foreground hover:bg-secondary")}>
               Yes, already paid
             </button>
@@ -65,7 +67,7 @@ export function PeopleShareConfirm({
         </div>
         {answer === "no" && (
           <p role="status" className="text-xs text-warning-foreground dark:text-warning" data-testid="share-not-paid-warning">
-            Marked as not paid yet — you can still pay the lender now. {who} still owes you this in People.
+            {compactCopy ? "The share stays pending in People." : `Marked as not paid yet — you can still pay the lender now. ${who} still owes you this in People.`}
           </p>
         )}
       </section>

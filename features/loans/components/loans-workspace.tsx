@@ -478,6 +478,7 @@ export function LoansWorkspace({
               : null
           }
           initialView={payment?.view}
+          loanDetail={pageAgreementId != null}
           open={payment != null && paymentRow != null}
           onOpenChange={(open) => !open && setPayment(null)}
         />

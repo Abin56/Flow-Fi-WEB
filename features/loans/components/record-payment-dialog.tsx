@@ -196,6 +196,7 @@ export function RecordPaymentDialog({
   open,
   onOpenChange,
   initialView = "pay",
+  loanDetail = false,
   preselectInstallment = false,
 }: {
   /** With `initialView="past"`: start with the target's installment already ticked (the People row's "Bank already paid"). */
@@ -205,6 +206,7 @@ export function RecordPaymentDialog({
   onOpenChange: (open: boolean) => void;
   /** "past" opens straight on Record past payments (the details screen's own entry point). */
   initialView?: "pay" | "past";
+  loanDetail?: boolean;
 }) {
   const loanActions = useLoanActions();
   const emiActions = useEmiActions();
@@ -681,9 +683,11 @@ export function RecordPaymentDialog({
       : lenderDone && reconcile.failed.length > 0
         ? "Retry people's payments"
       : earlier
-        ? `${directPayer ? `Save payment made by ${payerName}` : "Save past payment"}${amountLabel ? ` of ${amountLabel}` : ""}${reconcileTotal > 0.005 ? ` · ${formatCurrencyExact(reconcileTotal)} from people` : ""}`
+        ? (loanDetail && directPayer
+          ? `Record direct payment${amountLabel ? ` · ${amountLabel}` : ""}`
+          : `${directPayer ? `Save payment made by ${payerName}` : "Save past payment"}${amountLabel ? ` of ${amountLabel}` : ""}${reconcileTotal > 0.005 ? ` · ${formatCurrencyExact(reconcileTotal)} from people` : ""}`)
         : needsConfirm && shareAnswer == null
-          ? "Has their share been paid?"
+          ? loanDetail ? "Pay lender" : "Has their share been paid?"
           : lent
             ? `Record ${amountLabel ?? "repayment"} received`
             : `Pay ${amountLabel ?? "installment"} to lender${yesRecord && reconcileTotal > 0.005 ? ` · ${formatCurrencyExact(reconcileTotal)} from people` : ""}`;
@@ -720,12 +724,14 @@ export function RecordPaymentDialog({
   const leadingOptions = options.filter((o) => o.choice !== "remaining");
   // A single past payment: how much / when on the left, "have the people sharing it already paid you?" on the right.
   const earlierSplit = earlier && next != null && showPaymentDetails && !lent;
+  const directLoanRecord = loanDetail && directPayer;
+  const showPastPeople = earlierSplit && (!loanDetail || reconcile.loading || reconcile.lines.length > 0);
   // What still blocks the primary action, in plain words (the footer's "Still needed").
   const pending: string[] = [];
   if (!lenderDone && !gateLoading && !saving) {
-    if (!earlier && needsConfirm && shareAnswer == null) pending.push("Received or not");
+    if (!earlier && needsConfirm && shareAnswer == null) pending.push(loanDetail ? "Reimbursement status" : "Received or not");
     if (showPaymentDetails) {
-      if (needsAccount && accountId === "") pending.push(lent ? "Account" : "Paying account");
+      if (needsAccount && accountId === "") pending.push(directLoanRecord ? "Account for this record" : lent ? "Account" : "Paying account");
       if (error != null) pending.push("Amount");
       if (remainingUnconfirmed) pending.push("Confirm all remaining");
       if (underfunded) pending.push("Enough balance");
@@ -777,9 +783,10 @@ export function RecordPaymentDialog({
   };
   const payerChoice =
     !lent && next != null && !modeLocked && (directPayer || !earlier) ? (
-      <PayGroup label="Who is paying the lender?">
+      <PayGroup label={loanDetail ? "Who makes the lender payment?" : "Who is paying the lender?"}>
         <PaySegmented<"me" | "other">
           ariaLabel="Who is paying the lender"
+          wrapLabels={loanDetail}
           options={[
             { value: "me", label: "I'm paying" },
             { value: "other", label: `${payerName} paid directly` },
@@ -788,11 +795,11 @@ export function RecordPaymentDialog({
           onChange={choosePayer}
         />
         <p className="text-[11px] text-muted-foreground" data-testid="payer-hint">
-          {directPayer ? "Recorded as paid. No money leaves your accounts." : "Takes the amount out of the account you choose."}
+          {loanDetail ? (directPayer ? "Lender account debit ₹0" : "Paid from the account you choose.") : (directPayer ? "Recorded as paid. No money leaves your accounts." : "Takes the amount out of the account you choose.")}
         </p>
       </PayGroup>
     ) : null;
-  const intentToolbar = target && (view !== "pay" || next != null) ? <PaymentIntentSwitch value={intentValue} onChange={switchIntent} lent={lent} isLoan={isLoan} disabled={modeLocked || saving || success} /> : undefined;
+  const intentToolbar = target && (view !== "pay" || next != null) ? <PaymentIntentSwitch value={intentValue} onChange={switchIntent} lent={lent} isLoan={isLoan} singlePaymentLabel={loanDetail && !lent} disabled={modeLocked || saving || success} /> : undefined;
 
   if ((view === "past" || view === "payMany") && target) {
     return (
@@ -804,6 +811,7 @@ export function RecordPaymentDialog({
         mode={view}
         toolbar={intentToolbar}
         instant={switched}
+        workspace={loanDetail}
         onRecordOne={view === "past" ? recordOnePast : undefined}
         preselectId={view === "past" && (initialView !== "past" || preselectInstallment) ? (preselectInstallment ? (target.installment?.id ?? anchor?.id ?? null) : (anchor?.id ?? null)) : null}
       />
@@ -819,7 +827,7 @@ export function RecordPaymentDialog({
   const summaryStrip = next ? (
     <section aria-label="Payment summary" className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 rounded-[10px] border border-border bg-gradient-to-b from-card to-secondary/50 px-4 py-2.5 shadow-e1">
       <div className="flex flex-col gap-1">
-        <span className={PAY_LABEL}>{lent ? "To receive" : "To pay lender"}</span>
+        <span className={PAY_LABEL}>{lent ? "To receive" : loanDetail ? "Lender installment balance" : "To pay lender"}</span>
         <span className="font-heading text-[26px] leading-none font-bold tracking-tight whitespace-nowrap text-foreground tabular-nums">{formatCurrencyExact(remainingAmount(next))}</span>
       </div>
       <dl className="flex flex-wrap items-center divide-x divide-border">
@@ -831,27 +839,36 @@ export function RecordPaymentDialog({
     </section>
   ) : null;
 
+  const shareQuestion = needsConfirm ? (
+    <PeopleShareConfirm dense compactCopy={loanDetail} names={settlement.attention.map((p) => p.personName)} amount={settlement.outstanding} answer={shareAnswer} onAnswer={(a) => !modeLocked && setShareAnswer(a)} />
+  ) : null;
+
   // What PEOPLE owe you: their own tinted card, apart from the payment to the bank.
   const peopleCard = peopleStepShown ? (
     <PayCard
       tone="people"
       testId="people-card"
-      title="From people"
-      aside={participants.length > 0 ? othersUnpaidNow > 0.005 ? <>Owed to you <Money exact amount={othersUnpaidNow} className="ml-1 text-xs text-foreground" /></> : "All received" : undefined}
+      title={loanDetail ? (shareQuestion ? "Reimbursement status" : "People shares") : "From people"}
+      aside={participants.length > 0 && !(loanDetail && shareQuestion) ? othersUnpaidNow > 0.005 ? <>Owed to you <Money exact amount={othersUnpaidNow} className="ml-1 text-xs text-foreground" /></> : "All received" : undefined}
     >
-      {/* Display only — each person's own "Record received" / "Postpone" opens their People Ledger directly. */}
-      {showPeople && <InstallmentPeoplePanel dense breakdown={breakdown} loading={breakdownLoading} returnTo={returnPath} />}
-      {needsConfirm && <PeopleShareConfirm dense names={settlement.attention.map((p) => p.personName)} amount={settlement.outstanding} answer={shareAnswer} onAnswer={(a) => !modeLocked && setShareAnswer(a)} />}
-      {yesRecord && <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} />}
+      {loanDetail && shareQuestion}
+      {showPeople && (loanDetail && shareQuestion ? (
+        <PayMore title="Share details" summary={breakdown ? `Your share ${formatCurrencyExact(breakdown.yourShare)}` : undefined}>
+          <InstallmentPeoplePanel className="col-span-full" dense breakdown={breakdown} loading={breakdownLoading} returnTo={returnPath} />
+        </PayMore>
+      ) : <InstallmentPeoplePanel dense breakdown={breakdown} loading={breakdownLoading} returnTo={returnPath} />)}
+      {!loanDetail && shareQuestion}
+      {yesRecord && <HistoricalPeopleReconcile compact={loanDetail} state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} />}
     </PayCard>
   ) : null;
 
   const amountBody = (
     <>
       <div role="radiogroup" aria-label={amountTitle} className="flex flex-wrap gap-1.5">
-        {leadingOptions.map((o) => (
-          <AmountTile key={o.choice} active={effectiveChoice === o.choice} label={o.label} hint={o.hint} amount={o.amount} onSelect={() => setChoice(o.choice)} />
-        ))}
+        {leadingOptions.map((o) => {
+          const label = loanDetail && earlier ? (o.choice === "installment" ? "Remaining installment balance" : o.choice === "allDue" ? "Overdue installments" : o.label) : o.label;
+          return <AmountTile key={o.choice} active={effectiveChoice === o.choice} label={label} hint={o.hint} amount={o.amount} onSelect={() => setChoice(o.choice)} />;
+        })}
         {otherWaysShown && (
           <>
             <AmountTile
@@ -993,9 +1010,11 @@ export function RecordPaymentDialog({
         </PayGroup>
       )}
 
-      <div className={cn("grid grid-cols-1 gap-2.5", needsAccount ? "@lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]" : "")}>
+      <div className={cn("grid grid-cols-1 gap-2.5", needsAccount && (loanDetail ? "@sm:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]" : "@lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]"))}>
         {needsAccount && (
-          <PayField label={earlier ? (directPayer ? "Record under account · no balance change" : `${lent ? "Received into" : "Paid from"} · for your records`) : lent ? "Received into" : "Paid from"}>
+          <PayField
+            label={directLoanRecord ? "Account for this record" : earlier ? (directPayer ? "Record under account · no balance change" : `${lent ? "Received into" : "Paid from"} · for your records`) : lent ? "Received into" : "Paid from"}
+          >
             {accounts.length === 0 ? (
               <span className="flex h-9 items-center justify-between gap-2 rounded-[6px] border border-dashed border-border bg-secondary px-3 text-xs text-muted-foreground">
                 Add an account first
@@ -1007,9 +1026,9 @@ export function RecordPaymentDialog({
                 accounts={selectableAccounts}
                 value={accountId}
                 onChange={setAccountId}
-                placeholder={lent ? "Choose account" : "Choose paying account"}
+                placeholder={lent || directLoanRecord ? "Choose account" : "Choose paying account"}
                 showBalance={fundsApply}
-                ariaLabel={lent ? "Received into account" : "Paid from account"}
+                ariaLabel={directLoanRecord ? "Account for this record" : lent ? "Received into account" : "Paid from account"}
               />
             )}
           </PayField>
@@ -1023,7 +1042,7 @@ export function RecordPaymentDialog({
             )}
           </span>
         </PayField>
-        {earlier && (
+        {earlier && !loanDetail && (
           <PayField label="Note" className="@lg:col-span-2">
             <input className={PAY_INPUT} aria-label="Note" placeholder="Note or reference (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
           </PayField>
@@ -1086,13 +1105,13 @@ export function RecordPaymentDialog({
 
   // The lender side in ONE card: 1 · amount, 2 · where it comes from and when.
   const payCard = (
-    <PayCard title={earlier ? "Past payment" : lent ? "Receive the repayment" : "Pay the lender"} aside={amountLabel} testId="pay-card">
+    <PayCard title={directLoanRecord ? "Lender payment details" : earlier ? "Past payment" : lent ? "Receive the repayment" : "Pay the lender"} aside={amountLabel} testId="pay-card">
       <div className="flex flex-col gap-2.5" data-testid="amount-card">
         <PayStepHead n={1} label={amountTitle} />
         {amountBody}
       </div>
       <div className="flex flex-col gap-2.5 border-t border-border pt-3" data-testid="when-card">
-        <PayStepHead n={2} label={earlier ? "When" : needsAccount ? (lent ? "Received into · date" : "Paid from · date") : "Paid with · date"} value={[sourceSummary, dateSummary].filter(Boolean).join(" · ")} />
+        <PayStepHead n={2} label={directLoanRecord ? "Account and date" : earlier ? "When" : needsAccount ? (lent ? "Received into · date" : "Paid from · date") : "Paid with · date"} value={[sourceSummary, dateSummary].filter(Boolean).join(" · ")} />
         {whenBody}
       </div>
     </PayCard>
@@ -1109,11 +1128,11 @@ export function RecordPaymentDialog({
       </PayCard>
     ) : null;
 
-  // "What will happen" — read off the same allocation the write performs; the bank side first, People under it.
-  const receiptCard =
+  const accountPreview = fundsApply && payingAccount ? <PaymentSourceSummary account={payingAccount} amount={planAmount} paymentLabel={isLoan ? "Loan payment" : "EMI payment"} /> : null;
+  // Read off the same allocation the write performs.
+  const receiptDetails =
     showPaymentDetails && !earlier && planAmount != null ? (
-      <PayCard title="What will happen" aside={amountLabel}>
-        <section aria-label="Payment preview" className="flex flex-col gap-2.5" data-testid="payment-impact">
+        <section aria-label="Payment preview" className="col-span-full flex flex-col gap-2.5" data-testid="payment-impact">
           {reamortizes && prepaymentPreview && loanFigures ? (
             <div className="flex flex-col gap-1.5">
               <ReceiptLine label="Due now · paid first">
@@ -1131,7 +1150,7 @@ export function RecordPaymentDialog({
           ) : loanPreview ? (
             <PaymentPreview
               bare
-              source={sourceLine}
+              source={loanDetail ? null : sourceLine}
               coverage={loanPreview.coverage}
               extraPrincipal={loanPreview.extraPrincipal}
               outstandingBefore={loanRow!.outstandingPrincipal}
@@ -1157,9 +1176,9 @@ export function RecordPaymentDialog({
               }
             />
           ) : null}
-          {fundsApply && payingAccount && <PaymentSourceSummary account={payingAccount} amount={planAmount} paymentLabel={isLoan ? "Loan payment" : "EMI payment"} />}
+          {!loanDetail && accountPreview}
           {lentAccount && <PreviewLine label={lentAccount.name} before={<Money exact amount={lentAccount.currentBalance} />} after={<Money exact amount={lentAccount.currentBalance + planAmount} />} />}
-          {!previewShown && sourceLine}
+          {!loanDetail && !previewShown && sourceLine}
           {emiRow && cardLabel && legPlan != null && <CardImpact plan={legPlan} cardLabel={cardLabel} />}
           {peopleImpact && (
             <p className="border-t border-border pt-2 text-xs text-foreground/85" data-testid="people-impact">
@@ -1169,8 +1188,70 @@ export function RecordPaymentDialog({
           )}
           {postponedImpact && <p className="text-xs text-foreground/80">{postponedImpact}</p>}
         </section>
-      </PayCard>
     ) : null;
+
+  const receiptCard = receiptDetails && (loanDetail ? (
+    <>
+      {accountPreview}
+      <PayMore title="Payment breakdown" summary={amountLabel}>{receiptDetails}</PayMore>
+    </>
+  ) : <PayCard title="What will happen" aside={amountLabel}>{receiptDetails}</PayCard>);
+
+  const linkedFundsNotice = showPaymentDetails && !lent && next && (
+    <LinkedFundsPayNotice funds={linkedFundsForInstallment(linkedFunds, next.id)} accountName={(id) => accounts.find((a) => a.id === id)?.name} onUseAccount={needsAccount ? setAccountId : undefined} />
+  );
+  const moreOptions = showPaymentDetails && (!earlier || loanDetail) && (
+    <PayMore title={loanDetail ? "Add a note" : "More options"} summary={note.trim() || (!loanDetail && (emiRow ? "Note, GST, fees" : "Note")) || undefined}>
+      <PayField label="Note" className={loanDetail ? "col-span-full" : undefined}>
+        <input className={PAY_INPUT} aria-label="Note" placeholder="Optional" value={note} onChange={(e) => setNote(e.target.value)} />
+      </PayField>
+      {emiRow && (
+        <>
+          <PayField label="GST" hint="For your records only.">
+            <input type="number" inputMode="decimal" className={PAY_INPUT} value={gst} onChange={(e) => setGst(e.target.value)} />
+          </PayField>
+          <PayField label="Processing fee" hint="For your records only.">
+            <input type="number" inputMode="decimal" className={PAY_INPUT} value={processingFee} onChange={(e) => setProcessingFee(e.target.value)} />
+          </PayField>
+        </>
+      )}
+    </PayMore>
+  );
+
+  const pastHeader = earlier && !directLoanRecord && (
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-[10px] border border-border bg-secondary/60 px-3 py-2" data-testid="past-payment-header">
+      <span className="text-[13px] font-semibold text-foreground">
+        {directPayer ? (
+          <>Paid directly by {payerName} <span className="font-normal text-muted-foreground">· no account balance changes</span></>
+        ) : (
+          loanDetail ? "Recorded for reference" : <>Past payment <span className="font-normal text-muted-foreground">· {lent ? "received" : "paid"} before FlowFi — no account balance changes</span></>
+        )}
+      </span>
+      {!modeLocked && !directPayer && (
+        <span className="flex flex-wrap gap-x-3 text-xs">
+          <button type="button" onClick={() => setView("past")} className="font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            Choose other installments
+          </button>
+          <button type="button" onClick={() => setMode("now")} className="font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            {lent ? "Receive it now instead" : "Pay it now instead"}
+          </button>
+        </span>
+      )}
+    </div>
+  );
+  const pastPeopleCard = showPastPeople && (
+    <PayCard tone="people" title={loanDetail ? "People shares" : "From people"}>
+      {!loanDetail && <p className="text-xs font-medium text-foreground/85" data-testid="past-payment-effect">The lender payment doesn&apos;t change your accounts.</p>}
+      <HistoricalPeopleReconcile compact={loanDetail} state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} viaLender={directPayer} directPaymentLabels={directLoanRecord} />
+    </PayCard>
+  );
+  const reviewColumn = earlier ? pastPeopleCard : (peopleCard || receiptCard || linkedFundsNotice) && (
+    <>
+      {peopleCard}
+      {linkedFundsNotice}
+      {receiptCard}
+    </>
+  );
 
   return (
     <PaymentSheet
@@ -1178,11 +1259,14 @@ export function RecordPaymentDialog({
       onOpenChange={onOpenChange}
       toolbar={intentToolbar}
       instant={switched}
+      workspace={loanDetail}
       eyebrow={earlier ? (directPayer ? "Paid directly" : "Past payment") : lent ? "Repayment" : isLoan ? "Loan payment" : "EMI payment"}
       icon={earlier ? History : Wallet}
       title={earlier ? (directPayer ? `Paid by ${payerName}` : lent ? "Record past repayment" : "Record past payment") : lent ? "Record repayment" : isLoan ? "Pay installment" : "Pay EMI"}
       description={next ? `${name} · Installment #${next.sequenceNumber} of ${totalCount}` : name}
       chip={next ? { label: overdue ? `Overdue · ${formatDueDate(next.dueDate)}` : `Due ${formatDueDate(next.dueDate)}`, tone: overdue ? "danger" : "neutral" } : null}
+      heroLabel={loanDetail && next ? (lent ? "Installment to receive" : "Installment balance") : undefined}
+      hero={loanDetail && next ? <Money exact amount={remainingAmount(next)} className="font-heading text-xl text-foreground" /> : undefined}
       onConfirm={submit}
       confirmLabel={confirmLabel}
       confirmDisabled={confirmDisabled}
@@ -1211,8 +1295,8 @@ export function RecordPaymentDialog({
             {through.count === 2 ? `#${through.first} (still unpaid) is` : `#${through.first}–#${through.last - 1} (still unpaid) are`} paid first. Choose below what to pay.
           </p>
         )}
-        {summaryStrip}
-        {payerChoice}
+        {!loanDetail && summaryStrip}
+        {!loanDetail && payerChoice}
 
         {/* Linked to a person but not set to repay: nothing is added to their People Ledger — say so, never change it here. */}
         {uncountedAssignee != null && next != null && !lent && (
@@ -1225,75 +1309,37 @@ export function RecordPaymentDialog({
           </p>
         )}
 
-        {next != null && !earlier && (peopleStepShown || showPaymentDetails) && (
-          // Left: the lender payment. Right: what PEOPLE owe you, then what will happen — each side in its own column.
+        {next != null && (loanDetail ? (
+          <div className={cn("grid items-start gap-3", (payerChoice || reviewColumn) && "@2xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]")}>
+            {(payerChoice || reviewColumn) && <div className={showPaymentDetails ? "@container flex min-w-0 flex-col gap-2.5 @2xl:col-start-2 @2xl:row-start-1" : "contents"}>
+              {payerChoice && <PayCard>{payerChoice}</PayCard>}
+              {reviewColumn && <aside aria-label="Reimbursements and payment review" className="flex min-w-0 flex-col gap-2.5">{reviewColumn}</aside>}
+            </div>}
+            {showPaymentDetails && <div className="@container flex min-w-0 flex-col gap-2.5 @2xl:col-start-1 @2xl:row-start-1">
+              {pastHeader}
+              {payCard}
+              {moreOptions}
+            </div>}
+          </div>
+        ) : earlier ? showPaymentDetails && (
+          <div className={cn("grid gap-3", showPastPeople && "@2xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] @2xl:items-start")}>
+            <div className="flex min-w-0 flex-col gap-3">
+              {pastHeader}
+              {payCard}
+            </div>
+            {pastPeopleCard}
+          </div>
+        ) : (peopleStepShown || showPaymentDetails) && (
           <div className="grid gap-3 @2xl:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] @2xl:items-start">
             <div className="flex min-w-0 flex-col gap-3">{showPaymentDetails ? payCard : lockedCard}</div>
             <div className="flex min-w-0 flex-col gap-3">
               {peopleCard}
               {receiptCard}
-              {showPaymentDetails && !lent && <LinkedFundsPayNotice funds={linkedFundsForInstallment(linkedFunds, next.id)} accountName={(id) => accounts.find((a) => a.id === id)?.name} onUseAccount={needsAccount ? setAccountId : undefined} />}
-              {showPaymentDetails && (
-                <PayMore title="More options" summary={note.trim() || (emiRow ? "Note, GST, fees" : "Note")}>
-                  <PayField label="Note">
-                    <input className={PAY_INPUT} placeholder="Optional" value={note} onChange={(e) => setNote(e.target.value)} />
-                  </PayField>
-                  {emiRow && (
-                    <>
-                      <PayField label="GST" hint="For your records only.">
-                        <input type="number" inputMode="decimal" className={PAY_INPUT} value={gst} onChange={(e) => setGst(e.target.value)} />
-                      </PayField>
-                      <PayField label="Processing fee" hint="For your records only.">
-                        <input type="number" inputMode="decimal" className={PAY_INPUT} value={processingFee} onChange={(e) => setProcessingFee(e.target.value)} />
-                      </PayField>
-                    </>
-                  )}
-                </PayMore>
-              )}
+              {linkedFundsNotice}
+              {moreOptions}
             </div>
           </div>
-        )}
-
-        {showPaymentDetails && next && earlier && (
-          <div className={cn("grid gap-3", earlierSplit && "@2xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] @2xl:items-start")}>
-            <div className="flex min-w-0 flex-col gap-3">
-              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-[10px] border border-border bg-secondary/60 px-3 py-2" data-testid="past-payment-header">
-                <span className="text-[13px] font-semibold text-foreground">
-                  {directPayer ? (
-                    <>
-                      Paid directly by {payerName} <span className="font-normal text-muted-foreground">· no account balance changes</span>
-                    </>
-                  ) : (
-                    <>
-                      Past payment <span className="font-normal text-muted-foreground">· {lent ? "received" : "paid"} before FlowFi — no account balance changes</span>
-                    </>
-                  )}
-                </span>
-                {!modeLocked && !directPayer && (
-                  <span className="flex flex-wrap gap-x-3 text-xs">
-                    <button type="button" onClick={() => setView("past")} className="font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                      Choose other installments
-                    </button>
-                    <button type="button" onClick={() => setMode("now")} className="font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                      {lent ? "Receive it now instead" : "Pay it now instead"}
-                    </button>
-                  </span>
-                )}
-              </div>
-              {payCard}
-            </div>
-            {earlierSplit && (
-              <div className="flex min-w-0 flex-col gap-3">
-                <PayCard tone="people" title="From people">
-                  <p className="text-xs font-medium text-foreground/85" data-testid="past-payment-effect">
-                    The lender payment doesn&apos;t change your accounts.
-                  </p>
-                  <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} viaLender={directPayer} />
-                </PayCard>
-              </div>
-            )}
-          </div>
-        )}
+        ))}
       </div>
     </PaymentSheet>
   );

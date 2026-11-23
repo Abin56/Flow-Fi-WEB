@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Loader2 } from "lucide-react";
+import { Bell, Check, Loader2 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { AccountSelect } from "@/components/finance/account-label";
 import { DateInput } from "@/components/forms/date-input";
@@ -21,7 +21,7 @@ import {
   type ReimbursementResult,
 } from "@/lib/engines/historical-reimbursement";
 import { PAYMENT_EPSILON } from "@/lib/engines/person-payment";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatCurrencyExact } from "@/lib/format";
 import type { Account } from "@/lib/models/account";
 import { generateId } from "@/lib/utils/id-generator";
 import { cn } from "@/lib/utils";
@@ -236,6 +236,8 @@ const TREATMENTS: { value: BalanceTreatment; label: string; short: string }[] = 
   { value: "included", label: "Already included in my account", short: "Already in my account" },
   { value: "addToAccount", label: "Add money to my account", short: "Add to my account" },
 ];
+const DIRECT_SHARE_LABELS: Record<ReceivedChoice, string> = { full: "Cover full share", some: "Cover part", none: "Leave pending" };
+const DIRECT_TREATMENTS = TREATMENTS.map((t) => ({ value: t.value, label: t.value === "included" ? "Record without balance change" : t.short }));
 
 export function HistoricalPeopleReconcile({
   state,
@@ -243,9 +245,13 @@ export function HistoricalPeopleReconcile({
   showInstallment,
   locked,
   viaLender,
+  directPaymentLabels = false,
+  compact = false,
 }: {
   /** The person paid the lender directly (rather than paying me): the intro says how to mark their share. */
   viaLender?: boolean;
+  directPaymentLabels?: boolean;
+  compact?: boolean;
   state: HistoricalReconcileState;
   accounts: readonly Account[];
   /** Several installments: label each line with its installment number. */
@@ -278,15 +284,25 @@ export function HistoricalPeopleReconcile({
   const receivedCount = lines.filter((l) => l.remaining > PAYMENT_EPSILON && received(draft[reimbursementLineKey(l)])).length;
   const pendingTotal = summary ? summary.people.reduce((t, p) => t + p.remainingAfter, 0) : 0;
   const anyAdded = lines.some((l) => draft[reimbursementLineKey(l)]?.treatment === "addToAccount" && received(draft[reimbursementLineKey(l)]));
+  const treatmentOptions = directPaymentLabels ? DIRECT_TREATMENTS : TREATMENTS.map((t) => ({ value: t.value, label: t.short }));
+  const reminderDate = state.remindOn !== "" && (
+    <DateInput aria-label="Reminder date" className="h-8 w-36 rounded-[6px] border border-border bg-card px-2 text-xs" value={state.remindOn} min={todayText()} disabled={locked} onChange={(e) => state.setRemindOn(e.target.value)} />
+  );
 
   return (
-    <section aria-label="People sharing it" className="flex flex-col gap-2.5 rounded-[6px] border border-border p-3">
-      <h3 className="text-sm font-semibold text-foreground">{solo ? `Has ${solo} already paid you their share?` : "Have these people already paid you their share?"}</h3>
+    <section aria-label="People sharing it" className={cn("flex flex-col gap-2.5", !compact && "rounded-[6px] border border-border p-3")}>
+      {!compact && <>
+      <h3 className="text-sm font-semibold text-foreground">
+        {directPaymentLabels ? (solo ? `How should ${solo}’s share be recorded?` : "How should each person’s share be recorded?") : solo ? `Has ${solo} already paid you their share?` : "Have these people already paid you their share?"}
+      </h3>
       <p className="-mt-1.5 text-[11.5px] text-muted-foreground" data-testid="reconcile-intro">
-        {viaLender
+        {directPaymentLabels
+          ? "For any amount paid directly to the lender, select how much of the share it covers and choose “Record without balance change”. Any uncovered amount stays owed in People."
+          : viaLender
           ? `If ${solo ?? "they"} paid the lender for their share, choose “Received in full” and “Already in my account”. Anything left as “Not received yet” stays owed in People.`
           : `Mark what ${solo ?? "each person"} has paid you. Anything left as “Not received yet” stays owed in People.`}
       </p>
+      </>}
       <ul className="flex flex-col divide-y divide-border">
         {people.map(([personId, personName]) => {
           const own = lines.filter((l) => l.personId === personId);
@@ -305,7 +321,7 @@ export function HistoricalPeopleReconcile({
                 {showInstallment && open.length > 1 && !locked && (
                   <span className="flex gap-2 text-[11px] font-medium">
                     <button type="button" className="text-foreground underline-offset-2 hover:underline" onClick={() => state.setPerson(personId, "full")}>
-                      All received
+                      {directPaymentLabels ? "Cover all" : "All received"}
                     </button>
                     <button type="button" className="text-muted-foreground underline-offset-2 hover:underline" onClick={() => state.setPerson(personId, "none")}>
                       None
@@ -315,14 +331,14 @@ export function HistoricalPeopleReconcile({
               </div>
               {showInstallment && open.length > 1 && (
                 <p className="text-[11.5px] text-muted-foreground" data-testid={`reconcile-count-${personId}`}>
-                  {ownReceived.length} of {open.length} marked received
+                  {ownReceived.length} of {open.length} {directPaymentLabels ? "marked covered" : "marked received"}
                   {own.length > open.length ? ` · ${own.length - open.length} already received in People` : ""}
                 </p>
               )}
               {/* One answer for all of this person's received rows — each row can still be changed below. */}
               {ownReceived.length > 1 && !locked && (
                 <div className="flex flex-wrap items-center gap-1.5 rounded-[6px] bg-secondary/60 px-2 py-1.5 text-[11px]" aria-label={`All of ${personName}'s received shares`}>
-                  <span className="font-medium text-foreground">Same for all {ownReceived.length} received:</span>
+                  <span className="font-medium text-foreground">{directPaymentLabels ? `Apply to all ${ownReceived.length} covered shares` : `Same for all ${ownReceived.length} received:`}</span>
                   <DateInput
                     aria-label={`Date ${personName} paid you, for all received`}
                     title="Leave blank if you don't know the date"
@@ -333,7 +349,8 @@ export function HistoricalPeopleReconcile({
                   <Segmented
                     name={`Where is ${personName}'s money, for all received`}
                     value={sharedTreatment(ownReceived.map((l) => draft[reimbursementLineKey(l)]?.treatment))}
-                    options={TREATMENTS.map((t) => ({ value: t.value, label: t.short }))}
+                    options={treatmentOptions}
+                    wrap={compact}
                     onChange={(v) => state.setPersonReceived(personId, { treatment: v })}
                   />
                 </div>
@@ -364,6 +381,9 @@ export function HistoricalPeopleReconcile({
                   failed={state.failed.some((f) => f.personId === l.personId && f.obligationKey === l.obligationKey)}
                   showInstallment={showInstallment}
                   locked={locked}
+                  directPaymentLabels={directPaymentLabels}
+                  compact={compact}
+                  treatmentOptions={treatmentOptions}
                   onChange={(patch) => state.setLine(reimbursementLineKey(l), patch)}
                 />
               ))}
@@ -376,29 +396,47 @@ export function HistoricalPeopleReconcile({
         <div className="flex flex-col gap-1.5 border-t border-border pt-2.5">
           {receivedCount > 1 && !locked && (
             <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-              Set every row marked received to:
-              {TREATMENTS.map((t) => (
+              {directPaymentLabels ? "Apply to all covered shares" : "Set every row marked received to:"}
+              {treatmentOptions.map((t) => (
                 <button key={t.value} type="button" className="font-semibold text-foreground underline-offset-2 hover:underline" onClick={() => state.setAllTreatments(t.value)}>
-                  {t.short}
+                  {t.label}
                 </button>
               ))}
             </p>
           )}
           <label className="flex flex-col gap-1">
-            <span className="text-[11px] font-medium text-muted-foreground">{anyAdded ? "Received into" : "Received into · for your records"}</span>
-            <AccountSelect className="h-9 rounded-[6px] border border-border bg-card px-2 text-sm" accounts={accounts as Account[]} value={state.accountId} onChange={state.setAccountId} ariaLabel="Received into account" />
+            <span className="text-[11px] font-medium text-muted-foreground">{anyAdded ? "Received into" : directPaymentLabels ? "Account for the People record" : "Received into · for your records"}</span>
+            <AccountSelect className="h-9 rounded-[6px] border border-border bg-card px-2 text-sm" accounts={accounts as Account[]} value={state.accountId} onChange={state.setAccountId} ariaLabel={directPaymentLabels && !anyAdded ? "Account for the People record" : "Received into account"} />
           </label>
           {/* What the two per-row choices mean — the buttons alone don't say it. */}
-          <p className="text-[11px] leading-snug text-muted-foreground">
-            <span className="font-semibold text-foreground/80">Already in my account</span> — no balance change.{" "}
-            <span className="font-semibold text-foreground/80">Add to my account</span> — adds the money to the account above.
-          </p>
+          {!compact && <p className="text-[11px] leading-snug text-muted-foreground">
+            {directPaymentLabels ? (
+              <><span className="font-semibold text-foreground/80">Add to my account</span> credits the account above when the person paid you directly.</>
+            ) : (
+              <><span className="font-semibold text-foreground/80">Already in my account</span> — no balance change.{" "}<span className="font-semibold text-foreground/80">Add to my account</span> — adds the money to the account above.</>
+            )}
+          </p>}
         </div>
       )}
 
       {summary && (
         <div className="flex flex-col gap-2 rounded-[6px] bg-secondary/60 p-2.5" data-testid="reconcile-summary">
-          <p className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{solo ? `What ${solo} has paid you` : "What each person has paid you"}</p>
+          {compact ? (
+            <>
+              <ul className="flex flex-col gap-1">
+                {summary.people.map((p) => (
+                  <li key={p.personId} className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 text-xs">
+                    <span className="font-medium text-foreground">{p.personName}</span>
+                    <span className={cn("font-semibold tabular-nums", p.remainingAfter > PAYMENT_EPSILON ? "text-settle-receivable-text" : "text-success")}>
+                      {p.remainingAfter > PAYMENT_EPSILON ? `${formatCurrencyExact(p.remainingAfter)} pending after saving` : directPaymentLabels ? "Share covered" : "Fully received"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {summary.balanceChange > PAYMENT_EPSILON && <p className="text-xs text-foreground">Account credit <strong className="tabular-nums">+{formatCurrencyExact(summary.balanceChange)}</strong></p>}
+            </>
+          ) : <>
+          <p className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{directPaymentLabels ? "People balance after saving" : solo ? `What ${solo} has paid you` : "What each person has paid you"}</p>
           <ul className="flex flex-col gap-1.5">
             {summary.people.map((p) => {
               const given = p.alreadyReceived + p.receivedNow;
@@ -407,10 +445,10 @@ export function HistoricalPeopleReconcile({
                 <li key={p.personId} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs">
                   <span className="min-w-0">
                     <span className="font-semibold text-foreground">{p.personName}: </span>
-                    <span className={cn("font-semibold", pending ? "text-expense" : "text-success")}>{pending ? `${formatCurrency(p.remainingAfter)} still to receive` : "fully received"}</span>
+                    <span className={cn("font-semibold", pending ? "text-expense" : "text-success")}>{pending ? `${formatCurrency(p.remainingAfter)} still to receive` : directPaymentLabels ? "share covered" : "fully received"}</span>
                   </span>
                   <span className="text-muted-foreground tabular-nums">
-                    Paid you {formatCurrency(given)} of {formatCurrency(p.share)}
+                    {directPaymentLabels ? "Covered" : "Paid you"} {formatCurrency(given)} of {formatCurrency(p.share)}
                   </span>
                 </li>
               );
@@ -427,8 +465,24 @@ export function HistoricalPeopleReconcile({
           {pendingTotal <= PAYMENT_EPSILON && summary.total > PAYMENT_EPSILON && (
             <p className="text-[11.5px] text-foreground/80">{summary.balanceChange > PAYMENT_EPSILON ? `Account balance +${formatCurrency(summary.balanceChange)}.` : "Account balance won't change."}</p>
           )}
+          </>}
           {pendingTotal > PAYMENT_EPSILON && (
             <div className="flex flex-col gap-1.5 border-t border-border pt-2" data-testid="reconcile-reminder">
+              {compact ? (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  {reminderDate ? (
+                    <>
+                      <span className="text-xs font-medium text-foreground">Collection reminder</span>
+                      {reminderDate}
+                      <button type="button" disabled={locked} onClick={() => state.setRemindOn("")} className="text-xs font-medium text-muted-foreground underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring">Remove reminder</button>
+                    </>
+                  ) : (
+                    <button type="button" disabled={locked} onClick={() => state.setRemindOn(defaultRemindOn())} className="inline-flex min-h-7 items-center gap-1.5 rounded-[6px] text-xs font-semibold text-foreground underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring">
+                      <Bell className="size-3.5" aria-hidden /> Set reminder
+                    </button>
+                  )}
+                </div>
+              ) : <>
               <p className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">
                 Remind me about the rest <span className="font-normal tracking-normal normal-case">(optional)</span>
               </p>
@@ -446,17 +500,9 @@ export function HistoricalPeopleReconcile({
                 >
                   Remind me on…
                 </button>
-                {state.remindOn !== "" && (
-                  <DateInput
-                    aria-label="Reminder date"
-                    className="h-8 w-36 rounded-[6px] border border-border bg-card px-2 text-xs"
-                    value={state.remindOn}
-                    min={todayText()}
-                    disabled={locked}
-                    onChange={(e) => state.setRemindOn(e.target.value)}
-                  />
-                )}
+                {reminderDate}
               </div>
+              </>}
               {state.reminderStatus === "failed" && (
                 <p role="alert" className="text-[11px] font-semibold text-expense">
                   Payments saved, but the reminder wasn&apos;t. Set it from the person&apos;s page in People.
@@ -477,6 +523,9 @@ function ShareLineRow({
   failed,
   showInstallment,
   locked,
+  directPaymentLabels,
+  compact,
+  treatmentOptions,
   onChange,
 }: {
   line: ReimbursementLine;
@@ -485,9 +534,12 @@ function ShareLineRow({
   failed: boolean;
   showInstallment: boolean;
   locked?: boolean;
+  directPaymentLabels: boolean;
+  compact: boolean;
+  treatmentOptions: { value: BalanceTreatment; label: string }[];
   onChange: (patch: Partial<ReimbursementDraft>) => void;
 }) {
-  const label = `${showInstallment ? `Installment #${line.sequenceNumber} · ` : ""}${line.personName}'s share ${formatCurrency(line.share)}`;
+  const label = `${showInstallment ? `Installment #${line.sequenceNumber} · ` : ""}${compact ? `Share ${formatCurrencyExact(line.share)}` : `${line.personName}'s share ${formatCurrency(line.share)}`}`;
   const name = `${line.personName}${showInstallment ? ` #${line.sequenceNumber}` : ""}`;
   if (line.remaining <= PAYMENT_EPSILON) {
     return (
@@ -511,7 +563,8 @@ function ShareLineRow({
           name={name}
           value={choice}
           disabled={locked}
-          options={CHOICES.map((c) => ({ value: c.value, label: c.value === "full" && line.received > PAYMENT_EPSILON ? "Received the rest" : c.label }))}
+          wrap={compact}
+          options={CHOICES.map((c) => ({ value: c.value, label: c.value === "full" && line.received > PAYMENT_EPSILON ? (directPaymentLabels ? "Cover the rest" : "Received the rest") : directPaymentLabels ? DIRECT_SHARE_LABELS[c.value] : c.label }))}
           onChange={(v) => onChange({ choice: v })}
         />
       </div>
@@ -521,7 +574,7 @@ function ShareLineRow({
             <input
               type="number"
               inputMode="decimal"
-              aria-label={`Amount received from ${line.personName}`}
+              aria-label={directPaymentLabels ? `Amount covered for ${line.personName}` : `Amount received from ${line.personName}`}
               placeholder={`Up to ${formatCurrency(line.remaining)}`}
               disabled={locked}
               className="h-8 w-32 rounded-[6px] border border-border bg-card px-2 text-right text-xs tabular-nums"
@@ -530,7 +583,7 @@ function ShareLineRow({
             />
           )}
           <DateInput
-            aria-label={`Date received from ${name}`}
+            aria-label={directPaymentLabels ? `Date share was paid by ${name}` : `Date received from ${name}`}
             title="Leave blank if you don't know the date"
             className="h-8 w-36 rounded-[6px] border border-border bg-card px-2 text-xs"
             value={draft?.date ?? ""}
@@ -538,15 +591,17 @@ function ShareLineRow({
             onChange={(e) => onChange({ date: e.target.value })}
           />
           <Segmented
-            name={`Where is ${name}'s money`}
+            name={directPaymentLabels ? `Account effect for ${name}'s share` : `Where is ${name}'s money`}
             value={draft?.treatment ?? null}
             disabled={locked}
-            options={TREATMENTS.map((t) => ({ value: t.value, label: t.short }))}
+            wrap={compact}
+            options={treatmentOptions}
             onChange={(v) => onChange({ treatment: v })}
           />
         </div>
       )}
-      {choice !== "none" && !(draft?.date ?? "") && <p className="text-right text-[11px] text-muted-foreground">No date entered — it will be saved as “Date not known”.</p>}
+      {compact && directPaymentLabels && choice !== "none" && draft?.treatment == null && <p className="text-xs text-muted-foreground">For money paid to the lender, choose “Record without balance change”.</p>}
+      {choice !== "none" && !(draft?.date ?? "") && <p className="text-right text-[11px] text-muted-foreground">{compact ? "Date will be saved as unknown." : "No date entered — it will be saved as “Date not known”."}</p>}
       {error && (
         <p role="alert" className="text-right text-[11px] font-semibold text-expense">
           {error}
@@ -566,16 +621,18 @@ export function Segmented<T extends string>({
   value,
   options,
   disabled,
+  wrap = false,
   onChange,
 }: {
   name: string;
   value: T | null;
   options: { value: T; label: string }[];
   disabled?: boolean;
+  wrap?: boolean;
   onChange: (v: T) => void;
 }) {
   return (
-    <span role="radiogroup" aria-label={name} className="inline-flex overflow-hidden rounded-[6px] border border-border">
+    <span role="radiogroup" aria-label={name} className={cn("inline-flex overflow-hidden rounded-[6px] border border-border", wrap && "max-w-full flex-wrap")}>
       {options.map((o) => (
         <button
           key={o.value}
@@ -584,7 +641,7 @@ export function Segmented<T extends string>({
           aria-checked={value === o.value}
           disabled={disabled}
           onClick={() => onChange(o.value)}
-          className={cn("px-2 py-1 text-[11px] font-medium whitespace-nowrap", value === o.value ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary/60")}
+          className={cn("px-2 py-1 text-[11px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring", wrap ? "min-h-7 flex-1 [overflow-wrap:anywhere]" : "whitespace-nowrap", value === o.value ? (wrap ? "bg-primary/20 text-foreground" : "bg-secondary text-foreground") : "text-muted-foreground hover:bg-secondary/60")}
         >
           {o.label}
         </button>

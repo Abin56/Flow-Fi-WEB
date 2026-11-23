@@ -11,19 +11,8 @@ import { cyclePosition } from "@/features/people/lib/settlement-presentation";
 import { ColumnLabel, Leader } from "./header-parts";
 import { StatementBreakdown, StatementCalculation } from "./statement-parts";
 
-const LABEL = "text-[10.5px] font-bold tracking-[0.07em] text-foreground/60 uppercase";
-
 const toneOf = (s: PersonCycleStatement | null) =>
   s?.direction === "theyOwe" ? "text-settle-receivable-text" : s?.direction === "iOwe" ? "text-settle-payable-text" : "text-success";
-
-const tileOf = (s: PersonCycleStatement | null) =>
-  s?.direction === "theyOwe"
-    ? "bg-settle-receivable-tint/70 ring-settle-receivable-edge/25"
-    : s?.direction === "iOwe"
-      ? "bg-settle-payable-tint/70 ring-settle-payable-edge/25"
-      : s?.direction === "settled"
-        ? "bg-success/[0.07] ring-success/20"
-        : "bg-secondary/45 ring-border";
 
 /** This cycle's settled share as a ring — received of the cycle's total (the same `settlementFigures`). */
 function CycleRing({ pct }: { pct: number }) {
@@ -36,23 +25,23 @@ function CycleRing({ pct }: { pct: number }) {
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={pct}
-      className="relative grid size-[58px] shrink-0 place-items-center"
+      className="relative grid size-9 shrink-0 place-items-center @min-[60rem]:size-7"
     >
       <svg viewBox="0 0 52 52" className="absolute inset-0 size-full -rotate-90" aria-hidden>
-        <circle cx="26" cy="26" r={r} fill="none" strokeWidth="5" className="stroke-border-strong/45" />
+        <circle cx="26" cy="26" r={r} fill="none" strokeWidth="3" className="stroke-border" />
         <circle
           cx="26"
           cy="26"
           r={r}
           fill="none"
-          strokeWidth="5"
+          strokeWidth="3"
           strokeLinecap="round"
           strokeDasharray={c}
           strokeDashoffset={c * (1 - pct / 100)}
           className="stroke-success transition-[stroke-dashoffset] duration-700 ease-out"
         />
       </svg>
-      <span className="relative font-heading text-[12.5px] font-bold text-foreground tabular-nums">{pct}%</span>
+      <span className="relative text-[11px] font-semibold text-foreground tabular-nums @min-[60rem]:text-[10px]">{pct}%</span>
     </span>
   );
 }
@@ -98,16 +87,13 @@ export function PersonSettlementStrip({
   const bothSides = statement != null && statement.toReceive > 0 && statement.toGive > 0;
   const hasAdvance = Math.abs(overall.advance) >= 0.005;
 
-  const tile = bothSides ? "bg-secondary/45 ring-border" : tileOf(statement);
-
   return (
-    <div className="grid min-w-0 items-stretch gap-x-5 gap-y-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)]" aria-label="Settlement summary">
-      {/* 1 · This cycle's settlement — the strongest figure on the page, on a tile tinted by who owes whom */}
-      <div className={cn("min-w-0 rounded-[14px] px-3.5 py-2.5 ring-1 ring-inset", loading ? "bg-secondary/40 ring-border" : tile)}>
-        <div className="flex min-w-0 items-center justify-between gap-2">
-          <p className={LABEL}>Settlement</p>
-          <div className="-my-1 -mr-1 scale-[0.94] origin-right">
-            <CycleNavigator cycle={cycle} onCycleChange={onCycleChange} />
+    <div className="grid min-w-0 items-stretch min-[22.5rem]:grid-cols-2 @min-[60rem]:grid-cols-[minmax(0,1.75fr)_minmax(0,0.95fr)_minmax(0,1fr)]" aria-label="Settlement summary">
+      <div className="min-w-0 px-3.5 py-3 min-[22.5rem]:col-span-2 sm:px-5 @min-[60rem]:col-span-1 @min-[60rem]:py-2">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1">
+          <ColumnLabel>Cycle settlement</ColumnLabel>
+          <div className="min-w-0 max-w-full">
+            <CycleNavigator cycle={cycle} onCycleChange={onCycleChange} compact />
           </div>
         </div>
         {loading ? (
@@ -117,67 +103,63 @@ export function PersonSettlementStrip({
           </div>
         ) : bothSides ? (
           // Two independent obligations — both gross, each settled on its own; never one netted figure.
-          <div className="mt-1 grid grid-cols-2 gap-3">
+          <div className="mt-2 grid grid-cols-2 gap-3">
             <div className="min-w-0">
               <p className="text-[11px] font-semibold text-settle-receivable-text">You need to receive</p>
               <p className="font-heading text-[24px] leading-none font-bold tracking-tight tabular-nums text-settle-receivable-text">{money(statement.toReceive)}</p>
             </div>
             <div className="min-w-0">
-              <p className="text-[11px] font-semibold text-settle-payable-text">You need to give</p>
+              <p className="text-[11px] font-semibold text-settle-payable-text">You need to pay</p>
               <p className="font-heading text-[24px] leading-none font-bold tracking-tight tabular-nums text-settle-payable-text">{money(statement.toGive)}</p>
             </div>
-            <p className="col-span-2 text-[11px] font-medium text-foreground/60">Tracked separately — each side is settled on its own.</p>
+            <p className="col-span-2 text-[11px] font-medium text-muted-foreground">Each balance is settled separately.</p>
           </div>
         ) : (
-          <div className="mt-1 flex min-w-0 items-center gap-3.5">
-            <CycleRing pct={pct ?? (statement.direction === "settled" ? 100 : 0)} />
-            <div className="min-w-0 flex-1">
-              <p className={cn("inline-flex items-center gap-1 text-[12px] font-semibold", tone)}>
-                <DirectionIcon className="size-3.5" strokeWidth={2.5} aria-hidden />
-                {cyclePosition(statement, statement.personName).headline}
-              </p>
+          <div className="mt-1.5 min-w-0 @min-[60rem]:flex @min-[60rem]:flex-wrap @min-[60rem]:items-center @min-[60rem]:gap-x-2.5 @min-[60rem]:gap-y-1">
+            <p className={cn("inline-flex items-center gap-1 text-[12px] font-semibold", tone)}>
+              <DirectionIcon className="size-3.5" strokeWidth={2.5} aria-hidden />
+              {cyclePosition(statement, statement.personName).headline}
+            </p>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 @min-[60rem]:mt-0 @min-[60rem]:gap-x-2">
               {statement.direction === "settled" ? (
-                <p className="mt-0.5 font-heading text-[26px] leading-none font-bold tracking-tight text-success">All settled</p>
+                <p className="font-heading text-[26px] leading-none font-bold tracking-tight text-success @min-[60rem]:text-xl">All settled</p>
               ) : (
-                <p className={cn("mt-0.5 font-heading text-[30px] leading-none font-bold tracking-tight tabular-nums", tone)} data-testid="settlement-remaining">
+                <p className={cn("min-w-0 font-heading text-[clamp(1.8rem,2.75vw,2.3rem)] leading-none font-semibold tracking-[-0.045em] wrap-anywhere tabular-nums @min-[60rem]:text-[26px]", tone)} data-testid="settlement-remaining">
                   {money(statement.amount)}
                 </p>
               )}
-              {total && settled && (
-                <dl className="mt-1.5 flex min-w-0 items-baseline gap-x-3 text-[11.5px] text-foreground/60 tabular-nums">
-                  <div className="flex items-baseline gap-1">
-                    <dt>Due this cycle</dt>
-                    <dd data-testid="settlement-total" className="font-semibold text-foreground/85">{money(total.value)}</dd>
-                  </div>
-                  <div className="flex items-baseline gap-1">
-                    <dt className="inline-flex items-center gap-1">
-                      <span className="size-1.5 rounded-full bg-success" aria-hidden />
-                      {settled.label}
-                    </dt>
-                    <dd data-testid="settlement-received" className="font-semibold text-success">{money(settled.value)}</dd>
-                  </div>
-                </dl>
-              )}
+              <CycleRing pct={pct ?? (statement.direction === "settled" ? 100 : 0)} />
             </div>
+            {total && settled && (
+              <dl className="mt-1.5 flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11.5px] text-muted-foreground tabular-nums @min-[60rem]:mt-0 @min-[60rem]:basis-full">
+                <div className="flex items-baseline gap-1">
+                  <dt>Due this cycle</dt>
+                  <dd data-testid="settlement-total" className="font-semibold text-foreground/85">{money(total.value)}</dd>
+                </div>
+                <div className="flex items-baseline gap-1">
+                  <dt className="inline-flex items-center gap-1">
+                    <span className="size-1.5 rounded-full bg-success" aria-hidden />
+                    {settled.label}
+                  </dt>
+                  <dd data-testid="settlement-received" className="font-semibold text-success">{money(settled.value)}</dd>
+                </div>
+              </dl>
+            )}
           </div>
         )}
       </div>
 
       {/* 2 · Overall with the person — both directions, each its own obligation */}
-      <div className="min-w-0 py-0.5 lg:border-l lg:border-border-strong/60 lg:pl-5">
+      <div className="min-w-0 border-t border-border-subtle px-3.5 py-3 sm:px-5 @min-[60rem]:border-t-0 @min-[60rem]:border-l @min-[60rem]:py-2">
         <ColumnLabel icon={<Scale className="size-3" strokeWidth={2.25} aria-hidden />}>Overall with {firstName}</ColumnLabel>
-        <dl className="mt-2 space-y-1.5 text-[12.5px] tabular-nums" aria-label="Balance summary">
-          <div className="flex items-center gap-2">
-            <SideDot on={overall.toReceive > 0} tone="receivable" icon={<ArrowDownLeft className="size-3" strokeWidth={2.5} aria-hidden />} />
-            <dt className="text-foreground/75">You need to receive</dt>
-            <Leader />
-            <dd className={cn("font-heading text-[16px] leading-none font-bold", overall.toReceive > 0 ? "text-settle-receivable-text" : "text-foreground/40")}>{money(overall.toReceive)}</dd>
+        <dl className="mt-2 space-y-2 text-xs tabular-nums" aria-label="Balance summary">
+          <div className="flex items-center gap-1.5">
+            <dt className="text-muted-foreground">To receive</dt>
+            <dd className={cn("ml-auto text-right font-heading text-base leading-none font-bold", overall.toReceive > 0 ? "text-settle-receivable-text" : "text-muted-foreground")}>{money(overall.toReceive)}</dd>
           </div>
-          <div className="flex items-center gap-2">
-            <SideDot on={overall.toGive > 0} tone="payable" icon={<ArrowUpRight className="size-3" strokeWidth={2.5} aria-hidden />} />
-            <dt className="text-foreground/75">You need to give</dt>
-            <Leader />
-            <dd className={cn("font-heading text-[16px] leading-none font-bold", overall.toGive > 0 ? "text-settle-payable-text" : "text-foreground/40")}>{money(overall.toGive)}</dd>
+          <div className="flex items-center gap-1.5">
+            <dt className="text-muted-foreground">To pay</dt>
+            <dd className={cn("ml-auto text-right font-heading text-base leading-none font-bold", overall.toGive > 0 ? "text-settle-payable-text" : "text-muted-foreground")}>{money(overall.toGive)}</dd>
           </div>
           {hasAdvance && (
             <div className="flex items-baseline justify-between gap-2 border-t border-dashed border-border-strong/70 pt-1.5">
@@ -189,7 +171,7 @@ export function PersonSettlementStrip({
       </div>
 
       {/* 3 · EMI responsibility, or where the cycle's total came from */}
-      <div className="min-w-0 py-0.5 lg:border-l lg:border-border-strong/60 lg:pl-5">
+      <div className="min-w-0 border-t border-border-subtle px-3.5 py-3 min-[22.5rem]:border-l sm:px-5 @min-[60rem]:border-t-0 @min-[60rem]:py-2">
         {third ?? (
         <>
         <ColumnLabel icon={<CalendarClock className="size-3" strokeWidth={2.25} aria-hidden />}>This cycle</ColumnLabel>
@@ -213,13 +195,6 @@ export function PersonSettlementStrip({
         )}
       </div>
     </div>
-  );
-}
-
-/** A small round marker for one side of the balance — tinted when that side holds money, quiet when it is zero. */
-function SideDot({ on, tone, icon }: { on: boolean; tone: "receivable" | "payable"; icon: React.ReactNode }) {
-  return (
-    <span className={cn("grid size-5 shrink-0 place-items-center rounded-full", on ? (tone === "receivable" ? "bg-settle-receivable-badge text-settle-receivable-text" : "bg-settle-payable-badge text-settle-payable-text") : "bg-secondary text-foreground/35")}>{icon}</span>
   );
 }
 

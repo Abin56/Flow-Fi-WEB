@@ -1,10 +1,10 @@
 "use client";
 
-import { CheckCircle2, ChevronDown, History, Maximize2, Plus, Search } from "lucide-react";
-import { useState } from "react";
+import { ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronDown, History, Info, Maximize2, Plus, Search } from "lucide-react";
+import { useMemo, useState } from "react";
 import type { EntryEditValues, EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
 import { WS_SECONDARY } from "@/features/people/components/workspace/person-workspace-ui";
-import { flowOf, SettlementTable, viewOf } from "@/features/people/components/workspace/settlement-table";
+import { cashOf, SettlementTable, tableTypeLabel } from "@/features/people/components/workspace/settlement-table";
 import { usePostponedLookup } from "@/features/people/components/linked-emis-panel";
 import type { PaymentLine, StatementBalance } from "@/features/people/lib/statement-balance";
 import { linkedTrailFor } from "@/features/people/components/linked-funds";
@@ -12,48 +12,85 @@ import type { SettlementLookupsWithAccounts } from "@/features/people/hooks/use-
 import { filterLedgerRows, type LedgerRow, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
 import { rowMatchesTypeFilter, settlementKind } from "@/features/people/lib/settlement-presentation";
 import type { PersonCycleStatement } from "@/lib/engines/person-cycle-statement";
+import { isOriginationTransactionId } from "@/lib/engines/loan-origination";
 import { money } from "@/lib/engines/person-cycle-statement-share";
+import type { Transaction } from "@/lib/models/transaction";
 import { repaymentMix } from "@/features/people/lib/repayment-mix";
 import { cn } from "@/lib/utils";
 
-/** The filters — Money in / Money out are cash that really moved; Still owed includes part-paid items; one EMI filter. */
 type LensId = "all" | "in" | "out" | "owed" | "overdue" | "emi" | "settled";
-const LENSES: { id: LensId; label: string; hint?: string }[] = [
-  { id: "all", label: "Everything" },
-  { id: "in", label: "Received", hint: "Cash that came in from this person — payments received, money borrowed, advances received (the Money in column)" },
-  { id: "out", label: "Given", hint: "Cash you handed to this person — money given, payments made, advances given (the Money out column)" },
-  { id: "owed", label: "Still owed" },
+const LENSES: { id: LensId; label: string }[] = [
+  { id: "all", label: "All activity" },
+  { id: "in", label: "Money received" },
+  { id: "out", label: "Money sent" },
+  { id: "owed", label: "Still open" },
   { id: "overdue", label: "Overdue" },
-  { id: "emi", label: "EMI" },
-  { id: "settled", label: "Settled" },
+  { id: "emi", label: "EMI shares" },
+  { id: "settled", label: "Cleared items" },
 ];
 
 export type LedgerScope = "cycle" | "all";
+
+/** Show posted loan funding once. The agreement row also exists for loans recorded without funding. */
+function loanHistoryRows(rows: readonly LedgerRow[], transactions: readonly Transaction[], accountNameOf: SettlementLookupsWithAccounts["accountNameOf"]): LedgerRow[] {
+  const agreements = new Map(rows.filter((row) => row.key.startsWith("loan:") && row.loanId != null).map((row) => [row.loanId, row]));
+  const funded = new Set<string>();
+  const movements: LedgerRow[] = [];
+  for (const t of transactions) {
+    if (t.deletedAt != null || t.status !== "posted" || t.paymentAllocationType !== "additionalDisbursement" || !t.loanId || t.amount <= 0) continue;
+    const agreement = agreements.get(t.loanId);
+    if (!agreement) continue;
+    const original = isOriginationTransactionId(t.id);
+    if (original) funded.add(agreement.key);
+    movements.push({
+      ...agreement,
+      key: original ? agreement.key : `loan-txn:${t.id}`,
+      title: original ? agreement.title : t.description?.trim() || (t.type === "income" ? "Borrowed more" : "Lent more"),
+      date: t.dateTime,
+      createdAt: t.createdAt,
+      amount: t.amount,
+      recordedLoanCash: { dir: t.type === "income" ? "in" : "out", account: accountNameOf(t.accountId) ?? null },
+    });
+  }
+  return [...movements, ...[...agreements.values()].filter((row) => !funded.has(row.key))];
+}
 
 /**
  * One compact financial summary above the table (it replaces the two long banners): what came in this cycle, how much of it went
  * toward the overall balance, what is postponed, and what is still outstanding — each direction on its own, never netted. Every
  * figure is an existing value (`repaymentMix`, the deferral views, the person's breakdown); only shown when there is something to say.
- * "How is this counted?" holds the one-time explanation of general (no item chosen) payments.
+ * The disclosure explains the payment and lender states that apply to the visible scope.
  */
+interface RelationshipActivity {
+  lent: number;
+  receivedBack: number;
+  receivedEarlier: number;
+  borrowed: number;
+  paidBack: number;
+}
+
 function LedgerSummary({
   statement,
   personName,
   lookups,
   outstanding,
   postponed,
-  showCycle,
+  activity,
+  dateRange,
+  hasLenderRows,
 }: {
   statement: PersonCycleStatement | null;
   personName: string;
   lookups: SettlementLookupsWithAccounts;
   outstanding?: { toReceive: number; toGive: number };
   postponed?: { amount: number; until: string | null };
-  showCycle: boolean;
+  activity: RelationshipActivity;
+  dateRange: string;
+  hasLenderRows: boolean;
 }) {
   const [why, setWhy] = useState(false);
   const first = personName.split(" ")[0];
-  const mix = statement && showCycle ? repaymentMix(statement) : null;
+  const mix = statement ? repaymentMix(statement) : null;
   const inbound = mix && mix.in.total >= 0.005 ? mix.in : null;
   const outbound = mix && mix.out.total >= 0.005 ? mix.out : null;
   const hasPostponed = postponed != null && postponed.amount >= 0.005;
@@ -62,52 +99,77 @@ function LedgerSummary({
     credit && credit.theyOwe.credit >= 0.005 && { key: "in", who: first, ...credit.theyOwe },
     credit && credit.iOwe.credit >= 0.005 && { key: "out", who: "You", ...credit.iOwe },
   ].filter(Boolean) as { key: string; who: string; credit: number; owed: number }[];
-  if (!inbound && !outbound && !hasPostponed && sides.length === 0) return null;
-
   const stats: { key: string; label: string; value: number; sub?: string; tone?: string }[] = [];
-  if (inbound) stats.push({ key: "in", label: "Received this cycle", value: inbound.total, tone: "text-success", sub: inbound.toItems >= 0.005 ? `${money(inbound.toItems)} to ${inbound.itemCount} ${inbound.itemCount === 1 ? "item" : "items"}` : undefined });
-  if (outbound) stats.push({ key: "out", label: "Paid this cycle", value: outbound.total, tone: "text-expense", sub: outbound.toItems >= 0.005 ? `${money(outbound.toItems)} to ${outbound.itemCount} ${outbound.itemCount === 1 ? "item" : "items"}` : undefined });
   const toBalance = (inbound?.toBalance ?? 0) + (outbound?.toBalance ?? 0);
-  if (toBalance >= 0.005) stats.push({ key: "bal", label: "Toward overall balance", value: toBalance, sub: "no item chosen" });
+  if (toBalance >= 0.005) stats.push({ key: "bal", label: "Toward overall balance", value: toBalance, sub: inbound?.toBalance && outbound?.toBalance ? `${money(inbound.toBalance)} received · ${money(outbound.toBalance)} paid` : "No item selected" });
   if (hasPostponed) stats.push({ key: "pp", label: "Postponed", value: postponed.amount, tone: "text-primary-accent-text", sub: postponed.until ? `until ${postponed.until}` : "still owed" });
-  if (outstanding && outstanding.toReceive >= 0.005) stats.push({ key: "rec", label: "Outstanding · to receive", value: outstanding.toReceive, tone: "text-settle-receivable-text" });
-  if (outstanding && outstanding.toGive >= 0.005) stats.push({ key: "give", label: "Outstanding · to give", value: outstanding.toGive, tone: "text-settle-payable-text" });
+  const explain = sides.length > 0 || hasPostponed || hasLenderRows;
 
   return (
-    <section data-testid="ledger-summary" aria-label="Financial summary" className="mb-3 rounded-[12px] border border-border bg-card px-4 py-2.5">
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-        <dl className="flex min-w-0 flex-wrap items-start gap-x-6 gap-y-2 divide-x divide-border-strong/50 [&>div:not(:first-child)]:pl-6">
+    <section data-testid="ledger-summary" aria-label="Financial summary" className="mb-3 overflow-hidden rounded-[10px] border border-border bg-card shadow-e1">
+      <div className="@container">
+        <div className="grid gap-px bg-border-subtle @min-[32rem]:grid-cols-2">
+          <div className="min-w-0 bg-card px-3 py-2.5">
+            <h3 className="flex flex-wrap items-baseline gap-x-2 text-xs font-semibold">Money between you <span className="font-normal text-muted-foreground">{dateRange}</span></h3>
+            <dl className="mt-1.5 grid grid-cols-2 gap-3">
+              <div>
+                <dt className="flex items-center gap-1 text-xs text-muted-foreground"><ArrowUpRight className="size-3.5 text-expense" aria-hidden /> You gave</dt>
+                <dd className="font-heading text-lg font-bold tabular-nums" data-stat="lent">{money(activity.lent)}</dd>
+                {activity.paidBack > 0.005 && <dd className="text-xs text-muted-foreground">You paid back {money(activity.paidBack)}</dd>}
+              </div>
+              <div>
+                <dt className="flex items-center gap-1 text-xs text-muted-foreground"><ArrowDownLeft className="size-3.5 text-success" aria-hidden /> Received back</dt>
+                <dd className="font-heading text-lg font-bold text-success tabular-nums" data-stat="received-back">{money(activity.receivedBack)}</dd>
+                {activity.receivedEarlier > 0.005 && <dd className="text-xs text-muted-foreground">{money(activity.receivedEarlier)} recorded earlier</dd>}
+                {activity.borrowed > 0.005 && <dd className="text-xs text-muted-foreground">You borrowed {money(activity.borrowed)}</dd>}
+              </div>
+            </dl>
+          </div>
+          <div className="min-w-0 bg-card px-3 py-2.5">
+            <h3 className="text-xs font-semibold">Outstanding now</h3>
+            <dl className="mt-1.5 grid grid-cols-2 gap-3">
+              <div><dt className="text-xs text-muted-foreground">{first} still owes you</dt><dd className="font-heading text-lg font-bold text-settle-receivable-text tabular-nums">{money(outstanding?.toReceive ?? 0)}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">You still owe {first}</dt><dd className="font-heading text-lg font-bold text-settle-payable-text tabular-nums">{money(outstanding?.toGive ?? 0)}</dd></div>
+            </dl>
+          </div>
+        </div>
+      </div>
+      {stats.length > 0 && (
+        <dl className="flex flex-wrap gap-x-5 gap-y-1 border-t border-border bg-secondary/25 px-3 py-2">
           {stats.map((st) => (
-            <div key={st.key} className="min-w-0" data-stat={st.key}>
-              <dt className="text-[11px] font-medium text-foreground/55">{st.label}</dt>
-              <dd className={cn("font-heading text-[16px] leading-tight font-bold tabular-nums", st.tone ?? "text-foreground")}>{money(st.value)}</dd>
-              {st.sub && <dd className="text-[11px] leading-tight text-foreground/55 tabular-nums">{st.sub}</dd>}
+            <div key={st.key} className="flex flex-wrap items-baseline gap-x-1.5 text-xs" data-stat={st.key}>
+              <dt className="font-medium text-muted-foreground">{st.label}</dt>
+              <dd className={cn("font-semibold tabular-nums", st.tone ?? "text-foreground")}>{money(st.value)}</dd>
+              {st.sub && <dd className="text-muted-foreground tabular-nums">· {st.sub}</dd>}
             </div>
           ))}
         </dl>
-        {sides.length > 0 && (
+      )}
+      {explain && (
+        <div className="border-t border-border bg-secondary/20 px-3">
           <button
             type="button"
             aria-expanded={why}
             onClick={() => setWhy((o) => !o)}
-            className="ml-auto inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[12px] font-semibold text-foreground/65 outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex min-h-9 w-full items-center gap-2 rounded-[5px] text-left text-xs font-semibold text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           >
-            How is this counted?
-            <ChevronDown className={cn("size-3.5 transition-transform", why && "rotate-180")} aria-hidden />
+            <Info className="size-3.5 shrink-0" aria-hidden />
+            How balances are counted
+            <ChevronDown className={cn("ml-auto size-3.5 shrink-0 transition-transform", why && "rotate-180")} aria-hidden />
           </button>
-        )}
-      </div>
-      {why && (
-        <ul className="mt-2 list-disc space-y-0.5 border-t border-border-strong/40 pt-2 pl-5 text-[11.5px] leading-snug text-foreground/70 duration-150 animate-in fade-in-0">
+        </div>
+      )}
+      {why && explain && (
+        <dl className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-3 border-t border-border px-3 py-3 text-xs text-muted-foreground">
           {sides.map((sd) => (
-            <li key={sd.key} className="tabular-nums">
-              {sd.who} paid {money(sd.credit)} toward the overall balance without choosing items · {sd.owed < 0.005 ? "nothing" : money(sd.owed)} still owed overall.
-            </li>
+            <div key={sd.key} className="space-y-1 tabular-nums">
+              <dt className="font-semibold text-foreground">Overall balance payment</dt>
+              <dd>{sd.who} paid {money(sd.credit)}. {money(sd.owed)} remains owed overall. Individual items keep their own payment status.</dd>
+            </div>
           ))}
-          <li>Those payments reduce the overall balance, but no single item was chosen — so open items stay open and read <b>Partial</b>.</li>
-          <li>A postponed amount is not paid: it stays in the outstanding balance and only its due date moves.</li>
-          <li>Paying the bank for an EMI (Bank paid) is separate: it never counts as {first}&apos;s payment to you.</li>
-        </ul>
+          {hasPostponed && <div className="space-y-1"><dt className="font-semibold text-foreground">Postponed collection</dt><dd>{money(postponed.amount)} stays outstanding. Collection is scheduled for a later date.</dd></div>}
+          {hasLenderRows && <div className="space-y-1"><dt className="font-semibold text-foreground">Lender payment</dt><dd>Bank status follows the linked installment. {first}&apos;s repayments to you are recorded as People receipts.</dd></div>}
+        </dl>
       )}
     </section>
   );
@@ -178,7 +240,7 @@ export function ScopeSwitch({
 }: {
   scope: LedgerScope;
   onScopeChange: (scope: LedgerScope) => void;
-  counts: Record<LedgerScope, number>;
+  counts?: Record<LedgerScope, number>;
   cycleLabel: string;
 }) {
   return (
@@ -203,7 +265,7 @@ export function ScopeSwitch({
           )}
         >
           {label}
-          <span className={cn("rounded-full px-1.5 text-[10.5px] font-semibold tabular-nums", scope === value ? "bg-primary/25 text-foreground" : "bg-card/70 text-foreground/60")}>{counts[value]}</span>
+          {counts && <span className={cn("rounded-full px-1.5 text-[10.5px] font-semibold tabular-nums", scope === value ? "bg-primary/25 text-foreground" : "bg-card/70 text-foreground/60")}>{counts[value]}</span>}
         </button>
       ))}
     </div>
@@ -244,13 +306,16 @@ export function PersonActivityFeed({
   isLoading,
   scope,
   onScopeChange,
-  counts,
   cycleLabel,
+  cycleRange,
   onAdd,
   onExpand,
   handlers,
   lookups,
   statement,
+  historyStatement,
+  loanRows,
+  transactions,
   cycleLabelOf,
   carriedForward = null,
   paymentLines = [],
@@ -267,14 +332,17 @@ export function PersonActivityFeed({
   isLoading: boolean;
   scope: LedgerScope;
   onScopeChange: (scope: LedgerScope) => void;
-  counts: Record<LedgerScope, number>;
   cycleLabel: string;
+  cycleRange: string;
   onAdd?: () => void;
   onExpand: () => void;
   handlers: LedgerRowHandlers;
   lookups: SettlementLookupsWithAccounts;
   /** The selected cycle's statement — its payment history and settled state. */
   statement: PersonCycleStatement | null;
+  historyStatement: PersonCycleStatement | null;
+  loanRows: readonly LedgerRow[];
+  transactions: readonly Transaction[];
   cycleLabelOf: (d: Date) => string;
   /** The selected cycle's previous pending (engine value). */
   carriedForward?: CarriedForward | null;
@@ -293,6 +361,41 @@ export function PersonActivityFeed({
   const postponedOf = usePostponedLookup();
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const loanHistory = useMemo(() => loanHistoryRows(loanRows, transactions, lookups.accountNameOf), [loanRows, transactions, lookups.accountNameOf]);
+  const activeStatement = scope === "cycle" ? statement : historyStatement;
+  const addedLoans = loanHistory.filter((row) => {
+    if (!activeStatement) return false;
+    const { start, end } = activeStatement.cycle;
+    const nextDay = new Date(end.getFullYear(), end.getMonth(), end.getDate() + 1);
+    return row.date >= start && row.date < nextDay;
+  });
+  const sourceRows = [...rows.filter((row) => !row.key.startsWith("loan:")), ...addedLoans];
+  const metadata = new Map([...sourceRows, ...carriedRows].map((row) => {
+    const kind = settlementKind(row, lookups);
+    const cash = cashOf({ row, kind, typeLabel: tableTypeLabel(kind, row, lookups) });
+    return [row.key, { kind, cash }];
+  }));
+  const shownKeys = new Set([...sourceRows, ...carriedRows].map((r) => r.key));
+  const appliedPayments = paymentLines.filter((line) => !shownKeys.has(line.key));
+  const activity: RelationshipActivity = { lent: 0, receivedBack: 0, receivedEarlier: 0, borrowed: 0, paidBack: 0 };
+  const receivedEarlier = (entryId: string | null) => entryId != null && lookups.entriesById.get(entryId)?.recordedEarlier === true;
+  for (const row of sourceRows) {
+    const { kind, cash } = metadata.get(row.key)!;
+    if (!cash) continue;
+    if (kind === "moneyGiven" || (row.recordedLoanCash && cash.dir === "out")) activity.lent += cash.amount;
+    if (kind === "moneyReceived" || (row.recordedLoanCash && cash.dir === "in")) activity.borrowed += cash.amount;
+    if (kind === "paymentReceived") {
+      activity.receivedBack += cash.amount;
+      if (receivedEarlier(row.entryId)) activity.receivedEarlier += cash.amount;
+    }
+    if (kind === "paymentMade") activity.paidBack += cash.amount;
+  }
+  for (const line of appliedPayments) {
+    const payment = line.payment;
+    if (payment.source !== "cash") continue;
+    activity[payment.direction === "theyPaid" ? "receivedBack" : "paidBack"] += payment.amount;
+    if (payment.direction === "theyPaid" && receivedEarlier(payment.entryId)) activity.receivedEarlier += payment.amount;
+  }
 
   // Overdue respects a postponement: an amount moved to a later date is not overdue (and never paid) until that date passes.
   const isOverdue = (r: LedgerRow) =>
@@ -301,12 +404,12 @@ export function PersonActivityFeed({
   const rowMatchesLens = (lens: LensId, r: LedgerRow): boolean => {
     switch (lens) {
       case "all": return true;
-      case "in": return flowOf(viewOf(r, personName, lookups))?.dir === "in";
-      case "out": return flowOf(viewOf(r, personName, lookups))?.dir === "out";
+      case "in": return metadata.get(r.key)?.cash?.dir === "in";
+      case "out": return metadata.get(r.key)?.cash?.dir === "out";
       case "owed": return r.state === "open" || r.state === "partial";
       case "overdue": return isOverdue(r);
       case "emi": return rowMatchesTypeFilter(r, settlementKind(r, lookups), "emi");
-      case "settled": return r.state === "settled";
+      case "settled": return r.state === "settled" || (r.statementRow?.settles != null && r.statementRow.settles.remainingAfter < 0.005);
     }
   };
   const lineMatchesLens = (lens: LensId, l: PaymentLine): boolean => {
@@ -316,31 +419,31 @@ export function PersonActivityFeed({
       case "in": return cash && l.payment.direction === "theyPaid";
       case "out": return cash && l.payment.direction === "youPaid";
       case "emi": return l.parent.category === "emi";
-      case "settled": return l.parent.state === "settled";
+      case "settled": return l.payment.remainingAfter < 0.005;
       default: return false;
     }
   };
 
   const rowMatches = (r: LedgerRow) => rowMatchesLens(lens, r);
   const lineMatches = (l: PaymentLine) => lineMatchesLens(lens, l);
-  const visible = filterLedgerRows(rows, "all", search).filter(rowMatches);
+  const q = search.trim().toLowerCase();
+  const visible = !q ? sourceRows.filter(rowMatches) : sourceRows.filter((row) => rowMatches(row) && (
+    filterLedgerRows([row], "all", search).length > 0 ||
+    (row.recordedLoanCash?.account ?? lookups.accountForEntry(row.entryId))?.toLowerCase().includes(q)
+  ));
   const showCarried = scope === "cycle" && !isLoading;
   const carried = showCarried ? filterLedgerRows(carriedRows, "all", search).filter(rowMatches) : [];
-  const shownKeys = new Set([...rows, ...carriedRows].map((r) => r.key));
-  const q = search.trim().toLowerCase();
-  const visibleLines = paymentLines.filter((l) => !shownKeys.has(l.key) && lineMatches(l) && (!q || l.parent.title.toLowerCase().includes(q) || "payment".includes(q)));
-
-  // How many lines each filter would show in this scope (search ignored) — so a filter never leads to a surprise empty table.
-  const lensCount = (id: LensId) =>
-    (showCarried ? carriedRows : []).concat(rows).filter((r) => rowMatchesLens(id, r)).length +
-    paymentLines.filter((l) => !shownKeys.has(l.key) && lineMatchesLens(id, l)).length;
-
-  const changeScope = (next: LedgerScope) => {
-    onScopeChange(next);
+  const visibleLines = appliedPayments.filter((l) => lineMatches(l) && (!q || l.parent.title.toLowerCase().includes(q) || "payment".includes(q) || lookups.accountForEntry(l.payment.entryId)?.toLowerCase().includes(q)));
+  const hasEmis = [...sourceRows, ...carriedRows].some((row) => rowMatchesLens("emi", row)) || appliedPayments.some((line) => lineMatchesLens("emi", line));
+  const hasFilters = search.trim() !== "" || lens !== "all";
+  const matchingCount = visible.length + carried.length + visibleLines.length;
+  const clearFilters = () => {
+    setSearch("");
+    setLens("all");
   };
 
   const empty =
-    rows.length === 0 && carriedRows.length === 0 ? (
+    sourceRows.length === 0 && carriedRows.length === 0 && appliedPayments.length === 0 ? (
       <div className="flex flex-col items-start gap-2 px-3 py-4 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm font-semibold text-foreground">
           {scope === "cycle" ? `No activity with ${firstName} in this cycle.` : `No transactions with ${firstName} yet.`}
@@ -362,73 +465,66 @@ export function PersonActivityFeed({
 
   return (
     <section className="flex min-w-0 flex-col">
-      <div className="mb-2.5 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-[12px] border border-border-strong/60 bg-card px-2 py-1.5 shadow-e1">
-        <h2 className="sr-only">
-          Transactions · {counts[scope]}
-        </h2>
-        <ScopeSwitch scope={scope} onScopeChange={changeScope} counts={counts} cycleLabel={cycleLabel} />
-        <span className="hidden h-6 w-px bg-border-strong/60 xl:block" aria-hidden />
-        {/* Quick filters — presets over the same status / type filters, each with how many lines it shows */}
-        <div role="group" aria-label="Quick view" className="flex min-w-0 flex-wrap items-center gap-0.5 rounded-[8px] bg-secondary/70 p-[3px] ring-1 ring-border-strong/40 ring-inset">
-          {LENSES.map((l) => {
-            const on = lens === l.id;
-            const n = lensCount(l.id);
-            return (
-              <button
-                key={l.id}
-                type="button"
-                aria-pressed={on}
-                title={l.hint}
-                onClick={() => setLens(l.id)}
-                className={cn(
-                  "inline-flex h-7 items-center gap-1.5 rounded-[6px] px-3 text-[12.5px] whitespace-nowrap outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring",
-                  on ? "bg-foreground font-semibold text-background shadow-e1" : "font-medium text-foreground/70 hover:bg-card hover:text-foreground",
-                )}
-              >
-                {l.label}
-                <span
-                  data-testid={`lens-count-${l.id}`}
-                  className={cn("min-w-[1.1rem] rounded-[4px] px-1 text-center text-[10.5px] leading-[1.15rem] font-semibold tabular-nums", on ? "bg-background/20 text-background" : n === 0 ? "text-foreground/35" : "bg-card text-foreground/65")}
-                >
-                  {n}
-                </span>
-              </button>
-            );
-          })}
+      <div className="mb-3 rounded-[10px] border border-border bg-card shadow-e1 lg:mb-2">
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3 sm:px-4 lg:py-2">
+          <div>
+            <h2 className="font-heading text-base font-semibold">Transaction history</h2>
+            <p className="text-xs text-muted-foreground tabular-nums">
+              {scope === "all" ? "All dates" : cycleRange}
+              {showCarried && carriedRows.length > 0 && ` · Includes ${carriedRows.length} unpaid from earlier cycles`}
+            </p>
+          </div>
+          <ScopeSwitch scope={scope} onScopeChange={onScopeChange} cycleLabel={cycleLabel} />
         </div>
-        <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
-          {rows.length > 5 && (
-            <div className="relative min-w-0 flex-1 sm:w-44 sm:flex-none">
-              <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-foreground/55" strokeWidth={1.75} />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search…"
-                aria-label="Search transactions"
-                className="h-8 w-full rounded-[6px] border border-border-strong/70 bg-card pr-3 pl-8 text-[13px] text-foreground outline-none transition-colors placeholder:text-foreground/50 focus:border-primary-accent-text"
-              />
-            </div>
-          )}
-          <button type="button" onClick={onExpand} title="Open the full transaction workspace" className={cn(WS_SECONDARY, "h-8 shrink-0 px-3 text-[12.5px]")}>
-            <Maximize2 className="size-3.5" strokeWidth={1.75} />
-            Expand
-          </button>
+        <div className="flex flex-wrap items-center gap-2 border-t border-border p-2.5 sm:px-4 lg:bg-secondary/20 lg:py-1.5">
+          <label className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
+            Show
+            <select aria-label="Filter transactions" value={lens} onChange={(e) => setLens(e.target.value as LensId)} className="h-8 rounded-[6px] border border-border bg-card px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              {LENSES.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+            </select>
+          </label>
+          <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
+            {(sourceRows.length > 0 || carriedRows.length > 0 || appliedPayments.length > 0) && (
+              <div className="relative min-w-0 flex-1 sm:w-44 sm:flex-none">
+                <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-foreground/55" strokeWidth={1.75} />
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search transactions"
+                  aria-label="Search transactions"
+                  className="h-8 w-full rounded-lg border border-border bg-card pr-3 pl-8 text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </div>
+            )}
+            <button type="button" onClick={onExpand} title="Open the full transaction workspace" className={cn(WS_SECONDARY, "h-8 shrink-0 rounded-lg px-3 text-xs")}>
+              <Maximize2 className="size-3.5" strokeWidth={1.75} />
+              Expand
+            </button>
+          </div>
         </div>
       </div>
 
-      <LedgerSummary statement={statement} personName={personName} lookups={lookups} outstanding={outstanding} postponed={postponed} showCycle={scope === "cycle"} />
+      {!isLoading && <LedgerSummary statement={activeStatement} personName={personName} lookups={lookups} outstanding={outstanding} postponed={postponed} activity={activity} dateRange={scope === "cycle" ? cycleRange : "All dates"} hasLenderRows={hasEmis} />}
 
       {/* The "Settled cycle" banner is retired from the main view — the totals strip above already reads Remaining ₹0. */}
       {showCarried && carriedRows.length === 0 && <CarriedForwardNote carried={carriedForward} personName={personName} className="mb-2 shrink-0" />}
+      {!isLoading && hasFilters && (
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1 text-xs">
+          <span role="status" className="text-muted-foreground tabular-nums">{matchingCount} matching {matchingCount === 1 ? "entry" : "entries"}</span>
+          <button type="button" onClick={clearFilters} className="min-h-7 rounded-[5px] px-1.5 font-semibold text-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring">Clear filters</button>
+        </div>
+      )}
 
       {/* Only the table scrolls on larger screens; its header row sticks */}
       <div
         key={scope}
         className={cn(
-          "animate-in overflow-x-hidden rounded-[14px] border border-border bg-card duration-200 fade-in-0 sm:max-h-[calc(100dvh-13rem)] sm:min-h-[16rem] sm:overflow-y-auto sm:overscroll-contain",
+          "@container overflow-x-hidden rounded-[10px] border border-border bg-card shadow-e1 sm:max-h-[calc(100dvh-13rem)] sm:overflow-y-auto sm:overscroll-contain lg:max-h-[min(60dvh,36rem)]",
         )}
       >
         <SettlementTable
+          compactDesktop
           personId={personId}
           personName={personName}
           rows={visible}

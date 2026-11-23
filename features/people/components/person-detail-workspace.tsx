@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Bell, Calendar, ChevronRight, HandCoins, ListX, Mail, MoreHorizontal, Paperclip, Pencil, Phone, Plus, Share2, Split, StickyNote, Trash2, Users } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bell, Calendar, CalendarClock, ChevronDown, HandCoins, ListX, Mail, MoreHorizontal, Pencil, Phone, Plus, Scale, Share2, Split, StickyNote, Trash2, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, cloneElement } from "react";
 import { useRouter } from "next/navigation";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
@@ -38,7 +38,7 @@ import { EditPersonMode, type EditPersonPatch } from "@/features/people/componen
 import { LedgerConfirmDialog, PeopleDrawer, type EntryEditValues, type EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
 import { LE_RADIUS } from "@/features/loans/components/loan-emi-ui";
 import { DateInput } from "@/components/forms/date-input";
-import { WS_FIELD, WS_PRIMARY, WS_SECONDARY, WsLabel } from "@/features/people/components/workspace/person-workspace-ui";
+import { WS_FIELD, WS_PRIMARY, WS_SECONDARY } from "@/features/people/components/workspace/person-workspace-ui";
 import { paymentInitialFor, RecordPaymentPanel, type RecordPaymentInitial } from "@/features/people/components/workspace/record-payment-panel";
 import { generalCreditOf } from "@/features/people/lib/settlement-presentation";
 import { paymentImpact } from "@/lib/engines/person-payment-impact";
@@ -98,32 +98,39 @@ const BACK_BUTTON =
 const HEADER_BUTTON =
   "flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border border-border-strong bg-card px-2.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring [&_svg]:text-muted-foreground";
 
-/** A compact secondary Person action — quieter than Add, the same 32px height as the ledger's controls. */
 const ACTION_SECONDARY = cn(
   WS_SECONDARY,
-  "h-8 gap-1.5 rounded-full px-3 text-[12.5px] [&>svg]:text-foreground/70 lg:justify-center lg:px-2",
+  "h-8 justify-center gap-1 rounded-[5px] border-border bg-transparent px-1 text-xs @min-[60rem]:h-7 [&>svg]:size-3 [&>svg]:shrink-0 [&>svg]:text-muted-foreground",
 );
+
+const OVERVIEW_LINK = "inline-flex min-h-9 items-center gap-1.5 rounded-[5px] border border-border px-2.5 text-xs font-semibold text-foreground outline-none hover:border-border-strong hover:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring lg:min-h-7";
+const OVERVIEW_DISCLOSURE = "flex min-h-11 cursor-pointer list-none items-center gap-2 px-3.5 py-2 text-sm font-semibold text-foreground outline-none transition-colors hover:bg-secondary/45 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset lg:min-h-9 lg:py-1.5 lg:text-xs [&::-webkit-details-marker]:hidden";
+const OVERVIEW_PANEL = "group min-w-0 flex-1 basis-[15rem] overflow-hidden open:basis-full";
+const BREAKDOWN_TILE = "min-w-0 rounded-[8px] border border-border bg-card px-3.5 py-3 sm:px-4";
 
 function DetailRow({ icon: Icon, label, children }: { icon: typeof Calendar; label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-4 py-2 text-sm">
-      <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
-        <Icon className="size-4" strokeWidth={1.75} />
+    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 py-2 text-sm">
+      <dt className="flex items-center gap-2 text-muted-foreground">
+        <Icon className="size-4" strokeWidth={1.75} aria-hidden />
         {label}
-      </span>
-      <span className="min-w-0 text-right font-medium break-words text-foreground">{children}</span>
+      </dt>
+      <dd className="ml-auto min-w-0 text-right font-medium wrap-anywhere text-foreground">{children}</dd>
     </div>
   );
 }
 
-function SectionTitle({ icon: Icon, children }: { icon?: typeof Calendar; children: React.ReactNode }) {
+function DetailCard({ icon: Icon, title, children }: { icon: typeof Calendar; title: string; children: React.ReactNode }) {
   return (
-    <WsLabel>
-      <span className="inline-flex items-center gap-1.5">
-        {Icon && <Icon className="size-3.5" strokeWidth={1.75} />}
-        {children}
-      </span>
-    </WsLabel>
+    <section className="min-w-0 rounded-[10px] border border-border bg-card p-4 shadow-e1 sm:p-5">
+      <h2 className="mb-3 flex items-center gap-2.5 font-heading text-base font-semibold">
+        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-secondary text-muted-foreground">
+          <Icon className="size-4" strokeWidth={1.75} aria-hidden />
+        </span>
+        {title}
+      </h2>
+      {children}
+    </section>
   );
 }
 
@@ -149,20 +156,6 @@ function initialTabFrom(initialView: "ledger" | null | undefined): PersonTab {
   if (asked && TABS.includes(asked)) return asked;
   if (initialView === "ledger" || (params.get("obligation") && params.get("settle") !== "1")) return "transactions";
   return "overview";
-}
-
-/** One Overview card — a titled surface with an optional action on the right. */
-function OverviewCard({ title, meta, action, children, className, testId }: { title: string; meta?: React.ReactNode; action?: React.ReactNode; children: React.ReactNode; className?: string; testId?: string }) {
-  return (
-    <section aria-label={title} data-testid={testId} className={cn("min-w-0 rounded-[14px] border border-border bg-card px-4 pt-3 pb-3.5 shadow-e1", className)}>
-      <div className="mb-1.5 flex min-w-0 items-baseline gap-2">
-        <h2 className="font-heading text-[14px] font-semibold text-foreground">{title}</h2>
-        {meta && <span className="min-w-0 truncate text-[11.5px] font-medium text-foreground/55">{meta}</span>}
-        {action && <span className="ml-auto shrink-0">{action}</span>}
-      </div>
-      {children}
-    </section>
-  );
 }
 
 export function PersonDetailWorkspace({
@@ -222,6 +215,7 @@ export function PersonDetailWorkspace({
   const [inline, setInline] = useState<InlineAction>(null);
   /** Which content tab is showing — Overview · Linked EMIs · Transactions · Details. Kept in `?tab=` so a reload stays put. */
   const [tab, setTabState] = useState<PersonTab>(() => initialTabFrom(initialView));
+  const [previewAgreementKey, setPreviewAgreementKey] = useState<string | null>(null);
   const setTab = (next: PersonTab) => {
     setTabState(next);
     if (typeof window === "undefined") return;
@@ -230,6 +224,10 @@ export function PersonDetailWorkspace({
     else params.set("tab", next);
     const rest = params.toString();
     window.history.replaceState(window.history.state, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
+  };
+  const openTabFromOverview = (next: PersonTab) => {
+    setTab(next);
+    document.getElementById(personTabId(next))?.focus();
   };
   /** The expanded ledger's own navigation (Transactions ↔ Settle / Split) — kept here so Escape can step back. */
   const [ledgerView, setLedgerView] = useState<LedgerView>("transactions");
@@ -257,7 +255,7 @@ export function PersonDetailWorkspace({
   // Until expenses have loaded, whether a share is tracked is unknown — keep it conservative (null).
   const trackedShareRefs = sharesLoading ? null : trackedAll;
   const router = useRouter();
-  const { items: upcomingEmi } = usePersonUpcomingEmi(person.id);
+  const { items: upcomingEmi, isLoading: upcomingLoading } = usePersonUpcomingEmi(person.id);
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories();
   const { data: people = [] } = usePeople();
@@ -328,9 +326,6 @@ export function PersonDetailWorkspace({
   })();
   // Primary transactions only — a payment recorded against a transaction is its history, not another transaction.
   const primaryCount = allRows.length;
-  // Hero accents follow the overall direction — green when they owe you, red when you owe them.
-  const heroRing = person.breakdown.toGive > person.breakdown.toReceive ? "ring-expense/70" : person.breakdown.toReceive > 0 ? "ring-success/70" : "ring-white/40";
-  const heroGlow = person.breakdown.toGive > person.breakdown.toReceive ? "bg-expense/25" : "bg-success/25";
   const subline = [`${primaryCount} ${primaryCount === 1 ? "transaction" : "transactions"}`, contact].filter(Boolean).join(" · ");
 
   const bulkPlan = useMemo(() => planBulkDeletion(ledgerEntries, cashLegIds), [ledgerEntries, cashLegIds]);
@@ -779,7 +774,7 @@ export function PersonDetailWorkspace({
 
   /** The Person's actions — Record payment is primary; Add, Split and Share are quieter, in one row under it. */
   const actionBar = (
-    <div role="group" aria-label="Actions" className="flex flex-col gap-1.5">
+    <div role="group" aria-label="Actions" className="flex flex-col gap-1.5 sm:flex-row sm:items-center @min-[60rem]:flex-col">
       <button
         type="button"
         onClick={() => (inline === "settle" ? closePayment() : openPayment({}))}
@@ -787,12 +782,12 @@ export function PersonDetailWorkspace({
         aria-expanded={inline === "settle"}
         aria-controls="person-inline-settle"
         title="Record money received from, or paid to, this person"
-        className={cn(WS_PRIMARY, "h-10 w-full rounded-full px-5 text-[14px] shadow-[0_8px_20px_-10px_color-mix(in_oklch,var(--primary-accent-text)_70%,transparent)] transition-transform active:scale-[0.98]", inline === "settle" && "ring-2 ring-primary-accent-text/40")}
+        className={cn(WS_PRIMARY, "h-9 w-full shrink-0 rounded-[5px] border-[#244237] bg-[#244237] px-3 text-sm whitespace-nowrap text-[#fffaf0] sm:w-auto @min-[60rem]:h-8 @min-[60rem]:w-full @min-[60rem]:text-[13px] dark:border-[#c9d5be] dark:bg-[#c9d5be] dark:text-[#182920]", inline === "settle" && "ring-2 ring-primary-accent-text/40")}
       >
         <HandCoins className="size-4" strokeWidth={2} />
         {inline === "settle" ? "Close" : "Record payment"}
       </button>
-      <div className="grid grid-cols-3 gap-1.5">
+      <div className="grid w-full grid-cols-3 gap-1.5">
         <button
           type="button"
           onClick={() => toggleInline("add")}
@@ -826,12 +821,7 @@ export function PersonDetailWorkspace({
   );
 
   const loansNote = (person.loanReceivable > 0 || person.loanPayable > 0) && (
-    <p className="text-[11.5px] leading-relaxed text-foreground/65">
-      Loans are settled from the Loan, outside this statement. Overall incl. loans: you need to receive {formatCurrency(person.breakdown.toReceive)}
-      {" · "}you need to give {formatCurrency(person.breakdown.toGive)}
-      {person.loanReceivable > 0 && ` · Loans — you need to receive ${formatCurrency(person.loanReceivable)}`}
-      {person.loanPayable > 0 && ` · Loans — you need to give ${formatCurrency(person.loanPayable)}`}
-    </p>
+    <p className="text-xs text-muted-foreground">Loan payments are recorded in Loan &amp; EMI.</p>
   );
 
   // Overall position — the header shows the two sides (and any advance) from the People engine's own breakdown; this card
@@ -920,24 +910,23 @@ export function PersonDetailWorkspace({
 
   const untiedOwed = generalCredit && generalCredit.theyOwe.credit >= 0.005 ? generalCredit.theyOwe.owed : null;
   const overviewTab = (
-    <div className="flex flex-col gap-3">
-      {/* 1 · The cycle maths, once: previous ± new − received = remaining, with how the payments were applied */}
-      <PersonBalanceStory statement={statement} personName={person.name} isLoading={isLoading} />
+    <div className="flex min-w-0 flex-col gap-3">
+      <section aria-labelledby="person-open-items-title" data-testid="person-overview-open" className="@container min-w-0 overflow-hidden rounded-[10px] border border-border bg-card shadow-e1">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 bg-secondary/20 px-3.5 py-3 sm:px-5 lg:py-2">
+          <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+            <h2 id="person-open-items-title" className="font-serif text-[1.5rem] leading-tight font-medium tracking-tight text-foreground lg:font-heading lg:text-base lg:font-semibold">Open items</h2>
+            <p className="text-xs text-muted-foreground tabular-nums">{rowsLoading ? "All cycles" : `${openObligations.length} across all cycles`}</p>
+          </div>
+          {!rowsLoading && (
+            <button type="button" onClick={() => openTabFromOverview("transactions")} className={OVERVIEW_LINK}>
+              View transactions <ArrowRight className="size-3.5" strokeWidth={1.75} aria-hidden />
+            </button>
+          )}
+        </div>
 
-      {/* 2 · What is still open (actionable) beside the linked agreements */}
-      <div className={cn("grid items-start gap-3", linkedEmiSummaries.length > 0 && "xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]")}>
-        <OverviewCard
-          title="Open items"
-          meta={openObligations.length > 0 ? `${openObligations.length} unpaid` : "all settled"}
-          action={
-            openObligations.length > 0 ? (
-              <button type="button" onClick={() => setTab("transactions")} className="rounded-[6px] text-[12px] font-semibold text-primary-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">
-                All transactions →
-              </button>
-            ) : undefined
-          }
-          testId="person-overview-open"
-        >
+        {rowsLoading ? (
+          <p role="status" className="border-t border-border px-3.5 py-3 text-sm text-muted-foreground sm:px-5">Loading open items…</p>
+        ) : (
           <PersonOpenItems
             personName={person.name}
             obligations={openObligations}
@@ -945,54 +934,63 @@ export function PersonDetailWorkspace({
             onPostpone={rawPerson && onRecordPayment ? (key) => openPayment({ preselectKey: key, intent: "postpone" }) : undefined}
             generalCreditOwed={untiedOwed}
           />
-        </OverviewCard>
-        {linkedEmiSummaries.length > 0 && (
-          <OverviewCard
-            title="EMI agreements"
-            meta={`${linkedEmiSummaries.length} linked`}
-            action={
-              <button type="button" onClick={() => setTab("emis")} className="rounded-[6px] text-[12px] font-semibold text-primary-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">
-                Linked EMIs →
-              </button>
-            }
-            testId="person-overview-emis"
-          >
-            <EmiAgreementList personName={person.name} summaries={linkedEmiSummaries} onOpen={() => setTab("emis")} />
-          </OverviewCard>
         )}
-      </div>
 
-      {/* 3 · Secondary details, on demand */}
-      <details data-testid="person-overview-more" className="group rounded-[14px] border border-border bg-card shadow-e1 open:pb-3.5">
-        <summary className="flex cursor-pointer list-none items-center gap-2 rounded-[14px] px-4 py-2.5 text-[12.5px] font-semibold text-foreground outline-none hover:bg-secondary/50 focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-          <ChevronRight className="size-4 text-muted-foreground transition-transform duration-200 group-open:rotate-90" aria-hidden />
-          More details
-          <span className="truncate text-[11.5px] font-medium text-muted-foreground">All time with {firstName} · how it&apos;s calculated · each payment · postponements</span>
-        </summary>
-        {!isLoading && statement && (
-          <div className="grid gap-x-6 gap-y-4 px-4 pt-1 duration-200 animate-in fade-in-0 xl:grid-cols-2">
-            <div className="flex min-w-0 flex-col gap-4">
-              {overallDetails && (
-                <div>
-                  <p className="mb-1 text-[11px] font-semibold text-muted-foreground">All time</p>
-                  {overallDetails}
-                </div>
+        <div className="flex flex-wrap items-start border-t border-border bg-secondary/20">
+          <details name="person-overview" data-testid="person-overview-more" className={OVERVIEW_PANEL}>
+            <summary className={OVERVIEW_DISCLOSURE}>
+              <Scale className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+              Balance breakdown
+              <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180 motion-reduce:transition-none" aria-hidden />
+            </summary>
+            <div className="grid items-start gap-2.5 border-t border-border bg-secondary/20 p-3 @min-[46rem]:grid-cols-2 @min-[64rem]:grid-cols-3">
+              <div className={BREAKDOWN_TILE}><PersonBalanceStory statement={statement} personName={person.name} isLoading={isLoading} /></div>
+              {!isLoading && statement && (
+                <>
+                  <div className={cn(BREAKDOWN_TILE, "space-y-2")}>
+                    <h3 className="text-sm font-semibold text-foreground">Payment history</h3>
+                    <div id="person-payment-history" data-testid="payment-history-details">
+                      <CyclePaymentHistory statement={statement} personName={person.name} accountForEntry={lookups.accountForEntry} incomeForEntry={lookups.incomeForEntry} className="[&>h3]:sr-only" />
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5 empty:hidden">{highlights}</div>
+                  </div>
+                  <div className={cn("grid min-w-0 items-start gap-2.5 @min-[46rem]:col-span-2 @min-[64rem]:col-span-1", overallDetails && "@min-[46rem]:grid-cols-2 @min-[64rem]:grid-cols-1")}>
+                    <div className={cn(BREAKDOWN_TILE, "space-y-2")}>
+                      <h3 className="text-sm font-semibold text-foreground">How this cycle is calculated</h3>
+                      <StatementBreakdown statement={statement} />
+                      <details data-testid="person-cycle-calculation" className="group/calc border-t border-border-subtle pt-1">
+                        <summary className="flex min-h-8 cursor-pointer list-none items-center justify-between gap-2 rounded-[5px] text-xs font-semibold text-foreground outline-none hover:text-settle-receivable-text focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                          View calculation entries <ChevronDown className="size-3.5 text-muted-foreground transition-transform group-open/calc:rotate-180 motion-reduce:transition-none" aria-hidden />
+                        </summary>
+                        <div className="pb-1"><StatementCalculation statement={statement} /></div>
+                      </details>
+                    </div>
+                    {overallDetails && (
+                      <div className={cn(BREAKDOWN_TILE, "space-y-2")}>
+                        <h3 className="text-sm font-semibold text-foreground">All-time balance</h3>
+                        {overallDetails}
+                      </div>
+                    )}
+                  </div>
+                </>
               )}
-              <div className="flex flex-wrap items-center gap-1.5 empty:hidden">{highlights}</div>
-              <div id="person-payment-history" data-testid="payment-history-details">
-                <p className="mb-1 text-[11px] font-semibold text-muted-foreground">Each payment and what it was applied to</p>
-                <CyclePaymentHistory statement={statement} personName={person.name} accountForEntry={lookups.accountForEntry} incomeForEntry={lookups.incomeForEntry} className="[&>h3]:sr-only" />
+            </div>
+          </details>
+
+          {linkedEmiSummaries.length > 0 && (
+            <details name="person-overview" data-testid="person-overview-emis" className={OVERVIEW_PANEL}>
+              <summary className={OVERVIEW_DISCLOSURE}>
+                <CalendarClock className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                Linked EMIs <span className="text-xs font-normal text-muted-foreground tabular-nums">{linkedEmiSummaries.length}</span>
+                <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180 motion-reduce:transition-none" aria-hidden />
+              </summary>
+              <div className="border-t border-border bg-card px-3.5 py-2 sm:px-5">
+                <EmiAgreementList summaries={linkedEmiSummaries} onOpen={(key) => { setPreviewAgreementKey(key); openTabFromOverview("emis"); }} />
               </div>
-            </div>
-            <div className="min-w-0 space-y-3">
-              <p className="text-[11px] font-semibold text-muted-foreground">How this cycle is calculated</p>
-              <StatementBreakdown statement={statement} />
-              <StatementCalculation statement={statement} />
-            </div>
-          </div>
-        )}
-      </details>
-      {/* Money to use — received money held for specific purposes (not income, not advance) */}
+            </details>
+          )}
+        </div>
+      </section>
       {rawPerson && <MoneyToUseSection person={rawPerson} entries={ledgerEntries} onRevertPayment={onRevertPayment} />}
       {onApplyAdvance &&
         heldSides.map((side) => (
@@ -1024,18 +1022,19 @@ export function PersonDetailWorkspace({
   const emisTab = (
     <section aria-label="Linked EMIs" id="person-linked-emis" className={cn(emiCount === 0 && "rounded-[16px] border border-border bg-card p-4 shadow-e1")}>
       {emiCount > 0 ? (
-        <LinkedEmisPanel personName={person.name} summaries={linkedEmiSummaries} sources={linkedEmis} savingId={savingLink} onToggle={toggleRepays} generalCredit={generalCredit} />
+        <LinkedEmisPanel personName={person.name} summaries={linkedEmiSummaries} sources={linkedEmis} savingId={savingLink} onToggle={toggleRepays} generalCredit={generalCredit} initialAgreementKey={previewAgreementKey} />
       ) : (
-        <div className="flex flex-col items-start gap-1 py-6">
-          <p className="text-sm font-semibold text-foreground">No EMIs linked to {firstName}</p>
-          <p className="text-[12.5px] text-foreground/60">Share a Loan or EMI with {firstName} from its own screen — their monthly share, payments and progress then show up here.</p>
+        <div className="flex flex-col items-center gap-2 px-3 py-8 text-center">
+          <span className="grid size-10 place-items-center rounded-xl bg-secondary text-muted-foreground"><CalendarClock className="size-5" aria-hidden /></span>
+          <h2 className="font-heading text-base font-semibold">{isLoading ? "Loading linked EMIs…" : `No EMIs linked to ${firstName}`}</h2>
+          {!isLoading && <p className="max-w-sm text-sm text-muted-foreground">Add {firstName} to a loan or EMI to see their shares here.</p>}
         </div>
       )}
     </section>
   );
 
   const transactionsTab = (
-    <section id="person-sec-transactions" aria-label="Activity" className="flex min-w-0 flex-col">
+    <section id="person-sec-transactions" aria-label="Transactions" className="flex min-w-0 flex-col">
       <PersonActivityFeed
         personId={person.id}
         personName={person.name}
@@ -1043,6 +1042,9 @@ export function PersonDetailWorkspace({
         carriedRows={carriedRows}
         lookups={lookups}
         statement={statement}
+        historyStatement={allTimeStatement}
+        loanRows={allRows}
+        transactions={allTransactions}
         cycleLabelOf={cycleLabelOf}
         isLoading={rowsLoading}
         scope={scope}
@@ -1051,12 +1053,12 @@ export function PersonDetailWorkspace({
           setSettlingKey(null);
           setEditingKey(null);
         }}
-        counts={scopeCounts}
         paymentLines={statementPaymentLines}
         balances={statementBalances}
         outstanding={{ toReceive: person.breakdown.toReceive, toGive: person.breakdown.toGive }}
         postponed={postponedSummary}
         cycleLabel={cycleLabel}
+        cycleRange={formatCycleLabel(cycle)}
         onAdd={onAddEntry ? () => setInline("add") : undefined}
         onExpand={() => go({ kind: "ledger" })}
         handlers={rowHandlers}
@@ -1066,34 +1068,43 @@ export function PersonDetailWorkspace({
   );
 
   const detailsTab = (
-    <section id="person-sec-details" aria-label="Details" className="rounded-[16px] border border-border bg-card p-4 shadow-e1">
-      <div id="person-details" className="grid gap-x-8 gap-y-5 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="min-w-0">
-          <SectionTitle icon={Users}>Person</SectionTitle>
-          <div className="mt-1 divide-y divide-border-strong/60">
-            <DetailRow icon={Calendar} label="First transaction">
-              {person.firstTransaction || "—"}
-            </DetailRow>
-            <DetailRow icon={Users} label="Relationship">
-              {person.relationship || "—"}
-            </DetailRow>
-            {person.phone && (
-              <DetailRow icon={Phone} label="Phone">
-                {person.phone}
+    <section id="person-sec-details" aria-label="Details">
+      <div id="person-details" className="grid items-start gap-3 md:grid-cols-2">
+        <div className="flex min-w-0 flex-col gap-3">
+          <DetailCard icon={Users} title="Contact details">
+            <dl className="divide-y divide-border">
+              <DetailRow icon={Calendar} label="First transaction">
+                {person.firstTransaction || "None yet"}
               </DetailRow>
-            )}
-            {person.email && (
-              <DetailRow icon={Mail} label="Email">
-                {person.email}
+              <DetailRow icon={Users} label="Relationship">
+                {person.relationship || "Not set"}
               </DetailRow>
+              {person.phone && (
+                <DetailRow icon={Phone} label="Phone">
+                  <a href={`tel:${person.phone}`} className="rounded-[4px] underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring">{person.phone}</a>
+                </DetailRow>
+              )}
+              {person.email && (
+                <DetailRow icon={Mail} label="Email">
+                  <a href={`mailto:${person.email}`} className="rounded-[4px] underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring">{person.email}</a>
+                </DetailRow>
+              )}
+            </dl>
+          </DetailCard>
+          <DetailCard icon={StickyNote} title="Notes">
+            {person.notes ? (
+              <p className="text-sm leading-relaxed break-words whitespace-pre-wrap text-foreground">{person.notes}</p>
+            ) : (
+              <p className="text-sm text-muted-foreground">No notes yet.</p>
             )}
-          </div>
+          </DetailCard>
         </div>
 
-        <div className="min-w-0">
-          <SectionTitle icon={Bell}>Upcoming EMI</SectionTitle>
-          {upcomingEmi.length === 0 ? (
-            <p className="mt-2 text-sm text-muted-foreground">No upcoming EMI</p>
+        <DetailCard icon={Bell} title="Upcoming EMIs">
+          {upcomingLoading ? (
+            <p role="status" className="text-sm text-muted-foreground">Loading upcoming EMIs…</p>
+          ) : upcomingEmi.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No upcoming installments.</p>
           ) : (
             <div className="mt-1 divide-y divide-border-strong/60">
               {upcomingEmi.slice(0, 5).map((item) => (
@@ -1110,21 +1121,7 @@ export function PersonDetailWorkspace({
               ))}
             </div>
           )}
-        </div>
-
-        <div className="min-w-0">
-          <SectionTitle icon={StickyNote}>Notes</SectionTitle>
-          {person.notes ? (
-            <p className="mt-2 text-sm whitespace-pre-wrap text-foreground">{person.notes}</p>
-          ) : (
-            <p className="mt-2 text-sm text-muted-foreground">No notes yet.</p>
-          )}
-        </div>
-
-        <div className="min-w-0">
-          <SectionTitle icon={Paperclip}>Attachments</SectionTitle>
-          <p className="mt-2 text-sm text-muted-foreground">No attachments yet.</p>
-        </div>
+        </DetailCard>
       </div>
     </section>
   );
@@ -1240,29 +1237,26 @@ export function PersonDetailWorkspace({
   return (
     <FollowUpContext.Provider value={followUpContext}>
     <DeferralContext.Provider value={deferralContext}>
-    <div ref={rootRef} onKeyDown={onKeyDown} className="isolate flex min-w-0 scroll-mt-6 flex-col gap-3 px-1">
+    <div ref={rootRef} onKeyDown={onKeyDown} className="isolate mx-auto flex w-full max-w-[80rem] min-w-0 scroll-mt-6 flex-col gap-3 lg:gap-2.5">
       {/* `isolate`: the sticky tab bar (z-20) and sticky table headers stay ordered among themselves but can no longer
           out-stack the dialogs/sheets (--z-dialog, portaled to <body>) opened from this page. */}
       {/* Identity + money at a glance — one compact card: who (on the brand band), then this cycle's settlement, the overall
           position, EMI responsibility and the actions. Every mode renders below it. */}
-      <header ref={headerRef} className="overflow-hidden rounded-[18px] border border-border bg-card shadow-e1 duration-300 animate-in fade-in-0">
-        <div className="relative flex items-center gap-3 overflow-hidden bg-[image:var(--gradient-hero)] px-4 py-2.5 text-white">
-          <span aria-hidden className={cn("pointer-events-none absolute -top-16 -right-10 size-40 rounded-full blur-3xl", heroGlow)} />
-          <span aria-hidden className="pointer-events-none absolute -bottom-20 left-1/3 size-40 rounded-full border border-white/10" />
-          <span className={cn("relative shrink-0 rounded-full ring-2 ring-offset-2 ring-offset-surface-hero", heroRing)}>
-            <ClayAvatar name={person.name} size={38} fallbackClassName="bg-white/15 text-[15px] font-semibold text-white" />
+      <header ref={headerRef} className="@container overflow-hidden rounded-[10px] border border-border bg-card shadow-[0_3px_14px_-8px_rgb(0_0_0_/_0.3)]">
+        <div className="flex items-center gap-3 border-b border-[#aa9466]/45 bg-linear-to-r from-[#142720] to-[#253e34] px-3.5 py-2.5 text-[#fffaf0] sm:px-5 lg:bg-[image:var(--gradient-hero)] lg:py-2">
+          <span className="shrink-0 rounded-full ring-1 ring-[#d4bf8b]/65 ring-offset-2 ring-offset-[#20372d]">
+            <ClayAvatar name={person.name} size={34} fallbackClassName="bg-[#f1e7ce]/10 text-sm font-medium text-[#f1e7ce]" />
           </span>
-          <div className="relative flex min-w-0 flex-1 items-center gap-x-3 gap-y-0">
-            <h1 className="truncate font-heading text-[20px] leading-tight font-bold tracking-tight">{person.name}</h1>
-            <p className="truncate rounded-full bg-white/10 px-2.5 py-0.5 text-[12px] font-medium text-white/75 ring-1 ring-white/10 ring-inset">{subline}</p>
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate font-serif text-[1.45rem] leading-tight font-medium tracking-[-0.02em] sm:text-[1.65rem] lg:font-heading lg:text-xl lg:font-semibold">{person.name}</h1>
+            <p className="truncate text-xs leading-4 text-[#e5e8dc]/80">{subline}</p>
           </div>
-          <div className="relative flex shrink-0 items-center gap-1 [&_button]:border-white/20 [&_button]:bg-white/10 [&_button]:text-white [&_button:hover]:bg-white/20 [&_svg]:text-white!">
+          <div className="flex shrink-0 items-center gap-1 [&_button]:border-white/20 [&_button]:bg-transparent [&_button]:text-[#fffaf0] [&_button:hover]:bg-white/10 [&_svg]:text-[#fffaf0]!">
             <button type="button" onClick={onBack} title="Back to People Ledger" className={BACK_BUTTON}>
               <ArrowLeft className="size-4" strokeWidth={2} />
               <span className="hidden sm:inline">People Ledger</span>
               <span className="sr-only sm:hidden">Back to People Ledger</span>
             </button>
-            <span className="mx-1 h-5 w-px bg-white/25" aria-hidden />
             {onEditPerson && rawPerson && (
               <button
                 type="button"
@@ -1301,7 +1295,7 @@ export function PersonDetailWorkspace({
             )}
           </div>
         </div>
-        <div className="flex flex-col gap-3 px-3.5 py-3 lg:flex-row lg:items-stretch lg:gap-5">
+        <div className="flex flex-col @min-[60rem]:flex-row @min-[60rem]:items-stretch">
           <div className="min-w-0 flex-1">
             <PersonSettlementStrip
               statement={statement}
@@ -1313,7 +1307,7 @@ export function PersonDetailWorkspace({
               third={emiColumn}
             />
           </div>
-          <div className="shrink-0 lg:w-[14rem] lg:border-l lg:border-border-strong/60 lg:pl-5">{actionBar}</div>
+          <div className="flex min-w-0 flex-col justify-center border-t border-border-subtle bg-secondary/20 px-3.5 py-2.5 sm:px-5 @min-[60rem]:w-[12rem] @min-[60rem]:shrink-0 @min-[60rem]:border-t-0 @min-[60rem]:border-l @min-[60rem]:px-3 @min-[60rem]:py-2">{actionBar}</div>
         </div>
       </header>
 
@@ -1324,7 +1318,7 @@ export function PersonDetailWorkspace({
           tabs={[
             { id: "overview", label: "Overview" },
             { id: "emis", label: "Linked EMIs", count: emiCount, alert: emiOverdue },
-            { id: "transactions", label: "Transactions", count: scopeCounts[scope] },
+            { id: "transactions", label: "Transactions" },
             { id: "details", label: "Details" },
           ]}
           active={tab}
@@ -1335,11 +1329,11 @@ export function PersonDetailWorkspace({
             statement == null
               ? null
               : statement.toReceive > 0 && statement.toGive > 0
-                ? `${money(statement.toReceive)} to receive · ${money(statement.toGive)} to give`
+                ? `${money(statement.toReceive)} to receive · ${money(statement.toGive)} to pay`
                 : statement.direction === "theyOwe"
                   ? `${money(statement.amount)} to receive`
                   : statement.direction === "iOwe"
-                    ? `${money(statement.amount)} to give`
+                    ? `${money(statement.amount)} to pay`
                     : "All settled"
           }
           balanceTone={statement?.direction === "theyOwe" ? "text-settle-receivable-text" : statement?.direction === "iOwe" ? "text-settle-payable-text" : "text-success"}

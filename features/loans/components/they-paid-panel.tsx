@@ -89,8 +89,8 @@ export function TheyPaidPanel({
   return (
     <section aria-label="Their payment" data-testid="they-paid-panel" className="mt-2 flex flex-col gap-2 rounded-[8px] border border-border bg-secondary/30 p-2.5">
       <p className="text-xs font-semibold text-foreground">
-        They paid{installment ? ` · Installment #${installment.sequenceNumber}` : ""}
-        <span className="ml-2 font-normal text-muted-foreground">Lender payment is not changed.</span>
+        {sourceKind === "loan" ? "Record or link a People receipt" : "They paid"}{installment ? ` · Installment #${installment.sequenceNumber}` : ""}
+        {sourceKind !== "loan" && <span className="ml-2 font-normal text-muted-foreground">Lender payment is not changed.</span>}
       </p>
 
       {!reconcile.loading && participants.length === 0 && <p className="text-xs text-muted-foreground">Nobody has a share of this installment in People.</p>}

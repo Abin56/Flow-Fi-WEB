@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDownLeft, ArrowLeft, ArrowUpRight, Check, ChevronLeft, ChevronRight, HandCoins, ListX, Plus, Search, Split } from "lucide-react";
+import { ArrowDownLeft, ArrowLeft, ArrowUpRight, Check, ChevronLeft, ChevronRight, HandCoins, ListX, Plus, RotateCcw, Search, Split } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { CyclePicker } from "@/features/people/components/people-ledger-list";
 import { CarriedForwardNote, ScopeSwitch, type CarriedForward, type LedgerRowHandlers, type LedgerScope } from "@/features/people/components/person-activity-feed";
@@ -33,26 +33,31 @@ const NAV_BUTTON =
   "flex size-8 items-center justify-center rounded-[6px] text-foreground/70 transition-colors outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
 
 /** Previous / quick picker / Next — the same month-grid + date picker as the People list (`CyclePicker`). */
-export function CycleNavigator({ cycle, onCycleChange }: { cycle: StatementCycle; onCycleChange: (cycle: StatementCycle) => void }) {
+export function CycleNavigator({ cycle, onCycleChange, compact = false }: { cycle: StatementCycle; onCycleChange: (cycle: StatementCycle) => void; compact?: boolean }) {
   const startDay = useMonthCycleStartDay();
   const current = cycleContaining(new Date(), startDay);
   const isCurrent = sameCycle(cycle, current);
   return (
     <div className="flex min-w-0 items-center gap-1">
-      <button type="button" aria-label="Previous cycle" onClick={() => onCycleChange(shiftCycle(cycle, -1, startDay))} className={NAV_BUTTON}>
+      <button type="button" aria-label="Previous cycle" onClick={() => onCycleChange(shiftCycle(cycle, -1, startDay))} className={cn(NAV_BUTTON, compact && "w-7 shrink-0")}>
         <ChevronLeft className="size-4" strokeWidth={1.75} />
       </button>
-      <CyclePicker cycle={cycle} current={current} onCycleChange={onCycleChange} direction={0} />
+      <CyclePicker cycle={cycle} current={current} onCycleChange={onCycleChange} direction={0} compact={compact} />
       <button
         type="button"
         aria-label="Next cycle"
         disabled={isCurrent}
         onClick={() => onCycleChange(shiftCycle(cycle, 1, startDay))}
-        className={cn(NAV_BUTTON, "disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent")}
+        className={cn(NAV_BUTTON, compact && "w-7 shrink-0", "disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent")}
       >
         <ChevronRight className="size-4" strokeWidth={1.75} />
       </button>
-      {isCurrent ? (
+      {compact && !isCurrent && (
+        <button type="button" aria-label="Back to current" title="Back to current" onClick={() => onCycleChange(current)} className={cn(NAV_BUTTON, "w-7 shrink-0 text-primary-accent-text")}>
+          <RotateCcw className="size-3.5" aria-hidden />
+        </button>
+      )}
+      {!compact && (isCurrent ? (
         <span className="ml-1 rounded-[4px] bg-primary/20 px-1.5 py-0.5 text-[10.5px] font-semibold tracking-wide text-primary-accent-text uppercase">Current</span>
       ) : (
         <button
@@ -62,7 +67,7 @@ export function CycleNavigator({ cycle, onCycleChange }: { cycle: StatementCycle
         >
           Back to current
         </button>
-      )}
+      ))}
     </div>
   );
 }

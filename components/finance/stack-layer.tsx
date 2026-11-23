@@ -101,9 +101,9 @@ export function InlineHostProvider({ children }: { children: ReactNode }) {
 }
 
 /** Where inline layers are drawn. Hidden while empty; the caller sizes and positions it. */
-export function InlineHostSlot({ className }: { className?: string }) {
+export function InlineHostSlot({ className, hidden }: { className?: string; hidden?: boolean }) {
   const host = useContext(InlineHostCtx);
-  return <div ref={host?.setEl} data-inline-host="" className={cn("empty:hidden", className)} />;
+  return <div ref={host?.setEl} data-inline-host="" hidden={hidden} className={cn("empty:hidden", className)} />;
 }
 
 /** Marks a dedicated page as the base the layers sit on, so they read "Back" and return to it. */
@@ -114,12 +114,21 @@ export function useStackBase(open: boolean) {
 type SlotState = "off" | "pending" | "inline" | "modal";
 const noSubscribe = () => () => undefined;
 
+function useSlotOwner(store: SlotStore | null) {
+  return useSyncExternalStore(store ? store.subscribe : noSubscribe, () => store?.get() ?? null, () => null);
+}
+
+/** The mounted form's identity lets the workspace park it while another section is visible. */
+export function useInlineLayerId() {
+  return useSlotOwner(useContext(InlineHostCtx)?.store ?? null);
+}
+
 function useInlineSlot(open: boolean): { state: SlotState; el: HTMLElement | null } {
   const host = useContext(InlineHostCtx);
   const id = useId();
   const el = host?.el ?? null;
   const store = host?.store ?? null;
-  const owner = useSyncExternalStore(store ? store.subscribe : noSubscribe, () => store?.get() ?? null, () => null);
+  const owner = useSlotOwner(store);
   useLayoutEffect(() => {
     if (open && el && store && owner == null) store.claim(id);
   }, [open, el, store, owner, id]);

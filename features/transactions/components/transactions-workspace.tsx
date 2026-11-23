@@ -1565,8 +1565,8 @@ function Amount({
         className={cn(
           "font-bold tracking-tight whitespace-nowrap tabular-nums",
           inline ? "text-[14px] leading-tight" : size === "lg" ? "text-[15px] leading-tight sm:text-[16px]" : "text-[15px] leading-tight",
-          // Only real income is green; a paid obligation is money out, shown in strong neutral text.
-          historical ? "text-muted-foreground" : row === "income" ? "text-success" : "text-foreground",
+          // Money in (+) is green, money out (−) is red; already-paid-earlier rows stay muted.
+          historical ? "text-muted-foreground" : incoming ? "text-success" : "text-expense",
         )}
         title={historical ? historicalPaymentExplanation(incoming) : undefined}
       >
@@ -1746,7 +1746,7 @@ function LedgerTable({
           <th className={TH}>Description</th>
           <th className={cn(TH, "hidden w-48 xl:table-cell")}>Type</th>
           <th className={cn(TH, "hidden w-56 lg:table-cell")}>Account</th>
-          <th className={cn(TH, "w-28 text-right sm:w-52")}>Amount</th>
+          <th className={cn(TH, "w-28 text-right sm:w-36")}>Amount</th>
           {/* Edit / Delete move into the expanded row wherever the table is narrow (phones, and the md range where the
               sidebar takes a third of the screen) — tap a row — so Description keeps room. */}
           <th className={cn(TH, "hidden w-[6.25rem] sm:table-cell md:hidden lg:table-cell")}>
@@ -1907,7 +1907,7 @@ function LedgerTable({
                   </div>
                 </td>
                 <td className={cn(TD, "text-right")}>
-                  <Amount transaction={t} presentation={presentation} withLabel inline />
+                  <Amount transaction={t} presentation={presentation} inline />
                 </td>
                 <td className={cn(TD, "hidden px-1.5 sm:table-cell md:hidden lg:table-cell")} onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center justify-end gap-0.5">

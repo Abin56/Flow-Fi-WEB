@@ -119,7 +119,7 @@ export function PayAmountInput({ value, onChange, autoFocus, ariaLabel }: { valu
 }
 
 /** A segmented pair/trio of choices in one line (36px → 32px), used for EMI funding and the extra-amount treatment. */
-export function PaySegmented<T extends string>({ options, value, onChange, ariaLabel }: { options: { value: T; label: string }[]; value: T; onChange: (v: T) => void; ariaLabel: string }) {
+export function PaySegmented<T extends string>({ options, value, onChange, ariaLabel, wrapLabels = false }: { options: { value: T; label: string }[]; value: T; onChange: (v: T) => void; ariaLabel: string; wrapLabels?: boolean }) {
   return (
     <div role="radiogroup" aria-label={ariaLabel} className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-[8px] border border-border bg-secondary p-0.5">
       {options.map((o) => {
@@ -132,7 +132,8 @@ export function PaySegmented<T extends string>({ options, value, onChange, ariaL
             aria-checked={on}
             onClick={() => onChange(o.value)}
             className={cn(
-              "h-8 min-w-0 truncate rounded-[6px] px-2.5 text-xs font-semibold outline-none transition-[background-color,color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-ring",
+              "min-w-0 rounded-[6px] px-2.5 text-xs font-semibold outline-none transition-[background-color,color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-ring",
+              wrapLabels ? "min-h-8 py-1 leading-tight [overflow-wrap:anywhere]" : "h-8 truncate",
               on ? "bg-card text-foreground shadow-e1 ring-1 ring-primary-accent-text" : "text-muted-foreground hover:text-foreground",
             )}
           >

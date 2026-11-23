@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import {
   ArrowRight,
+  BarChart3,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
@@ -31,7 +32,7 @@ import { useCompactHeader } from "@/components/layout/compact-header";
 import { ScrollNav } from "@/components/layout/scroll-nav";
 import { MyMoneyCompactBar } from "@/features/my-money/components/my-money-compact-bar";
 import { categoryIconFor, categoryToneFor, type ToneName } from "@/features/transactions/hooks/use-transactions-data";
-import { useMyMoneyData, type CollectItem, type MyMoneyData } from "@/features/my-money/hooks/use-my-money-data";
+import { useMyMoneyData, type CollectItem, type MyMoneyData, type SpendCategory } from "@/features/my-money/hooks/use-my-money-data";
 import { daysUntil, type CompletedGroup, type ObligationItem, type ObligationKind, type ObligationStatus, type SharedPerson } from "@/features/my-money/lib/my-money";
 
 const PANEL =
@@ -898,6 +899,237 @@ function CollectPanel({ data }: { data: MyMoneyData }) {
 
 const CATEGORY_PREVIEW = 4;
 
+function CategoryBars({ categories }: { categories: SpendCategory[] }) {
+  return (
+    <ul className="flex flex-col gap-3 px-4 py-3.5">
+      {categories.map((c) => {
+        const Icon = categoryIconFor(c.iconKey);
+        return (
+          <li key={c.categoryId} className="flex items-center gap-2.5">
+            <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-full", TONE_BADGE[categoryToneFor(c.iconKey)])} aria-hidden>
+              <Icon className="size-3.5" strokeWidth={1.9} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="flex items-baseline justify-between gap-2">
+                <span className="truncate text-sm font-medium text-foreground">{c.name}</span>
+                <span className="shrink-0 text-sm font-semibold text-foreground tabular-nums">
+                  {formatCurrency(c.amount)}
+                  <span className="ml-1.5 text-[11px] font-medium text-foreground/60">{c.percent}%</span>
+                </span>
+              </span>
+              <span className="mt-1 block h-1 overflow-hidden rounded-full bg-secondary">
+                <span className="block h-full rounded-full bg-primary-accent-text/70" style={{ width: `${Math.max(2, c.percent)}%` }} />
+              </span>
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+const MONTHS_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+/** Extra to the per-period view above: the same "my spending" figures, folded across the whole year. */
+function YearSpendingPanel({ data }: { data: MyMoneyData }) {
+  const [showAll, setShowAll] = useState(false);
+  const ys = data.yearSpending;
+  const categories = showAll ? ys.topCategories : ys.topCategories.slice(0, CATEGORY_PREVIEW);
+  const [hovered, setHovered] = useState<number | null>(null);
+  const maxMonth = Math.max(...ys.months.map((m) => m.amount), 0);
+  // The dashed average line shares the bars' scale, so it can never sit above the chart.
+  const scaleMax = Math.max(maxMonth, ys.monthlyAverage ?? 0);
+  const avgPercent = ys.monthlyAverage != null && ys.monthlyAverage > 0 && scaleMax > 0 ? Math.min(100, (ys.monthlyAverage / scaleMax) * 100) : null;
+  const selectedMonth = data.cycleRange.end.getFullYear() === ys.year ? data.cycleRange.end.getMonth() : -1;
+  const readout = ys.months[hovered ?? selectedMonth] ?? null;
+  const { comparison } = ys;
+  return (
+    <section id="mm-year-spending" aria-labelledby="mm-year" className={PANEL}>
+      <div className="flex items-center gap-3 border-b border-border-strong/50 bg-secondary/25 px-4 py-3 sm:px-5">
+        <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-primary/10 text-primary-accent-text">
+          <BarChart3 className="size-4" strokeWidth={1.9} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 id="mm-year" className="font-heading text-[15px] leading-tight font-semibold text-foreground">
+            Spending this year
+          </h2>
+          <p className="text-xs leading-snug text-foreground/70 tabular-nums">{ys.rangeLabel}</p>
+        </div>
+        <div className="flex items-center rounded-[8px] border border-border-strong bg-card p-0.5">
+          <button type="button" onClick={ys.nav.previous} aria-label="Previous year" className={cn(ICON_BUTTON, "size-7")}>
+            <ChevronLeft className="size-4" strokeWidth={1.9} />
+          </button>
+          <span className="min-w-[2.75rem] text-center text-sm font-semibold text-foreground tabular-nums" aria-live="polite">
+            {ys.year}
+          </span>
+          <button type="button" onClick={ys.nav.next} aria-label="Next year" className={cn(ICON_BUTTON, "size-7")}>
+            <ChevronRight className="size-4" strokeWidth={1.9} />
+          </button>
+        </div>
+      </div>
+
+      <div className="px-4 pt-3 pb-1 sm:px-5">
+        <div className="flex items-center gap-1">
+          <span className={LABEL}>My spending in {ys.year}</span>
+          <InfoTip label="What this year total means">
+            The same own-spending figure as the period view — your share of split purchases, no transfers, card bill payments, loan principal, reimbursements or advances — added up across every Month Cycle of the year.
+          </InfoTip>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <p className="font-heading text-[1.65rem] leading-tight font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(ys.total)}</p>
+          {comparison.kind === "change" ? (
+            <Chip className={cn("h-6 gap-1 ring-1", comparison.percent > 0 ? "bg-expense/10 text-expense ring-expense/25" : "bg-success/12 text-success ring-success/25")}>
+              {comparison.percent > 0 ? "▲ +" : comparison.percent < 0 ? "▼ " : ""}
+              {comparison.percent}% vs {ys.year - 1}
+            </Chip>
+          ) : comparison.kind === "inProgress" ? (
+            <Chip className="h-6 bg-secondary text-foreground/80 ring-1 ring-border-strong/60">{ys.year - 1}: {formatCurrency(comparison.previous)}</Chip>
+          ) : null}
+        </div>
+        <p className="text-xs leading-snug text-foreground/65">
+          {ys.activeMonths === 0
+            ? `Nothing recorded yet in ${ys.year}`
+            : `Across ${ys.activeMonths} month${ys.activeMonths === 1 ? "" : "s"} with spending${comparison.kind === "change" ? ` · ${ys.year - 1}: ${formatCurrency(comparison.previous)}` : ""}`}
+        </p>
+      </div>
+
+      <dl className="grid grid-cols-2 gap-px border-y border-border-strong/50 bg-border-strong/40 text-xs">
+        <div className="bg-card px-4 py-2.5 sm:px-5">
+          <dt className="text-foreground/70">Monthly average</dt>
+          <dd className="text-sm font-semibold text-foreground tabular-nums">{ys.monthlyAverage == null ? "—" : formatCurrency(ys.monthlyAverage)}</dd>
+        </div>
+        <div className="bg-card px-4 py-2.5 sm:px-5">
+          <dt className="text-foreground/70">Highest month</dt>
+          <dd className="text-sm font-semibold text-foreground tabular-nums">
+            {ys.peak ? (
+              <>
+                {MONTHS_SHORT[ys.peak.month]} <span className="font-medium text-foreground/70">· {formatCurrency(ys.peak.amount)}</span>
+              </>
+            ) : (
+              "—"
+            )}
+          </dd>
+        </div>
+      </dl>
+
+      <div className="px-4 pt-3 pb-3 sm:px-5">
+        <div className="mb-2 flex min-h-[1.25rem] items-center justify-between gap-2 text-xs" aria-live="polite">
+          {readout ? (
+            <>
+              <span className="font-semibold text-foreground">
+                {MONTHS_LONG[readout.month]} {ys.year}
+              </span>
+              <span className="text-foreground/75 tabular-nums">
+                {readout.started ? (
+                  <>
+                    <span className="font-semibold text-foreground">{formatCurrency(readout.amount)}</span>
+                    {ys.monthlyAverage != null && ys.monthlyAverage > 0 && readout.amount > 0 && (
+                      <span className="ml-1.5">
+                        {readout.amount >= ys.monthlyAverage ? "▲" : "▼"} {Math.abs(Math.round(((readout.amount - ys.monthlyAverage) / ys.monthlyAverage) * 100))}% vs avg
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  "Not started yet"
+                )}
+              </span>
+            </>
+          ) : (
+            <span className="text-foreground/65">Tap a month to open it above</span>
+          )}
+        </div>
+        <div className="relative">
+          {avgPercent != null && (
+            <div aria-hidden className="pointer-events-none absolute inset-x-0 z-10 border-t border-dashed border-foreground/35" style={{ bottom: `${avgPercent}%` }}>
+              <span className="absolute -top-4 right-0 rounded bg-card/90 px-1 text-[9.5px] leading-4 font-semibold text-foreground/70">avg</span>
+            </div>
+          )}
+          <div className="flex h-28 items-end gap-[3px] border-b border-border-strong/60" role="group" aria-label={`Spending by month in ${ys.year}`} onMouseLeave={() => setHovered(null)}>
+            {ys.months.map((m) => {
+              const height = scaleMax > 0 ? Math.max(m.amount > 0 ? 4 : 0, Math.round((m.amount / scaleMax) * 100)) : 0;
+              const isSelected = m.month === selectedMonth;
+              const isPeak = ys.peak?.month === m.month && m.amount > 0;
+              return (
+                <button
+                  key={m.month}
+                  type="button"
+                  aria-label={`${MONTHS_LONG[m.month]} ${ys.year}: ${m.started ? formatCurrency(m.amount) : "not started yet"}. Open this period`}
+                  aria-pressed={isSelected}
+                  onClick={() => data.nav.pickMonth(ys.year, m.month)}
+                  onMouseEnter={() => setHovered(m.month)}
+                  onFocus={() => setHovered(m.month)}
+                  onBlur={() => setHovered(null)}
+                  className="group/bar flex h-full min-w-0 flex-1 flex-col justify-end rounded-t-[4px] focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none"
+                >
+                  <span
+                    className={cn(
+                      "block w-full rounded-t-[4px] transition-[background-color,height] duration-300 motion-reduce:transition-none",
+                      isSelected
+                        ? "bg-primary-accent-text"
+                        : m.started
+                          ? isPeak
+                            ? "bg-primary-accent-text/70 group-hover/bar:bg-primary-accent-text"
+                            : "bg-primary-accent-text/40 group-hover/bar:bg-primary-accent-text/75"
+                          : "bg-border-strong/30",
+                    )}
+                    style={{ height: m.started ? `${height}%` : "2px" }}
+                  />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div className="mt-1 flex gap-[3px]" aria-hidden>
+          {ys.months.map((m) => (
+            <span
+              key={m.month}
+              className={cn(
+                "min-w-0 flex-1 text-center text-[10px] leading-none",
+                m.month === selectedMonth ? "font-bold text-foreground" : m.isCurrent ? "font-semibold text-foreground/80" : "text-foreground/55",
+              )}
+            >
+              {MONTHS_SHORT[m.month]}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {categories.length === 0 ? (
+        <p className="border-t border-border-strong/50 px-4 py-4 text-xs text-foreground/70 sm:px-5">No spending of your own recorded for {ys.year}.</p>
+      ) : (
+        <div className="border-t border-border-strong/50">
+          <h3 className={cn(GROUP_HEADING, "border-t-0")}>
+            <span>By category</span>
+            <span className="text-foreground/60 tabular-nums">· {ys.topCategories.length}</span>
+          </h3>
+          <CategoryBars categories={categories} />
+        </div>
+      )}
+      {ys.topCategories.length > CATEGORY_PREVIEW && (
+        <button
+          type="button"
+          onClick={() => setShowAll((s) => !s)}
+          className="w-full border-t border-border-strong/50 px-4 py-2 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset"
+        >
+          <span className="inline-flex items-center justify-center gap-1">
+            {showAll ? "Show fewer" : `All ${ys.topCategories.length} categories`}
+            <ChevronDown className={cn("size-3.5 transition-transform", showAll && "rotate-180")} />
+          </span>
+        </button>
+      )}
+      {ys.nav.isOverridden && (
+        <button
+          type="button"
+          onClick={ys.nav.reset}
+          className="w-full border-t border-border-strong/50 px-4 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none focus-visible:ring-inset"
+        >
+          Back to the selected period&apos;s year
+        </button>
+      )}
+    </section>
+  );
+}
+
 function SpendingPanel({ data }: { data: MyMoneyData }) {
   const [showAll, setShowAll] = useState(false);
   const { spending } = data;
@@ -910,32 +1142,7 @@ function SpendingPanel({ data }: { data: MyMoneyData }) {
       {categories.length === 0 && (
         <p className="px-4 py-4 text-xs text-foreground/70 sm:px-5">No spending of your own recorded for this period yet.</p>
       )}
-      {categories.length > 0 && (
-        <ul className="flex flex-col gap-3 px-4 py-3.5">
-          {categories.map((c) => {
-            const Icon = categoryIconFor(c.iconKey);
-            return (
-              <li key={c.categoryId} className="flex items-center gap-2.5">
-                <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-full", TONE_BADGE[categoryToneFor(c.iconKey)])} aria-hidden>
-                  <Icon className="size-3.5" strokeWidth={1.9} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-baseline justify-between gap-2">
-                    <span className="truncate text-sm font-medium text-foreground">{c.name}</span>
-                    <span className="shrink-0 text-sm font-semibold text-foreground tabular-nums">
-                      {formatCurrency(c.amount)}
-                      <span className="ml-1.5 text-[11px] font-medium text-foreground/60">{c.percent}%</span>
-                    </span>
-                  </span>
-                  <span className="mt-1 block h-1 overflow-hidden rounded-full bg-secondary">
-                    <span className="block h-full rounded-full bg-primary-accent-text/70" style={{ width: `${Math.max(2, c.percent)}%` }} />
-                  </span>
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      {categories.length > 0 && <CategoryBars categories={categories} />}
       {spending.topCategories.length > CATEGORY_PREVIEW && (
         <button
           type="button"
@@ -1012,6 +1219,7 @@ export function MyMoneyWorkspace() {
         <div className="flex min-w-0 flex-col gap-4">
           <CollectPanel data={data} />
           <SpendingPanel data={data} />
+          <YearSpendingPanel data={data} />
         </div>
       </div>
       <ScrollNav />

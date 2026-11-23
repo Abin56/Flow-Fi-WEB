@@ -1143,6 +1143,7 @@ export function AccountsWorkspace() {
       {manageTxnsAccountId != null && (
         <AccountTransactionsManager
           open
+          presentation="accounts"
           kind={cardAccountIds.has(manageTxnsAccountId) ? "card" : "account"}
           accountId={manageTxnsAccountId}
           onOpenChange={(open) => !open && setManageTxnsAccountId(null)}

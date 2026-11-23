@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Ban, CheckCheck, Link2, Trash2 } from "lucide-react";
+import { AlertTriangle, Ban, CheckCheck, Link2, Receipt, Trash2 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -24,6 +24,14 @@ import { toast } from "@/store/toast-store";
 
 type Step = "pick" | "confirm" | "confirmAll" | "running" | "done";
 
+const ACCOUNTS_TITLE: Record<Step, string> = {
+  pick: "Manage transactions",
+  confirm: "Review deletion",
+  confirmAll: "Confirm deletion",
+  running: "Deleting transactions",
+  done: "Deletion complete",
+};
+const ACCOUNTS_FOOTER = "shrink-0 border-t border-border/65 pt-3 [&_button]:rounded-lg";
 const fmtDate = (d: Date) => d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -39,13 +47,15 @@ export function AccountTransactionsManager({
   onOpenChange,
   accountId,
   kind,
+  presentation,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   accountId: string;
   kind: "account" | "card";
+  presentation?: "accounts";
 }) {
-  const { data: allTransactions = [] } = useTransactions();
+  const { data: allTransactions = [], isLoading: isLoadingTransactions } = useTransactions();
   const { data: accounts = [] } = useAccounts();
   const { data: expenses = [] } = useExpenses();
   const actions = useTransactionActions();
@@ -148,58 +158,96 @@ export function AccountTransactionsManager({
   const others = plan.balanceMovements.filter((m) => m.accountId !== accountId);
   const confirmReady = !plan.needsLinkedAcknowledgement || ack;
   const allSelected = deletableIds.length > 0 && deletableIds.every((id) => selected.has(id));
+  const fromAccounts = presentation === "accounts";
+  const showEmptyState = fromAccounts && step === "pick" && rows.length === 0;
+  const showCloseButton = !showEmptyState && !(fromAccounts && step === "running");
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="flex max-h-[88vh] flex-col gap-4 sm:max-w-2xl" data-testid="account-transactions-manager">
-        <DialogHeader className="pr-8">
-          <DialogTitle className="flex items-center gap-2">
-            <Trash2 className="size-4 text-danger" />
-            {step === "pick" || step === "running" || step === "done" ? `Manage transactions · ${name}` : `Delete from ${name}?`}
+      <DialogContent
+        className={cn(
+          "flex max-h-[88vh] flex-col gap-4 sm:max-w-2xl",
+          fromAccounts && "max-h-[calc(100dvh-2rem)] bg-card p-4 sm:p-5",
+          showEmptyState && "sm:max-w-md",
+        )}
+        showCloseButton={showCloseButton}
+        data-testid="account-transactions-manager"
+      >
+        <DialogHeader className={cn("pr-8", fromAccounts && "shrink-0 gap-1", !showCloseButton && "pr-0")}>
+          <DialogTitle className={cn("flex items-center gap-2", fromAccounts && "text-lg leading-tight font-semibold tracking-tight")}>
+            {!fromAccounts && <Trash2 className="size-4 text-danger" />}
+            {fromAccounts
+              ? ACCOUNTS_TITLE[step]
+              : step === "pick" || step === "running" || step === "done" ? `Manage transactions · ${name}` : `Delete from ${name}?`}
           </DialogTitle>
-          <DialogDescription>
-            {step === "pick"
-              ? `Remove transactions and keep this ${label} — its name, details and settings stay exactly as they are.`
-              : step === "done"
-                ? `Finished. This ${label} is still here and keeps working.`
-                : `Only ${name}'s own history is affected; the ${label} itself is never deleted.`}
+          <DialogDescription className={cn(fromAccounts && "wrap-anywhere")}>
+            {fromAccounts
+              ? name
+              : step === "pick"
+                ? `Remove transactions and keep this ${label} — its name, details and settings stay exactly as they are.`
+                : step === "done"
+                  ? `Finished. This ${label} is still here and keeps working.`
+                  : `Only ${name}'s own history is affected; the ${label} itself is never deleted.`}
           </DialogDescription>
         </DialogHeader>
 
-        {step === "pick" && (
+        {showEmptyState && (
           <>
-            <div className="flex flex-wrap items-center gap-2 text-xs">
+            <div className="flex shrink-0 flex-col items-center gap-2.5 rounded-xl border border-border/65 bg-secondary/45 px-4 py-6 text-center" role="status">
+              <span className="grid size-10 place-items-center rounded-lg bg-secondary text-muted-foreground" aria-hidden>
+                <Receipt className="size-5" />
+              </span>
+              <p className="text-sm font-semibold text-foreground">
+                {isLoadingTransactions ? "Loading transactions…" : "No transactions yet"}
+              </p>
+            </div>
+            <DialogFooter className="shrink-0">
+              <ClayButton variant="primary" className="min-w-24 rounded-lg" onClick={() => close(false)}>
+                Close
+              </ClayButton>
+            </DialogFooter>
+          </>
+        )}
+
+        {step === "pick" && !showEmptyState && (
+          <>
+            <div className={cn("flex flex-wrap items-center gap-2 text-xs", fromAccounts && "shrink-0 justify-between rounded-lg bg-secondary/55 px-3 py-2")}>
               <button
                 type="button"
-                className="rounded-[6px] border border-border-strong px-2 py-1 font-semibold hover:bg-secondary disabled:opacity-50"
+                className={cn("rounded-[6px] border border-border-strong px-2 py-1 font-semibold hover:bg-secondary disabled:opacity-50", fromAccounts && "min-h-8 bg-card focus-visible:outline-2 focus-visible:outline-ring")}
                 disabled={deletableIds.length === 0}
                 onClick={() => setSelected(allSelected ? new Set() : new Set(deletableIds))}
               >
                 {allSelected ? "Clear selection" : "Select all deletable"}
               </button>
-              <span className="text-muted-foreground">
+              <span className={cn("text-muted-foreground", fromAccounts && "tabular-nums")} role={fromAccounts ? "status" : undefined}>
                 {plural(rows.length, "transaction")} · {selected.size} selected
                 {rows.length - deletableIds.length > 0 && ` · ${rows.length - deletableIds.length} protected`}
               </span>
             </div>
-            <ul className="min-h-0 flex-1 divide-y divide-border overflow-y-auto rounded-[10px] border border-border-strong/60" aria-label="Transactions">
+            <ul className={cn("min-h-0 flex-1 divide-y divide-border overflow-y-auto rounded-[10px] border border-border-strong/60", fromAccounts && "min-h-20 overscroll-contain rounded-lg border-border/75")} aria-label="Transactions">
               {rows.length === 0 && <li className="px-3 py-8 text-center text-sm text-muted-foreground">No transactions on this {label}.</li>}
               {rows.map(({ t, blocked }) => {
                 const linked = t.transferId != null || splitOwned.has(t.id) || t.isPersonLedgerMovement;
                 const amount = signedAmount(t);
                 return (
                   <li key={t.id}>
-                    <label className={cn("flex items-start gap-3 px-3 py-2 text-sm", blocked ? "cursor-not-allowed opacity-70" : "cursor-pointer hover:bg-secondary/60")}>
+                    <label className={cn(
+                      "flex items-start gap-3 px-3 py-2 text-sm",
+                      blocked ? "cursor-not-allowed opacity-70" : "cursor-pointer hover:bg-secondary/60",
+                      fromAccounts && "gap-2.5 py-3",
+                      fromAccounts && selected.has(t.id) && "bg-primary/10 hover:bg-primary/15",
+                    )}>
                       <input
                         type="checkbox"
-                        className="mt-1 size-4 shrink-0"
+                        className={cn("mt-1 size-4 shrink-0", fromAccounts && "accent-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring")}
                         checked={selected.has(t.id)}
                         disabled={blocked != null}
                         onChange={() => toggle(t.id)}
                         aria-label={`Select ${t.description || "transaction"} ${fmtDate(t.dateTime)}`}
                       />
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium text-foreground">{t.description || "Transaction"}</span>
+                        <span className={cn("block font-medium text-foreground", fromAccounts ? "wrap-anywhere" : "truncate")}>{t.description || "Transaction"}</span>
                         <span className="block text-xs text-muted-foreground">{fmtDate(t.dateTime)}</span>
                         {blocked && (
                           <span className="mt-0.5 flex items-start gap-1 text-xs text-warning-foreground dark:text-warning">
@@ -222,15 +270,25 @@ export function AccountTransactionsManager({
                 );
               })}
             </ul>
-            <DialogFooter className="gap-2 sm:justify-between">
+            <DialogFooter className={cn("gap-2 sm:justify-between", fromAccounts && ACCOUNTS_FOOTER)}>
               <ClayButton variant="ghost" onClick={() => close(false)}>
                 Close
               </ClayButton>
-              <div className="flex flex-wrap gap-2">
-                <ClayButton variant="secondary" disabled={selected.size === 0} onClick={() => begin("selected")}>
+              <div className={cn("flex flex-wrap gap-2", fromAccounts && "*:w-full min-[440px]:*:w-auto sm:justify-end")}>
+                <ClayButton
+                  variant={fromAccounts ? "primary" : "secondary"}
+                  className={cn(fromAccounts && "bg-danger text-danger-foreground hover:bg-danger/90 disabled:bg-secondary disabled:text-muted-foreground")}
+                  disabled={selected.size === 0}
+                  onClick={() => begin("selected")}
+                >
                   Delete Selected Transactions{selected.size > 0 ? ` (${selected.size})` : ""}
                 </ClayButton>
-                <ClayButton variant="primary" className="bg-danger text-danger-foreground" disabled={deletableIds.length === 0} onClick={() => begin("all")}>
+                <ClayButton
+                  variant={fromAccounts ? "secondary" : "primary"}
+                  className={fromAccounts ? "border-danger/30 text-danger hover:bg-danger/10" : "bg-danger text-danger-foreground"}
+                  disabled={deletableIds.length === 0}
+                  onClick={() => begin("all")}
+                >
                   Delete All Transactions
                 </ClayButton>
               </div>
@@ -240,7 +298,7 @@ export function AccountTransactionsManager({
 
         {(step === "confirm" || step === "confirmAll") && (
           <>
-            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto text-sm">
+            <div className={cn("flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto text-sm", fromAccounts && "min-h-24 overscroll-contain wrap-anywhere")}>
               <div className="rounded-[10px] border border-danger/30 bg-danger/6 px-3 py-2.5">
                 <p className="font-semibold text-foreground">
                   {mode === "all" ? "Delete ALL transactions" : "Delete selected transactions"} · {name}
@@ -263,7 +321,7 @@ export function AccountTransactionsManager({
                 <div className="rounded-[10px] border border-border-strong/60 px-3 py-2">
                   <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Balance after</p>
                   {own && (
-                    <p className="flex justify-between">
+                    <p className={cn("flex justify-between", fromAccounts && "flex-wrap gap-x-3")}>
                       <span>{name}</span>
                       <span className="tabular-nums">
                         {formatCurrency(own.before)} → <strong>{formatCurrency(own.after)}</strong>
@@ -271,7 +329,7 @@ export function AccountTransactionsManager({
                     </p>
                   )}
                   {others.map((m) => (
-                    <p key={m.accountId} className="flex justify-between text-muted-foreground">
+                    <p key={m.accountId} className={cn("flex justify-between text-muted-foreground", fromAccounts && "flex-wrap gap-x-3")}>
                       <span>{m.name}</span>
                       <span className="tabular-nums">
                         {formatCurrency(m.before)} → {formatCurrency(m.after)}
@@ -330,7 +388,7 @@ export function AccountTransactionsManager({
                 </label>
               )}
             </div>
-            <DialogFooter>
+            <DialogFooter className={cn(fromAccounts && ACCOUNTS_FOOTER)}>
               <ClayButton variant="ghost" onClick={() => setStep("pick")}>
                 Back
               </ClayButton>
@@ -360,7 +418,7 @@ export function AccountTransactionsManager({
 
         {step === "done" && (
           <>
-            <div className="flex flex-col gap-2 text-sm">
+            <div className={cn("flex flex-col gap-2 text-sm", fromAccounts && "min-h-0 overflow-y-auto overscroll-contain wrap-anywhere")}>
               <p className="flex items-center gap-2 font-semibold text-foreground">
                 <CheckCheck className="size-4 text-success" /> {plural(removed, "transaction")} deleted
               </p>
@@ -377,7 +435,7 @@ export function AccountTransactionsManager({
                 </div>
               )}
             </div>
-            <DialogFooter>
+            <DialogFooter className={cn(fromAccounts && ACCOUNTS_FOOTER)}>
               <ClayButton variant="primary" onClick={() => close(false)}>
                 Done
               </ClayButton>

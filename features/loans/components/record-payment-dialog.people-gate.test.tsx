@@ -974,6 +974,38 @@ describe("L — an EMI paid ahead (not due yet) can still be recorded as a past 
 });
 
 describe("M — who is paying the lender", () => {
+  it("loan detail guides the user from share status to a direct payment without debiting the selected account", async () => {
+    const user = userEvent.setup();
+    const obligationKey = "loan-inst:l1";
+    peopleState = { readiness: readinessOf([person("abin", "ABIN", 1000, 0, obligationKey)]), isLoading: false };
+    breakdownState = { breakdown: breakdownOf([{ id: "abin", name: "ABIN", current: line(obligationKey, 1, 1000, 0) }]), isLoading: false };
+    reimbLines = [{ personId: "abin", personName: "ABIN", installmentId: "l1", sequenceNumber: 1, dueDate: day(-3), obligationKey, share: 1000, received: 0, remaining: 1000 }];
+    render(<RecordPaymentDialog target={loanTarget()} open onOpenChange={() => {}} loanDetail />);
+
+    const question = screen.getByRole("region", { name: "Has their share been paid?" });
+    const review = screen.getByRole("complementary", { name: "Reimbursements and payment review" });
+    expect(review.contains(question)).toBe(true);
+    expect(screen.queryByTestId("pay-card")).toBeNull();
+    const pendingAnswer = within(question).getByRole("radio", { name: "No, not yet" });
+    await user.click(pendingAnswer);
+    expect(document.activeElement).toBe(pendingAnswer);
+    expect(screen.getByTestId("pay-card")).toBeTruthy();
+
+    await user.click(screen.getByRole("radio", { name: "ABIN paid directly" }));
+    expect(screen.getByRole("radio", { name: "Single payment" }).getAttribute("aria-checked")).toBe("true");
+    await user.click(within(screen.getByRole("radiogroup", { name: "ABIN" })).getByRole("radio", { name: "Cover full share" }));
+    await user.click(screen.getByRole("radio", { name: "Record without balance change" }));
+    const save = footer("Record direct payment · ₹3,000");
+    expect(save.disabled).toBe(true);
+    await pickAccount(user, "Account for this record");
+    await user.click(save);
+
+    await waitFor(() => expect(reimbRecord).toHaveBeenCalledTimes(1));
+    expect(loanRecordPayment).toHaveBeenCalledTimes(1);
+    expect(loanRecordPayment.mock.calls[0][2]).toMatchObject({ accountId: "sbi", recordedEarlier: { dateKnown: true }, enforceFunds: false });
+    expect(reimbRecord.mock.calls[0][0][0]).toMatchObject({ obligationKey, amount: 1000, recordedEarlier: true });
+  });
+
   function pastEmiTarget(): PaymentTarget {
     const installments = [installment("i1", 1, "emi", -90), { ...installment("i2", 2, "emi", -60), amountPaid: 3000 }, installment("i3", 3, "emi", -30), installment("i4", 4, "emi", 20)];
     return { kind: "emi", row: { emi: { id: "src", name: "Home EMI", installmentCount: 4 }, installments, nextInstallment: installments[0], remainingBalance: 9000 } as never };

@@ -3,7 +3,7 @@
 import { createContext, useContext, useLayoutEffect, useState, type ReactNode } from "react";
 import { CheckCircle2, ChevronRight } from "lucide-react";
 import { ClayBadge } from "@/components/clay/clay-badge";
-import { InlineHostSlot, StackBase, useStackBase } from "@/components/finance/stack-layer";
+import { InlineHostSlot, StackBase, useInlineLayerId, useStackBase } from "@/components/finance/stack-layer";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { AmountDisplay, InstallmentProgress, LE_RADIUS, Money, dueLabel, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
 import { cn } from "@/lib/utils";
@@ -285,8 +285,7 @@ type PageTab = "schedule" | "history" | "people" | "details";
 
 /**
  * The right panel of the Loan & EMI workspace: a compact header (name, facts, the payment actions), one stats strip, then
- * tabs — Schedule (grid + selected installment), Payment history, People, Details. Payment forms and the other actions
- * open as compact popups over the workspace, which stays visible behind. Same slots, same handlers as the window.
+ * tabs — Schedule (grid + selected installment), Payment history, People, Details. Inline forms share this tab bar.
  */
 function AgreementPage({
   eyebrow,
@@ -311,12 +310,17 @@ function AgreementPage({
 }: Omit<Parameters<typeof AgreementWindow>[0], "open" | "onOpenChange" | "comingUp" | "detailsTitle" | "upcoming" | "all" | "upcomingCount"> & AgreementPageOptions) {
   useStackBase(true);
   const [tab, setTab] = useState<PageTab>("schedule");
+  const layerId = useInlineLayerId();
+  const [parkedLayer, setParkedLayer] = useState<string | null>(null);
+  if (layerId == null && parkedLayer != null) setParkedLayer(null);
+  const showLayer = layerId != null && parkedLayer !== layerId;
   const showPeople = people != null && peopleCount > 0;
-  const tabs: { value: PageTab; label: string; count?: number }[] = [
+  const tabs: { value: PageTab | "form"; label: string; count?: number }[] = [
     { value: "schedule", label: "Schedule", count: allCount },
     { value: "history", label: "Payment history", count: historyCount },
     ...(showPeople ? [{ value: "people" as const, label: "People", count: peopleCount }] : []),
     { value: "details", label: "Details" },
+    ...(layerId != null ? [{ value: "form" as const, label: "Open form" }] : []),
   ];
   const percent = total > 0 ? Math.min(100, Math.round((paid / total) * 100)) : 0;
 
@@ -361,17 +365,24 @@ function AgreementPage({
 
       <div role="tablist" aria-label="Sections" className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border bg-secondary/40 px-2">
         {tabs.map(({ value, label, count }) => {
-          const active = value === tab;
+          const active = value === (showLayer ? "form" : tab);
           return (
             <button
               key={value}
               type="button"
               role="tab"
               aria-selected={active}
-              onClick={() => setTab(value)}
+              onClick={() => {
+                if (value === "form") setParkedLayer(null);
+                else {
+                  setTab(value);
+                  setParkedLayer(layerId);
+                }
+              }}
               className={cn(
                 "relative inline-flex h-9 shrink-0 items-center gap-1.5 px-2.5 text-[12.5px] whitespace-nowrap outline-none transition-colors duration-150 focus-visible:rounded-[6px] focus-visible:ring-2 focus-visible:ring-ring",
                 active ? "font-semibold text-foreground" : "font-medium text-muted-foreground hover:text-foreground",
+                value === "form" && "ml-1 rounded-t-[6px] bg-primary/15 px-3 text-foreground",
               )}
             >
               {label}
@@ -384,13 +395,12 @@ function AgreementPage({
 
       <div className="relative min-h-0 flex-1">
         {/* Kept mounted (just hidden) so the selected installment survives a visit to another tab. */}
-        <div role="tabpanel" aria-label="Schedule" hidden={tab !== "schedule"} className={cn("@container absolute inset-0 min-h-0 flex-col", tab === "schedule" ? "flex" : "hidden")}>
+        <div role="tabpanel" aria-label="Schedule" inert={showLayer} hidden={tab !== "schedule"} className={cn("@container absolute inset-0 min-h-0 flex-col", tab === "schedule" ? "flex" : "hidden")}>
           {schedule}
         </div>
-        {/* Payments and the other action layers open HERE, over the tab, merged into the workspace — no popup. */}
-        <InlineHostSlot className="absolute inset-0 z-10 bg-card" />
+        <InlineHostSlot hidden={!showLayer} className="absolute inset-0 z-10 bg-card" />
         {tab !== "schedule" && (
-          <div role="tabpanel" aria-label={tabs.find((t) => t.value === tab)?.label} className="@container absolute inset-0 flex min-h-0 flex-col">
+          <div role="tabpanel" aria-label={tabs.find((t) => t.value === tab)?.label} inert={showLayer} className="@container absolute inset-0 flex min-h-0 flex-col">
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 duration-150 animate-in fade-in-0 motion-reduce:animate-none">
               {tab === "history" ? history : tab === "people" ? people : <div className="flex flex-col gap-4">{details}</div>}
             </div>

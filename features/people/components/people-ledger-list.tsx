@@ -175,11 +175,13 @@ export function CyclePicker({
   current,
   onCycleChange,
   direction,
+  compact = false,
 }: {
   cycle: StatementCycle;
   current: StatementCycle;
   onCycleChange: (cycle: StatementCycle) => void;
   direction: -1 | 0 | 1;
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [year, setYear] = useState(cycle.start.getFullYear());
@@ -210,7 +212,8 @@ export function CyclePicker({
           aria-label={`Selected cycle ${formatCycleLabel(cycle)} — choose another`}
           className={cn(
             LE_RADIUS.control,
-            "flex h-10 min-w-0 flex-1 cursor-pointer items-center justify-center gap-2 overflow-hidden border border-border-strong bg-card px-3 outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:border-primary-accent-text sm:min-w-[15rem] sm:flex-none",
+            "flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-2 overflow-hidden border border-border-strong bg-card outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:border-primary-accent-text",
+            compact ? "h-8 gap-1.5 px-2" : "h-10 px-3 sm:min-w-[15rem] sm:flex-none",
           )}
         >
           <CalendarDays className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
@@ -218,7 +221,8 @@ export function CyclePicker({
             key={cycle.start.getTime()}
             aria-live="polite"
             className={cn(
-              "truncate font-heading text-[15px] font-semibold tracking-tight text-foreground tabular-nums animate-in fade-in duration-200 ease-out",
+              "truncate font-heading font-semibold tracking-tight text-foreground tabular-nums animate-in fade-in duration-200 ease-out",
+              compact ? "text-xs" : "text-[15px]",
               direction < 0 && "slide-in-from-left-2",
               direction > 0 && "slide-in-from-right-2",
             )}

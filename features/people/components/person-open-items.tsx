@@ -7,23 +7,29 @@ import type { PayableObligation } from "@/features/people/lib/person-payment-obl
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { cn } from "@/lib/utils";
 
-const shortDate = (d: Date) => d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+const shortDate = (d: Date, year: number) => d.toLocaleDateString("en-IN", {
+  day: "numeric",
+  month: "short",
+  year: d.getFullYear() === year ? undefined : "numeric",
+});
 const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 
 const BTN =
-  "inline-flex h-6 items-center rounded-full px-2.5 text-[11.5px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
+  "inline-flex min-h-8 shrink-0 items-center rounded-[5px] border px-2.5 text-xs font-semibold whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
 
 type Kind = "overdue" | "due" | "postponed" | "later" | "youOwe";
 
 const KIND: Record<Kind, { label: string; chip: string }> = {
-  overdue: { label: "Overdue", chip: "bg-expense/10 text-expense" },
-  due: { label: "Due", chip: "bg-settle-receivable-tint text-settle-receivable-text" },
-  postponed: { label: "Postponed", chip: "bg-primary/20 text-primary-accent-text" },
-  later: { label: "Upcoming", chip: "bg-secondary text-foreground/65" },
-  youOwe: { label: "You owe", chip: "bg-settle-payable-tint text-settle-payable-text" },
+  overdue: { label: "Overdue", chip: "text-expense" },
+  due: { label: "Due", chip: "text-settle-receivable-text" },
+  postponed: { label: "Postponed", chip: "text-primary-accent-text" },
+  later: { label: "Upcoming", chip: "text-muted-foreground" },
+  youOwe: { label: "You owe", chip: "text-settle-payable-text" },
 };
 
-const TH = "px-2 py-1.5 text-[10.5px] font-bold tracking-[0.06em] text-foreground/50 uppercase";
+const TH = "border-y border-border-subtle px-3 py-2 text-[11px] font-semibold tracking-[0.045em] text-muted-foreground uppercase";
+const DESKTOP_PREVIEW_LIMIT = 4;
+const PREVIEW_LIMIT = 8;
 
 /**
  * "Open items" — one table of what is still unpaid: Due · Item · Status · Amount · actions, overdue first, then by date.
@@ -48,7 +54,9 @@ export function PersonOpenItems({
   const [showAll, setShowAll] = useState(false);
   const postponedOf = usePostponedLookup();
   const first = personName.split(" ")[0];
-  const today = dayStart(new Date());
+  const now = new Date();
+  const today = dayStart(now);
+  const year = now.getFullYear();
   const items = obligations.map((o) => {
     const theirs = o.side === "theyOwe";
     const moved = theirs ? postponedOf(o.key) : null;
@@ -60,9 +68,9 @@ export function PersonOpenItems({
 
   if (items.length === 0) {
     return (
-      <div className="flex items-center gap-2 rounded-[10px] bg-success/8 px-3 py-2 text-[13px]" data-testid="open-items-empty">
+      <div className="flex items-center gap-2.5 border-t border-border-subtle px-3.5 py-4 sm:px-5" data-testid="open-items-empty">
         <CheckCircle2 className="size-4 shrink-0 text-success" aria-hidden />
-        <p className="font-semibold text-foreground">Nothing open with {first}</p>
+        <p className="text-sm font-semibold text-foreground">No open items with {first}</p>
       </div>
     );
   }
@@ -79,71 +87,72 @@ export function PersonOpenItems({
     }
   }
   const ordered = [...items].sort((a, b) => Number(b.kind === "overdue") - Number(a.kind === "overdue") || a.o.date.getTime() - b.o.date.getTime());
-  const shown = showAll ? ordered : ordered.slice(0, 8);
+  const shown = showAll ? ordered : ordered.slice(0, PREVIEW_LIMIT);
   const foot = "px-2 py-1 text-[12px] tabular-nums";
 
   return (
-    <div data-testid="open-items">
-      <table className="w-full border-collapse text-left">
-        <thead>
-          <tr className="border-b border-border-strong/60">
-            <th scope="col" className={cn(TH, "w-16")}>Due</th>
+    <div data-testid="open-items" className="@container">
+      <table role="table" aria-label="Open items across all cycles" className="w-full border-collapse text-left @max-[32rem]:block">
+        <thead className="@max-[32rem]:sr-only">
+          <tr className="bg-secondary/35">
+            <th scope="col" className={cn(TH, "w-[6.75rem] pl-5")}>Date</th>
             <th scope="col" className={TH}>Item</th>
-            <th scope="col" className={cn(TH, "w-32")}>Status</th>
-            <th scope="col" className={cn(TH, "w-24 text-right")}>Amount</th>
-            <th scope="col" className={cn(TH, "w-[10.5rem]")}>
+            <th scope="col" className={cn(TH, "w-[8.75rem]")}>Status</th>
+            <th scope="col" className={cn(TH, "w-[8rem] text-right")}>Amount</th>
+            <th scope="col" className={cn(TH, "w-[13.5rem] pr-5 text-right")}>
               <span className="sr-only">Actions</span>
             </th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-border-strong/30">
-          {shown.map(({ o, theirs, moved, kind }) => {
+        <tbody role="rowgroup" className="divide-y divide-border-subtle @max-[32rem]:block @max-[32rem]:border-t @max-[32rem]:border-border-subtle">
+          {shown.map(({ o, theirs, moved, kind }, index) => {
             const isCovered = coveredKeys.has(o.key);
             return (
-            <tr key={o.key} className="transition-colors hover:bg-secondary/40">
-              <td className="px-2 py-1.5 text-[12px] whitespace-nowrap text-foreground/70 tabular-nums">{shortDate(o.date)}</td>
-              <td className="max-w-0 px-2 py-1.5">
-                <span className="block truncate text-[13px] font-semibold text-foreground">
-                  {o.title} <span className="text-[11px] font-normal text-foreground/45">{o.typeLabel}</span>
-                </span>
-              </td>
-              <td className="px-2 py-1.5">
-                {isCovered ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-px text-[10.5px] font-semibold whitespace-nowrap text-success" title="You already received money from them toward the overall balance. It covers this item, but it isn't linked to it — so the item stays listed.">
-                    <CheckCircle2 className="size-3" aria-hidden />
-                    Covered
+              <tr key={o.key} role="row" className={cn("transition-colors hover:bg-secondary/30 @max-[32rem]:grid @max-[32rem]:grid-cols-[minmax(0,1fr)_auto] @max-[32rem]:items-start @max-[32rem]:gap-x-2 @max-[32rem]:gap-y-1 @max-[32rem]:px-3.5 @max-[32rem]:py-2.5 lg:[&>td]:py-1.5", !showAll && index >= DESKTOP_PREVIEW_LIMIT && "lg:hidden")}>
+                <td role="cell" className="px-3 py-2 pl-5 text-xs whitespace-nowrap text-muted-foreground tabular-nums @max-[32rem]:col-start-1 @max-[32rem]:row-start-2 @max-[32rem]:p-0">{shortDate(o.date, year)}</td>
+                <td role="cell" className="min-w-0 px-3 py-2 @max-[32rem]:col-start-1 @max-[32rem]:row-start-1 @max-[32rem]:p-0">
+                  <span className="block text-sm leading-snug font-semibold break-words text-foreground">
+                    {o.title}
                   </span>
-                ) : (
-                  <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-px text-[10.5px] font-semibold whitespace-nowrap", KIND[kind].chip)}>
-                    {kind === "postponed" && <CalendarClock className="size-3" aria-hidden />}
-                    {kind === "postponed" ? `To ${moved?.date ? shortDate(moved.date) : `${moved?.name} cycle`}` : KIND[kind].label}
+                  {!(o.isEmi && o.title.endsWith(" · EMI share")) && <span className="mt-0.5 block text-xs text-muted-foreground">{o.typeLabel}</span>}
+                </td>
+                <td role="cell" className="px-3 py-2 @max-[32rem]:col-start-2 @max-[32rem]:row-start-2 @max-[32rem]:justify-self-end @max-[32rem]:p-0">
+                  {isCovered ? (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success" title="You already received money from them toward the overall balance. It covers this item, but it isn't linked to it — so the item stays listed.">
+                      <CheckCircle2 className="size-3" aria-hidden />
+                      Covered
+                    </span>
+                  ) : (
+                    <span className={cn("inline-flex items-center gap-1.5 text-xs font-medium", KIND[kind].chip)}>
+                      {kind === "postponed" ? <CalendarClock className="size-3 shrink-0" aria-hidden /> : <span className="size-[5px] shrink-0 rounded-full bg-current" aria-hidden />}
+                      {kind === "postponed" ? `Moved to ${moved?.date ? shortDate(moved.date, year) : `${moved?.name} cycle`}` : KIND[kind].label}
+                    </span>
+                  )}
+                </td>
+                <td role="cell" className={cn("px-3 py-2 text-right text-sm font-semibold whitespace-nowrap tabular-nums @max-[32rem]:col-start-2 @max-[32rem]:row-start-1 @max-[32rem]:p-0", theirs ? "text-foreground" : "text-settle-payable-text")}>
+                  {money(o.outstanding)}
+                  {o.outstanding < o.amount - 0.005 && <span className="block text-[10px] font-medium text-foreground/45">of {money(o.amount)}</span>}
+                </td>
+                <td role="cell" className="px-3 py-2 pr-5 @max-[32rem]:col-span-2 @max-[32rem]:p-0">
+                  <span className="flex items-center justify-end gap-1.5 empty:hidden">
+                    {onPostpone && theirs && o.isEmi && !moved && !isCovered && kind !== "later" && (
+                      <button type="button" title={`Move collecting this to a later date — ${first} still owes it`} onClick={() => onPostpone(o.key)} className={cn(BTN, "border-border text-foreground hover:border-border-strong hover:bg-secondary")}>
+                        Postpone
+                      </button>
+                    )}
+                    {onRecord && !isCovered && (
+                      <button type="button" title={theirs ? `Record money ${first} paid you for this item` : `Record money you paid ${first} for this item`} onClick={() => onRecord(o.key)} className={cn(BTN, "border-[#aabeb0] bg-[#edf4ee] text-[#244237] hover:bg-[#deebdf] dark:border-[#527460] dark:bg-[#253a2f] dark:text-[#e0eedf] dark:hover:bg-[#314a3c]")} aria-label={`${theirs ? "Record receipt" : "Record payment"} for ${o.title}`}>
+                        {theirs ? "Record receipt" : "Record payment"}
+                      </button>
+                    )}
                   </span>
-                )}
-              </td>
-              <td className={cn("px-2 py-1.5 text-right font-heading text-[13.5px] font-bold whitespace-nowrap tabular-nums", theirs ? "text-settle-receivable-text" : "text-settle-payable-text")}>
-                {money(o.outstanding)}
-                {o.outstanding < o.amount - 0.005 && <span className="block text-[10px] font-medium text-foreground/45">of {money(o.amount)}</span>}
-              </td>
-              <td className="px-2 py-1.5">
-                <span className="flex items-center justify-end gap-1">
-                  {onPostpone && theirs && o.isEmi && !moved && !isCovered && kind !== "later" && (
-                    <button type="button" title={`Move collecting this to a later date — ${first} still owes it`} onClick={() => onPostpone(o.key)} className={cn(BTN, "border border-border-strong text-foreground/80 hover:border-primary-accent-text hover:text-foreground")}>
-                      Postpone
-                    </button>
-                  )}
-                  {onRecord && !isCovered && (
-                    <button type="button" title={theirs ? `Record money ${first} paid you for this item` : `Record money you paid ${first} for this item`} onClick={() => onRecord(o.key)} className={cn(BTN, "bg-primary text-primary-foreground hover:brightness-95")} aria-label={`${theirs ? "Received" : "Paid"} · ${o.title}`}>
-                      {theirs ? "Received" : "Paid"}
-                    </button>
-                  )}
-                </span>
-              </td>
-            </tr>
+                </td>
+              </tr>
             );
           })}
         </tbody>
         {covered > 0.005 && generalCreditOwed != null && (
-          <tfoot data-testid="open-items-general" className="border-t border-border-strong/60">
+          <tfoot data-testid="open-items-general" className="border-t border-border bg-secondary/35 @max-[32rem]:table @max-[32rem]:w-full">
             <tr>
               <th scope="row" colSpan={3} className={cn(foot, "text-left font-medium text-foreground/65")}>Total open</th>
               <td className={cn(foot, "text-right font-semibold text-foreground")}>{money(theirTotal)}</td>
@@ -151,7 +160,7 @@ export function PersonOpenItems({
             </tr>
             <tr>
               <th scope="row" colSpan={3} className={cn(foot, "text-left font-medium text-foreground/65")} title="Money they paid you toward the overall balance, not linked to any one item">
-                Already received (not linked to an item)
+                Received toward the overall balance
               </th>
               <td className={cn(foot, "text-right font-semibold text-success")}>− {money(covered)}</td>
               <td />
@@ -164,9 +173,9 @@ export function PersonOpenItems({
           </tfoot>
         )}
       </table>
-      {items.length > 8 && (
-        <button type="button" onClick={() => setShowAll((s) => !s)} className="mt-1 rounded-[4px] text-[11.5px] font-semibold text-primary-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">
-          {showAll ? "Show fewer" : `Show all ${items.length}`}
+      {items.length > DESKTOP_PREVIEW_LIMIT && (
+        <button type="button" aria-expanded={showAll} onClick={() => setShowAll((s) => !s)} className={cn("mx-3.5 my-1 min-h-9 rounded-[5px] px-2 text-xs font-semibold text-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring sm:mx-5 lg:min-h-7", items.length <= PREVIEW_LIMIT && "max-lg:hidden")}>
+          {showAll ? "Show fewer items" : `Show all ${items.length} items`}
         </button>
       )}
     </div>

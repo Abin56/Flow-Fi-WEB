@@ -1,7 +1,7 @@
 "use client";
 
 import { AccountSelect } from "@/components/finance/account-label";
-import { ArrowRight, CalendarClock, Info, Pencil, Receipt, RotateCcw, Wallet } from "lucide-react";
+import { ArrowRight, CalendarClock, ChevronDown, Info, Pencil, Receipt, RotateCcw, Wallet } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
@@ -15,7 +15,6 @@ import { cardEmiCase, describeEmiPostedFunding } from "@/features/emi/lib/emi-ca
 import { planEmiPaymentEdit } from "@/features/emi/lib/emi-payment-allocation";
 import {
   AmountInput,
-  FactGrid,
   Field,
   LE_RADIUS,
   LOAN_EMI_INPUT,
@@ -631,11 +630,50 @@ export function RecordedPaymentDialog({
   }
 
   if (mode === "details") {
+    const showPeople = peopleLoading || (peopleBreakdown?.participants.length ?? 0) > 0;
+    const facts = [
+      {
+        label: lent ? "Received on" : "Paid on",
+        value: earlierMark && !earlierMark.dateKnown
+          ? "Date not known"
+          : action.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }),
+      },
+      { label: "Installment", value: installmentRangeLabel(action.installmentSeqs) + (total ? ` of ${total}` : "") },
+      { label: loanRow ? (lent ? "Received into" : "Paid from") : postedFunding?.kind === "bank" ? "Paid from" : postedFunding?.kind === "noCardCharge" ? "Card charge" : "Charged to", value: sourceLabel },
+      paidByText ? { label: "Who paid the lender", value: paidByText } : null,
+      emiRow && originalBreakdowns.length > 0 ? { label: "Principal", value: formatCurrencyExact(principalPaid) } : null,
+      emiRow && originalBreakdowns.length > 0 ? { label: "Interest", value: formatCurrencyExact(interestPaid) } : null,
+      {
+        label: "Left after payment",
+        value: action.overflow ? "—" : action.remainingAfter != null && action.remainingAfter > 0
+          ? `${formatCurrencyExact(action.remainingAfter)} on #${action.installmentSeqs[action.installmentSeqs.length - 1]}`
+          : "Installment settled",
+      },
+    ];
+    const actionClass = cn(LE_RADIUS.control, "inline-flex min-h-9 items-center justify-center gap-1.5 px-2 text-xs font-semibold text-muted-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring");
+    const secondaryActions = (
+      <>
+        {(canUnpay || canUnpayChain) && (
+          <button type="button" onClick={() => goTo(canUnpayChain ? "unpayChain" : "unpay")} className={cn(actionClass, "hover:bg-expense/10 hover:text-expense")}>
+            <RotateCcw className="size-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
+            {canUnpayChain ? `Mark as unpaid · with ${chain.length - 1} later payment${chain.length - 1 === 1 ? "" : "s"}` : "Mark as unpaid"}
+          </button>
+        )}
+        {onPayRemaining && lastInstallment && liveRemainingOnLast > 0 && !closed && (
+          <button type="button" onClick={() => onPayRemaining(lastInstallment)} className={cn(actionClass, "hover:bg-secondary hover:text-foreground")}>
+            <Wallet className="size-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
+            Pay remaining {formatCurrencyExact(liveRemainingOnLast)} on #{lastInstallment.sequenceNumber}
+          </button>
+        )}
+      </>
+    );
+
     return (
       <LoanEmiFormDialog
         open={open}
         onOpenChange={onOpenChange}
         size="compact"
+        layout="summary"
         icon={Receipt}
         title={lent ? "Repayment received" : "Recorded payment"}
         description={loanRow ? loanRow.loan.name || loanRow.lenderName : emiRow!.emi.name}
@@ -643,122 +681,88 @@ export function RecordedPaymentDialog({
         confirmLabel="Edit payment"
         confirmDisabled={!editAllowed}
         cancelLabel="Close"
+        leadingActions={secondaryActions}
       >
-        <section className="flex flex-col gap-2">
-          <span className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{lent ? "Amount received" : "Amount paid"}</span>
-          <div className="flex flex-wrap items-center gap-2">
-            <Money exact amount={action.amount} className="text-[30px] leading-none text-foreground" />
-            <ClayBadge tone="neutral" className="rounded-[4px] px-1.5 py-0.5 text-[11px] font-medium">
-              {paymentTypeLabel(action)}
-            </ClayBadge>
-            {earlierMark && (
-              <ClayBadge tone="neutral" className="rounded-[4px] px-1.5 py-0.5 text-[11px] font-medium">
-                {lent ? "Received earlier" : "Already paid earlier"}
-              </ClayBadge>
+        <div className="@container" data-testid="recorded-payment-summary">
+          <div className={cn("grid max-w-xl items-start gap-3", showPeople && "max-w-none @[42rem]:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]")}>
+            <section aria-label="Payment details" className="min-w-0 overflow-hidden rounded-lg border border-border bg-card">
+              <div className="flex flex-wrap items-end justify-between gap-2 border-b border-border bg-secondary/30 px-3 py-2.5">
+                <div className="flex flex-col gap-1">
+                  <span className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{lent ? "Amount received" : "Amount paid"}</span>
+                  <Money exact amount={action.amount} className="text-2xl leading-none text-foreground" />
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <ClayBadge tone="neutral" className="rounded px-1.5 py-0.5 text-[11px] font-medium">{paymentTypeLabel(action)}</ClayBadge>
+                  {earlierMark && <ClayBadge tone="neutral" className="rounded px-1.5 py-0.5 text-[11px] font-medium">{lent ? "Received earlier" : "Already paid earlier"}</ClayBadge>}
+                </div>
+              </div>
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-2 px-3 py-2.5">
+                {facts.map((fact) => fact && (
+                  <div key={fact.label} className="min-w-0">
+                    <dt className="text-xs text-muted-foreground">{fact.label}</dt>
+                    <dd className="text-[13px] leading-snug font-medium wrap-anywhere text-foreground tabular-nums">{fact.value}</dd>
+                  </div>
+                ))}
+              </dl>
+              {(action.portions.length > 1 || action.overflow) && (
+                <details className="group border-t border-border">
+                  <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-2 px-3 text-xs font-semibold text-foreground outline-none hover:bg-secondary/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                    Payment allocation
+                    <ChevronDown className="size-3.5 text-muted-foreground group-open:rotate-180" aria-hidden />
+                  </summary>
+                  <ul className="divide-y divide-border border-t border-border">
+                    {action.portions.map((p, i) => (
+                      <li key={p.id} className="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
+                        <span className="text-muted-foreground">Installment #{action.installmentSeqs[i]}{p.allocationType === "advanceEmi" ? " · advance" : ""}</span>
+                        <Money exact amount={p.amount} className="text-xs font-semibold text-foreground" />
+                      </li>
+                    ))}
+                    {action.overflow && (
+                      <li className="flex items-center justify-between gap-3 px-3 py-1.5 text-xs">
+                        <span className="text-muted-foreground">Extra principal</span>
+                        <Money exact amount={action.overflow.amount} className="text-xs font-semibold text-foreground" />
+                      </li>
+                    )}
+                  </ul>
+                </details>
+              )}
+              {action.note && (
+                <div className="border-t border-border px-3 py-2">
+                  <p className="text-xs font-semibold text-foreground">Payment note</p>
+                  <p className="mt-0.5 text-xs whitespace-pre-wrap wrap-anywhere text-muted-foreground">{action.note}</p>
+                </div>
+              )}
+            </section>
+
+            {showPeople && (
+              <aside aria-label="People reimbursements" className="min-w-0 overflow-hidden rounded-lg border border-border bg-card" data-testid="recorded-payment-people">
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border bg-secondary/30 px-3 py-2.5">
+                  <h3 className="text-[13px] font-semibold text-foreground">People reimbursements</h3>
+                  {!peopleLoading && (
+                    <span className={cn("text-xs font-semibold tabular-nums", receivedFromPeople > 0.005 ? "text-settle-receivable-text" : "text-muted-foreground")}>
+                      {receivedFromPeople > 0.005 ? `${formatCurrencyExact(receivedFromPeople)} received` : "Nothing received yet"}
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-col gap-2 p-2.5">
+                  <InstallmentPeoplePanel
+                    dense
+                    breakdown={peopleBreakdown}
+                    loading={peopleLoading}
+                    returnTo={pathname ? `${pathname}?agreement=${encodeURIComponent(loanRow?.loan.id ?? emiRow!.emi.id)}` : undefined}
+                  />
+                  <p className="px-0.5 text-xs text-muted-foreground">Reimbursements for this installment are tracked in People.</p>
+                </div>
+              </aside>
             )}
           </div>
-        </section>
-
-        <section className="flex flex-col gap-3">
-          <FactGrid
-            className="sm:grid-cols-2"
-            facts={[
-              {
-                label: lent ? "Received on" : "Paid on",
-                value:
-                  earlierMark && !earlierMark.dateKnown
-                    ? "Date not known"
-                    : action.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }),
-              },
-              { label: "Installment", value: installmentRangeLabel(action.installmentSeqs) + (total ? ` of ${total}` : "") },
-              paidByText ? { label: "Who paid the lender", value: paidByText } : null,
-              emiRow && originalBreakdowns.length > 0 ? { label: "Principal", value: formatCurrencyExact(principalPaid) } : null,
-              emiRow && originalBreakdowns.length > 0 ? { label: "Interest", value: formatCurrencyExact(interestPaid) } : null,
-              { label: loanRow ? (lent ? "Received into" : "Paid from") : postedFunding?.kind === "bank" ? "Paid from" : postedFunding?.kind === "noCardCharge" ? "Card charge" : "Charged to", value: sourceLabel },
-              {
-                label: "Left after payment",
-                value: action.overflow ? "—" : action.remainingAfter != null && action.remainingAfter > 0 ? `${formatCurrencyExact(action.remainingAfter)} on #${action.installmentSeqs[action.installmentSeqs.length - 1]}` : "Installment settled",
-              },
-            ]}
-          />
-          {(action.portions.length > 1 || action.overflow) && (
-            <ul className={cn(LE_RADIUS.card, "flex flex-col divide-y divide-border border border-border")}>
-              {action.portions.map((p, i) => (
-                <li key={p.id} className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
-                  <span className="text-muted-foreground">
-                    Installment #{action.installmentSeqs[i]}
-                    {p.allocationType === "advanceEmi" ? " · advance" : ""}
-                  </span>
-                  <Money exact amount={p.amount} className="text-xs font-semibold text-foreground" />
-                </li>
-              ))}
-              {action.overflow && (
-                <li className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
-                  <span className="text-muted-foreground">Extra principal</span>
-                  <Money exact amount={action.overflow.amount} className="text-xs font-semibold text-foreground" />
-                </li>
-              )}
-            </ul>
-          )}
-          {action.note && <p className="text-xs text-muted-foreground">Note: {action.note}</p>}
-          {(peopleLoading || (peopleBreakdown?.participants.length ?? 0) > 0) && (
-            <div className="flex flex-col gap-1.5 rounded-[6px] border border-border px-3 py-2.5" data-testid="recorded-payment-people">
-              <p className="text-xs text-muted-foreground">
-                {lent ? "Repayment" : "Lender payment"} recorded above. Money from people is tracked separately in People — {receivedFromPeople > 0.005 ? `${formatCurrencyExact(receivedFromPeople)} received so far for this installment` : "nothing received yet for this installment"}. Editing this payment never changes it.
-              </p>
-              <InstallmentPeoplePanel
-                breakdown={peopleBreakdown}
-                loading={peopleLoading}
-                returnTo={pathname ? `${pathname}?agreement=${encodeURIComponent(loanRow?.loan.id ?? emiRow!.emi.id)}` : undefined}
-              />
-            </div>
-          )}
-          {(!eligibility.ok || linkedLock) && (
-            <p className="flex items-start gap-2 text-xs text-muted-foreground" data-testid="edit-blocked-note">
-              <Info className="mt-px size-3.5 shrink-0" strokeWidth={1.75} />
-              {!eligibility.ok ? eligibility.reason : LINKED_EDIT_REASON}
-            </p>
-          )}
-          {canUnpayChain && (
-            <button
-              type="button"
-              onClick={() => goTo("unpayChain")}
-              className={cn(
-                LE_RADIUS.control,
-                "flex h-10 items-center justify-center gap-1.5 border border-border-strong bg-card px-3 text-sm font-medium text-foreground transition-colors outline-none hover:border-expense hover:text-expense focus-visible:ring-2 focus-visible:ring-ring",
-              )}
-            >
-              <RotateCcw className="size-4" strokeWidth={1.75} />
-              Mark as unpaid · with {chain.length - 1} later payment{chain.length - 1 === 1 ? "" : "s"}
-            </button>
-          )}
-          {canUnpay && (
-            <button
-              type="button"
-              onClick={() => goTo("unpay")}
-              className={cn(
-                LE_RADIUS.control,
-                "flex h-10 items-center justify-center gap-1.5 border border-border-strong bg-card px-3 text-sm font-medium text-foreground transition-colors outline-none hover:border-expense hover:text-expense focus-visible:ring-2 focus-visible:ring-ring",
-              )}
-            >
-              <RotateCcw className="size-4" strokeWidth={1.75} />
-              Mark as unpaid
-            </button>
-          )}
-          {onPayRemaining && lastInstallment && liveRemainingOnLast > 0 && !closed && (
-            <button
-              type="button"
-              onClick={() => onPayRemaining(lastInstallment)}
-              className={cn(
-                LE_RADIUS.control,
-                "flex h-10 items-center justify-center gap-1.5 border border-border-strong bg-card px-3 text-sm font-medium text-foreground transition-colors outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring",
-              )}
-            >
-              <Wallet className="size-4" strokeWidth={1.75} />
-              Pay remaining {formatCurrencyExact(liveRemainingOnLast)} on #{lastInstallment.sequenceNumber}
-            </button>
-          )}
-        </section>
+        </div>
+        {(!eligibility.ok || linkedLock) && (
+          <p className="flex items-start gap-2 text-xs text-muted-foreground" data-testid="edit-blocked-note">
+            <Info className="mt-px size-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
+            {!eligibility.ok ? eligibility.reason : LINKED_EDIT_REASON}
+          </p>
+        )}
       </LoanEmiFormDialog>
     );
   }

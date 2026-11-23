@@ -32,6 +32,7 @@ export function PaymentSheet({
   facts,
   toolbar,
   instant = false,
+  workspace = false,
   children,
   onConfirm,
   onEnter,
@@ -63,6 +64,7 @@ export function PaymentSheet({
   toolbar?: React.ReactNode;
   /** A sibling step of the same flow just closed: skip the enter animation so the swap reads as one sheet. */
   instant?: boolean;
+  workspace?: boolean;
   children: React.ReactNode;
   onConfirm: () => void;
   onEnter?: () => void;
@@ -87,7 +89,7 @@ export function PaymentSheet({
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
       <div className="flex min-w-0 flex-1 basis-64 items-center gap-3">
         {inStack ? (
-          <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-primary text-primary-foreground ring-1 ring-primary-accent-text/40 shadow-e1">
+          <span aria-hidden className={cn("grid size-9 shrink-0 place-items-center rounded-[10px] bg-primary text-primary-foreground ring-1 ring-primary-accent-text/40 shadow-e1", workspace && "size-8 rounded-[8px]")}>
             <Icon className="size-[18px]" strokeWidth={2} />
           </span>
         ) : (
@@ -131,7 +133,7 @@ export function PaymentSheet({
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 sm:px-5">
       <div className="flex min-w-0 flex-1 basis-64 items-center gap-2" aria-live="polite">
         {pending.length === 0 ? (
-          !confirmDisabled && (
+          !confirmDisabled && (!workspace || summary != null) && (
             <p className="flex min-w-0 items-center gap-2 text-[13px] font-semibold text-[oklch(0.44_0.13_149)] dark:text-success">
               <span className="grid size-5 shrink-0 place-items-center rounded-full bg-success text-success-foreground">
                 <Check className="size-3" strokeWidth={3} />
@@ -150,7 +152,7 @@ export function PaymentSheet({
           </div>
         )}
       </div>
-      <div className="flex flex-1 basis-full flex-wrap items-center justify-end gap-1.5 sm:flex-none sm:basis-auto">
+      <div className="ml-auto flex flex-1 basis-full flex-wrap items-center justify-end gap-1.5 sm:flex-none sm:basis-auto">
         <button type="button" className={cn(SHEET_BUTTON.ghost, "h-9")} onClick={() => onOpenChange(false)} disabled={busy}>
           {cancelLabel}
         </button>
@@ -193,7 +195,7 @@ export function PaymentSheet({
   // Enter in any single-line field runs the same primary action as the button (not while busy / invalid).
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => handleEnterKey(e, onEnter ?? onConfirm, { enabled: !busy && !confirmDisabled });
   const body = (
-    <div inert={busy} aria-busy={busy} className={cn("@container px-3 py-3 text-sm transition-opacity duration-150 sm:px-5", inStack && "sm:py-4", busy && "opacity-70")}>
+    <div inert={busy} aria-busy={busy} className={cn("@container px-3 py-3 text-sm transition-opacity duration-150 sm:px-5", inStack && !workspace && "sm:py-4", busy && "opacity-70")}>
       {!inStack && toolbar && <div className="mb-3">{toolbar}</div>}
       {children}
     </div>
@@ -201,7 +203,7 @@ export function PaymentSheet({
 
   if (inStack) {
     return (
-      <StackLayer tone="light" size="popup" instant={instant} toolbar={toolbar} open={open} onRequestClose={() => onOpenChange(false)} closeDisabled={busy} header={header} footer={footerWithOperation} onKeyDown={onKeyDown}>
+      <StackLayer tone="light" size="popup" instant={instant} toolbar={toolbar} open={open} onRequestClose={() => onOpenChange(false)} closeDisabled={busy} header={header} footer={footerWithOperation} onKeyDown={onKeyDown} bodyClassName={workspace ? "bg-secondary/35" : undefined}>
         {body}
       </StackLayer>
     );

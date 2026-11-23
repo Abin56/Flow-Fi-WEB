@@ -120,6 +120,8 @@ export interface LedgerRow {
   payments: PaymentRecord[];
   /** Person-Loan installment rows: the Loan it belongs to (paid from the Loan, never settled here). */
   loanId: string | null;
+  /** Posted loan funding shown in the person history. This is display context only. */
+  recordedLoanCash?: { dir: "in" | "out"; account: string | null };
   /** Unpaid past its due date (Loan installments only — the other sources carry no due date). */
   overdue: boolean;
   /**

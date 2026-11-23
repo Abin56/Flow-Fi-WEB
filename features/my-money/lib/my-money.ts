@@ -268,3 +268,68 @@ export function spendComparison(current: number, previous: number, periodComplet
   if (!periodComplete) return { kind: "inProgress", previous: round2(previous) };
   return { kind: "change", previous: round2(previous), percent: Math.round(((current - previous) / previous) * 100) };
 }
+
+// ─────────────────────────── yearly spending ───────────────────────────
+
+/** One consumption row, already bucketed — `date` is the same bucket date the period view uses. */
+export interface YearSpendEntry {
+  date: Date;
+  myAmount: number;
+  categoryId: string;
+}
+
+export interface YearMonthSpend {
+  /** 0 = January … 11 = December (cycles are named by the month they END in). */
+  month: number;
+  amount: number;
+  /** The month's cycle has begun — a future month is "not yet", never ₹0 spending. */
+  started: boolean;
+  /** The month's cycle includes today. */
+  isCurrent: boolean;
+}
+
+export interface YearSpendSummary {
+  total: number;
+  months: YearMonthSpend[];
+  /** Total ÷ months whose cycle has begun (the running month counts as a whole month). null before any month starts. */
+  monthlyAverage: number | null;
+  peak: { month: number; amount: number } | null;
+  byCategoryId: Map<string, number>;
+  /** Number of months with recorded spending. */
+  activeMonths: number;
+}
+
+/**
+ * Folds a year of already-classified My Spend rows into per-month totals. `monthRanges` are the twelve cycles
+ * of the year (Jan…Dec, contiguous), so a row lands in exactly one month and the months add back to `total`.
+ * Rows outside every range are ignored. Pure — the engine decided what counts as spending.
+ */
+export function summarizeYearSpend(entries: readonly YearSpendEntry[], monthRanges: readonly { start: Date; end: Date }[], now: Date): YearSpendSummary {
+  const amounts = monthRanges.map(() => 0);
+  const byCategoryId = new Map<string, number>();
+  for (const e of entries) {
+    const at = e.date.getTime();
+    const index = monthRanges.findIndex((r) => at >= r.start.getTime() && at <= r.end.getTime());
+    if (index < 0) continue;
+    amounts[index] += e.myAmount;
+    if (e.myAmount !== 0) byCategoryId.set(e.categoryId, round2((byCategoryId.get(e.categoryId) ?? 0) + e.myAmount));
+  }
+  const nowMs = now.getTime();
+  const months: YearMonthSpend[] = monthRanges.map((r, month) => ({
+    month,
+    amount: round2(amounts[month]),
+    started: r.start.getTime() <= nowMs,
+    isCurrent: nowMs >= r.start.getTime() && nowMs <= r.end.getTime(),
+  }));
+  const total = round2(months.reduce((s, m) => s + m.amount, 0));
+  const startedCount = months.filter((m) => m.started).length;
+  const peak = months.reduce<YearMonthSpend | null>((best, m) => (m.amount > (best?.amount ?? 0) ? m : best), null);
+  return {
+    total,
+    months,
+    monthlyAverage: startedCount > 0 ? round2(total / startedCount) : null,
+    peak: peak ? { month: peak.month, amount: peak.amount } : null,
+    byCategoryId,
+    activeMonths: months.filter((m) => m.amount > EPSILON).length,
+  };
+}

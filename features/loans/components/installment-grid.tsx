@@ -1,8 +1,9 @@
 "use client";
 
-import { Check, HandCoins, Receipt } from "lucide-react";
+import { CalendarClock, Check, Ellipsis, HandCoins, Receipt, Wallet } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Money } from "@/features/loans/components/loan-emi-ui";
 import { HISTORICAL_PAYMENT_LABEL } from "@/features/loans/lib/historical-payment";
 import { PERSON_STATUS_LABEL, type AgreementPeopleLine, type PersonShareStatus } from "@/features/loans/lib/agreement-people";
@@ -232,9 +233,31 @@ export function InstallmentDetail({
   const account = txn?.accountId ? accounts.find((a) => a.id === txn.accountId) : null;
   const paidFrom = account ? (account.accountNumberLast4 ? `${account.name} ••${account.accountNumberLast4}` : account.name) : null;
   const sharing = peopleLines.filter((l) => l.share > 0.005);
-  return (
-    <section aria-label={`Installment ${row.sequenceNumber}`} data-testid="installment-detail" className="shrink-0 border-t border-border-strong bg-secondary/40 px-4 py-2.5 duration-150 animate-in fade-in-0 motion-reduce:animate-none">
-      <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+  const loanDetail = peopleTarget?.sourceKind === "loan";
+  const peopleAction = onTheyPaid && !lent && sharing.some((l) => l.remaining > 0.005) && (
+    <button
+      type="button"
+      onClick={() => (peopleTarget ? setPanel((p) => (p?.id === i.id ? null : { id: i.id, n: (p?.n ?? 0) + 1 })) : onTheyPaid(i))}
+      aria-expanded={peopleTarget ? panel?.id === i.id : undefined}
+      data-testid="installment-they-paid"
+      className={cn("inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-border-strong bg-card px-2.5 text-xs font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring", loanDetail && "h-7 border-border")}
+    >
+      <HandCoins className="size-3.5" strokeWidth={1.75} aria-hidden />
+      {loanDetail ? "Record or link" : "They paid"}
+    </button>
+  );
+  const peopleList = sharing.length > 0 && (
+    <ul className={cn("divide-y divide-border/70", !loanDetail && "mt-2 rounded-[6px] border border-border bg-card")} aria-label="People sharing this installment">
+      {sharing.map((l, n) => (
+        <PersonLine key={`${l.key}-${n}`} line={l} returnTo={returnTo} compact={loanDetail} />
+      ))}
+    </ul>
+  );
+  const receiptPanel = peopleTarget && panel?.id === i.id && (
+    <TheyPaidPanel key={panel.n} {...peopleTarget} installmentId={i.id} onClose={() => setPanel(null)} />
+  );
+  const lenderDetails = (
+      <div className={cn("flex flex-wrap items-start gap-x-6 gap-y-2", loanDetail && "items-center gap-x-3 rounded-[10px] border border-border bg-card px-3 py-2.5")}>
         <div className="flex min-w-0 flex-col gap-0.5">
           <span className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">
             Installment {row.sequenceNumber}
@@ -257,12 +280,12 @@ export function InstallmentDetail({
                 </>
               )}
             </span>
-          ) : (
+          ) : !loanDetail ? (
             <span className="text-xs text-muted-foreground">{row.canPay ? "Nothing recorded yet" : "Nothing to pay"}</span>
-          )}
+          ) : null}
         </div>
 
-        <dl className="flex items-start gap-5 text-xs">
+        <dl className={cn("flex flex-wrap items-start gap-x-5 gap-y-1 text-xs", loanDetail && "gap-x-3")}>
           <div>
             <dt className="text-muted-foreground">Amount</dt>
             <dd className="font-semibold text-foreground tabular-nums">{formatCurrency(i.amountDue)}</dd>
@@ -280,12 +303,12 @@ export function InstallmentDetail({
             <dd className="font-semibold text-foreground tabular-nums">{formatCurrency(row.paid)}</dd>
           </div>
           <div>
-            <dt className="text-muted-foreground">Left</dt>
+            <dt className="text-muted-foreground">{loanDetail ? "Still due" : "Left"}</dt>
             <dd className={cn("font-semibold tabular-nums", row.status === "overdue" ? "text-expense" : "text-foreground")}>{formatCurrency(row.left)}</dd>
           </div>
         </dl>
 
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <div className={cn("ml-auto flex items-center gap-2", loanDetail ? "max-w-full flex-wrap justify-end" : "shrink-0")}>
           {row.recorded && (
             <button
               type="button"
@@ -296,66 +319,93 @@ export function InstallmentDetail({
               {row.editable ? "Edit payment" : "Payment details"}
             </button>
           )}
-          {onTheyPaid && !lent && sharing.some((l) => l.remaining > 0.005) && (
-            <button
-              type="button"
-              onClick={() => (peopleTarget ? setPanel((p) => (p?.id === i.id ? null : { id: i.id, n: (p?.n ?? 0) + 1 })) : onTheyPaid(i))}
-              aria-expanded={peopleTarget ? panel?.id === i.id : undefined}
-              data-testid="installment-they-paid"
-              className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-border-strong bg-card px-2.5 text-xs font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <HandCoins className="size-3.5" strokeWidth={1.75} />
-              They paid
-            </button>
-          )}
+          {!loanDetail && peopleAction}
           {row.canPay ? (
             <button
               type="button"
               onClick={() => onPay(i)}
               className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-primary-accent-text bg-primary px-3 text-xs font-semibold text-primary-foreground outline-none transition-colors hover:bg-primary/85 focus-visible:ring-2 focus-visible:ring-ring"
             >
-              {lent ? `Record ${formatCurrency(row.left)}` : `Pay ${formatCurrency(row.left)}`}
+              {loanDetail && <Wallet className="size-3.5" aria-hidden />}
+              {lent ? "Record" : loanDetail ? "Pay lender" : "Pay"} {formatCurrency(row.left)}
             </button>
           ) : row.status === "paid" ? (
             <span className="inline-flex h-8 items-center gap-1 text-xs font-semibold text-success">
-              <Check className="size-4" strokeWidth={2.5} aria-hidden /> {lent ? "Received" : "Bank paid"}
+              <Check className="size-4" strokeWidth={2.5} aria-hidden /> {lent ? "Received" : loanDetail ? "Paid to lender" : "Bank paid"}
             </span>
           ) : null}
         </div>
       </div>
+  );
 
-      {peopleTarget && panel?.id === i.id && (
-        <TheyPaidPanel key={panel.n} {...peopleTarget} installmentId={i.id} onClose={() => setPanel(null)} />
-      )}
-      {sharing.length > 0 && (
-        <ul className="mt-2 flex flex-col divide-y divide-border/70 rounded-[6px] border border-border bg-card" aria-label="People sharing this installment">
-          {sharing.map((l, n) => (
-            <PersonLine key={`${l.key}-${n}`} line={l} returnTo={returnTo} />
-          ))}
-        </ul>
-      )}
+  if (loanDetail) return (
+    <section aria-label={`Installment ${row.sequenceNumber}`} data-testid="installment-detail" className="max-h-[48%] shrink-0 overflow-y-auto overscroll-contain border-t border-border bg-secondary/30 px-3 py-2.5">
+      <div className={cn("grid gap-2.5", peopleList && "@3xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]")}>
+        {lenderDetails}
+        {peopleList && <section aria-label="People reimbursements" className="min-w-0 overflow-hidden rounded-[10px] border border-settle-receivable-text/25 bg-card">
+          <div className="flex flex-wrap items-center justify-between gap-1.5 border-b border-settle-receivable-text/20 bg-settle-receivable-tint/40 px-3 py-1.5">
+            <h3 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.06em] text-settle-receivable-text uppercase"><HandCoins className="size-3.5" aria-hidden /> Reimbursements</h3>
+            {peopleAction}
+          </div>
+          {peopleList}
+        </section>}
+      </div>
+      {receiptPanel}
+    </section>
+  );
+
+  return (
+    <section aria-label={`Installment ${row.sequenceNumber}`} data-testid="installment-detail" className="shrink-0 border-t border-border-strong bg-secondary/40 px-4 py-2.5 duration-150 animate-in fade-in-0 motion-reduce:animate-none">
+      {lenderDetails}
+      {receiptPanel}
+      {peopleList}
     </section>
   );
 }
 
-function PersonLine({ line, returnTo }: { line: AgreementPeopleLine; returnTo: string }) {
+function PersonLine({ line, returnTo, compact = false }: { line: AgreementPeopleLine; returnTo: string; compact?: boolean }) {
   const open = line.remaining > 0.005;
+  const settleHref = peopleSettleHref(line.personId, line.key, returnTo);
+  const postponeHref = peoplePostponeHref(line.personId, line.key, returnTo);
+  const status = (
+    <span className={cn("font-medium", PEOPLE_TONE[line.status])}>
+      {PERSON_STATUS_LABEL[line.status]}
+      {line.status === "postponed" && line.postponedDate ? ` until ${dateText(line.postponedDate)}` : ""}
+    </span>
+  );
+  if (compact) return (
+    <li className="flex items-center gap-2 px-3 py-1.5 text-xs" data-testid="installment-person">
+      <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+        <span className="font-semibold text-foreground">{line.personName}</span>
+        <span className="text-muted-foreground tabular-nums">{formatCurrency(Math.min(line.received, line.share))} of {formatCurrency(line.share)} received</span>
+        {status}
+      </div>
+      {open && <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button type="button" aria-label={`Reimbursement actions for ${line.personName}`} className="grid size-7 shrink-0 place-items-center rounded-[6px] text-muted-foreground outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+            <Ellipsis className="size-4" aria-hidden />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem asChild><Link href={settleHref}><HandCoins aria-hidden /> Record in People</Link></DropdownMenuItem>
+          <DropdownMenuItem asChild><Link href={postponeHref}><CalendarClock aria-hidden /> Postpone collection</Link></DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>}
+    </li>
+  );
   return (
     <li className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-1.5 text-xs" data-testid="installment-person">
       <span className="min-w-[7rem] font-semibold text-foreground">{line.personName}</span>
       <span className="tabular-nums text-muted-foreground">
         {formatCurrency(Math.min(line.received, line.share))} of {formatCurrency(line.share)} received
       </span>
-      <span className={cn("font-medium", PEOPLE_TONE[line.status])}>
-        {PERSON_STATUS_LABEL[line.status]}
-        {line.status === "postponed" && line.postponedDate ? ` until ${dateText(line.postponedDate)}` : ""}
-      </span>
+      {status}
       {open && (
         <span className="ml-auto flex items-center gap-1.5">
-          <Link href={peopleSettleHref(line.personId, line.key, returnTo)} aria-label={`Record money received from ${line.personName} in People`} className="rounded-[5px] border border-primary-accent-text bg-primary px-2 py-0.5 font-semibold text-primary-foreground hover:bg-primary/85">
+          <Link href={settleHref} aria-label={`Record money received from ${line.personName} in People`} className="rounded-[5px] border border-primary-accent-text bg-primary px-2 py-0.5 font-semibold text-primary-foreground hover:bg-primary/85">
             Record received
           </Link>
-          <Link href={peoplePostponeHref(line.personId, line.key, returnTo)} aria-label={`Postpone collecting ${line.personName}'s share in People`} className="rounded-[5px] border border-border-strong bg-card px-2 py-0.5 font-semibold text-foreground hover:bg-secondary">
+          <Link href={postponeHref} aria-label={`Postpone collecting ${line.personName}'s share in People`} className="rounded-[5px] border border-border-strong bg-card px-2 py-0.5 font-semibold text-foreground hover:bg-secondary">
             Postpone
           </Link>
         </span>

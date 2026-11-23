@@ -7,6 +7,7 @@ import {
   sharedSplitFrom,
   spendComparison,
   summarizeToPay,
+  summarizeYearSpend,
   type ObligationItem,
 } from "./my-money";
 
@@ -154,6 +155,45 @@ describe("groupCompleted", () => {
     const rent = groups.find((g) => g.key === "bill:b1")!;
     expect(rent).toMatchObject({ lastDate: null, payments: 0, undatedAmount: 12000, undatedDueDate: d(9, 10) });
     expect(groups.find((g) => g.key === "bill:b2")).toMatchObject({ amount: 1000, payments: 1, lastDate: d(9, 6), undatedAmount: 200 });
+  });
+});
+
+describe("summarizeYearSpend", () => {
+  const ranges = Array.from({ length: 12 }, (_, m) => ({ start: new Date(2026, m, 1), end: new Date(2026, m + 1, 0, 23, 59, 59, 999) }));
+
+  it("buckets rows into their month and adds back to the total", () => {
+    const s = summarizeYearSpend(
+      [
+        { date: d(0, 5), myAmount: 100, categoryId: "a" },
+        { date: d(0, 30), myAmount: 50, categoryId: "b" },
+        { date: d(8, 3), myAmount: 300, categoryId: "a" },
+        { date: new Date(2025, 11, 31), myAmount: 999, categoryId: "a" },
+      ],
+      ranges,
+      NOW,
+    );
+    expect(s.total).toBe(450);
+    expect(s.months[0].amount).toBe(150);
+    expect(s.months[8].amount).toBe(300);
+    expect(s.months.reduce((t, m) => t + m.amount, 0)).toBe(450);
+    expect(s.byCategoryId.get("a")).toBe(400);
+    expect(s.peak).toEqual({ month: 8, amount: 300 });
+    expect(s.activeMonths).toBe(2);
+  });
+
+  it("averages over the months that have begun, not the whole year", () => {
+    const s = summarizeYearSpend([{ date: d(1, 1), myAmount: 1000, categoryId: "a" }], ranges, NOW);
+    // NOW is 12 Oct → Jan–Oct have begun.
+    expect(s.months.filter((m) => m.started)).toHaveLength(10);
+    expect(s.monthlyAverage).toBe(100);
+    expect(s.months[9].isCurrent).toBe(true);
+  });
+
+  it("has no average or peak before any spending / before the year starts", () => {
+    const s = summarizeYearSpend([], ranges, new Date(2025, 5, 1));
+    expect(s.total).toBe(0);
+    expect(s.monthlyAverage).toBeNull();
+    expect(s.peak).toBeNull();
   });
 });
 

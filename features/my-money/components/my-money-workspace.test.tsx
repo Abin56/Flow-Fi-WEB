@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatCurrency } from "@/lib/format";
-import { obligationStatus, summarizeToPay, type ObligationItem } from "@/features/my-money/lib/my-money";
+import { obligationStatus, summarizeToPay, summarizeYearSpend, type ObligationItem } from "@/features/my-money/lib/my-money";
 
 /**
  * My Money presentation lock: the four headlines stay separate, a shared installment shows my share apart
@@ -91,6 +91,22 @@ const data = {
     topCategories: [{ categoryId: "food", name: "Food", iconKey: "food", amount: 4200, percent: 100 }],
     comparison: { kind: "inProgress", previous: 9000 },
   },
+  yearSpending: {
+    year: 2026,
+    isCurrentYear: true,
+    rangeLabel: "1 Jan 2026 – 31 Dec 2026",
+    ...summarizeYearSpend(
+      [
+        { date: new Date(2026, 8, 3), myAmount: 6000, categoryId: "food" },
+        { date: new Date(2026, 9, 5), myAmount: 4200, categoryId: "food" },
+      ],
+      Array.from({ length: 12 }, (_, m) => ({ start: new Date(2026, m, 1), end: new Date(2026, m + 1, 0, 23, 59, 59, 999) })),
+      NOW,
+    ),
+    topCategories: [{ categoryId: "food", name: "Food", iconKey: "food", amount: 10200, percent: 100 }],
+    comparison: { kind: "none" },
+    nav: { previous: vi.fn(), next: vi.fn(), reset: vi.fn(), isOverridden: false },
+  },
   completed: {
     groups: [
       { key: "card:c0", kind: "card", sourceId: "c0", title: "SBI Card", amount: 5000, payments: 1, lastDate: new Date(2026, 9, 5), undatedAmount: 0, undatedDueDate: null, href: "/credit-cards?card=c0" },
@@ -125,6 +141,20 @@ describe("MyMoneyWorkspace", () => {
     // A running period compares amounts, never a %.
     expect(summary.getByText(`Previous period: ${formatCurrency(9000)}`)).toBeTruthy();
     expect(screen.getByText("Not in total")).toBeTruthy();
+  });
+
+  it("keeps the period spending panel and adds a whole-year spending panel", () => {
+    renderPage();
+    expect(screen.getByRole("heading", { name: "Where your money went" })).toBeTruthy();
+    const year = within(screen.getByRole("region", { name: "Spending this year" }));
+    // Year total, and the one category carrying all of it.
+    expect(year.getAllByText(formatCurrency(10200))).toHaveLength(2);
+    // Average over the 10 months that have begun by NOW (Jan–Oct).
+    expect(year.getByText(formatCurrency(1020))).toBeTruthy();
+    expect(year.getByText("Highest month").nextElementSibling?.textContent).toContain("Sep");
+    // Bars are real buttons that open that month's period.
+    fireEvent.click(year.getByRole("button", { name: /^September 2026: .*Open this period$/ }));
+    expect(data.nav.pickMonth).toHaveBeenCalledWith(2026, 8);
   });
 
   it("names the next action and links to the existing payment flow", () => {

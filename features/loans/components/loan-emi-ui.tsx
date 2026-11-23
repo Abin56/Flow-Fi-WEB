@@ -1048,6 +1048,8 @@ export function LoanEmiFormDialog({
   operation = null,
   cancelLabel = "Cancel",
   size = "default",
+  layout = "form",
+  leadingActions,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1072,8 +1074,11 @@ export function LoanEmiFormDialog({
   cancelLabel?: string;
   /** "compact" — a narrower panel for focused actions such as Record Payment; "wide" — a roomier one for multi-column forms. */
   size?: "default" | "compact" | "wide";
+  layout?: "form" | "summary";
+  leadingActions?: React.ReactNode;
 }) {
   const busy = loading || success;
+  const summary = layout === "summary";
   // Opened from a Loan/EMI popup: a compact layer beside it instead of the right-hand drawer. Same fields and actions.
   const inStack = useInStack();
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => handleEnterKey(e, onEnter ?? onConfirm, { enabled: !busy && !confirmDisabled });
@@ -1097,8 +1102,10 @@ export function LoanEmiFormDialog({
       inert={busy}
       aria-busy={busy}
       className={cn(
-        "flex flex-col gap-5 bg-card px-5 py-5 text-sm transition-opacity duration-150 sm:px-6 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-5",
-        inStack ? "gap-4 px-4 py-4 sm:px-4 [&>*+*]:pt-4" : "min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-smooth scroll-pt-4 scroll-pb-24",
+        "flex flex-col text-sm transition-opacity duration-150",
+        summary ? "mx-auto w-full max-w-4xl gap-3 px-3 py-3 sm:px-4" : "gap-5 bg-card px-5 py-5 sm:px-6 [&>*+*]:border-t [&>*+*]:border-border [&>*+*]:pt-5",
+        inStack ? !summary && "gap-4 px-4 py-4 sm:px-4 [&>*+*]:pt-4" : "min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-smooth scroll-pt-4 scroll-pb-24",
+        summary && !inStack && "bg-secondary/25",
         busy && "opacity-70",
       )}
     >
@@ -1115,13 +1122,14 @@ export function LoanEmiFormDialog({
 
   const actions = (
     <>
-      <ClayButton variant="secondary" className="h-10 rounded-[8px] border-border-strong px-4 font-medium" onClick={() => onOpenChange(false)} disabled={busy}>
+      <ClayButton variant="secondary" className={cn("h-10 rounded-[8px] border-border-strong px-4 font-medium", summary && "h-9")} onClick={() => onOpenChange(false)} disabled={busy}>
         {cancelLabel}
       </ClayButton>
       <ClayButton
         variant="primary"
         className={cn(
           "h-10 min-w-36 flex-1 gap-1.5 rounded-[8px] border-primary-accent-text font-semibold transition-[background-color,opacity] duration-200 sm:flex-none",
+          summary && "h-9 min-w-0",
           // Success keeps full opacity (it's a confirmation, not a disabled state).
           success && "disabled:opacity-100",
         )}
@@ -1145,6 +1153,12 @@ export function LoanEmiFormDialog({
       </ClayButton>
     </>
   );
+  const summaryFooter = (
+    <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center gap-2 px-3 py-2 sm:px-4">
+      {leadingActions}
+      <div className="ml-auto flex items-center gap-2">{actions}</div>
+    </div>
+  );
 
   if (inStack) {
     return (
@@ -1153,10 +1167,11 @@ export function LoanEmiFormDialog({
         onRequestClose={() => onOpenChange(false)}
         closeDisabled={busy}
         header={heading}
+        bodyClassName={summary ? "bg-secondary/25" : undefined}
         footer={
           <>
             {operationRow}
-            <div className="flex items-center justify-end gap-2.5 px-4 py-3">{actions}</div>
+            {summary ? summaryFooter : <div className="flex items-center justify-end gap-2.5 px-4 py-3">{actions}</div>}
           </>
         }
         onKeyDown={onKeyDown}
@@ -1203,7 +1218,9 @@ export function LoanEmiFormDialog({
 
         {operationRow}
 
-        <div className="flex shrink-0 items-center justify-end gap-2.5 border-t border-border bg-card px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:rounded-bl-[16px] sm:px-6 sm:pb-3">{actions}</div>
+        {summary ? <div className="shrink-0 border-t border-border bg-card pb-[env(safe-area-inset-bottom)]">{summaryFooter}</div> : (
+          <div className="flex shrink-0 items-center justify-end gap-2.5 border-t border-border bg-card px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:rounded-bl-[16px] sm:px-6 sm:pb-3">{actions}</div>
+        )}
       </DialogContent>
     </Dialog>
   );

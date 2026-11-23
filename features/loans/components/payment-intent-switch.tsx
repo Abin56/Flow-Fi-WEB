@@ -15,16 +15,18 @@ export function PaymentIntentSwitch({
   onChange,
   lent,
   isLoan,
+  singlePaymentLabel = false,
   disabled = false,
 }: {
   value: PaymentIntent;
   onChange: (v: PaymentIntent) => void;
   lent: boolean;
   isLoan: boolean;
+  singlePaymentLabel?: boolean;
   disabled?: boolean;
 }) {
   const options: { value: PaymentIntent; icon: LucideIcon; label: string; hint: string }[] = [
-    { value: "now", icon: Wallet, label: lent ? "Receive now" : "Pay now", hint: "Moves money" },
+    { value: "now", icon: Wallet, label: singlePaymentLabel ? "Single payment" : lent ? "Receive now" : "Pay now", hint: singlePaymentLabel ? "Pay from your account or record a direct lender payment" : "Moves money" },
     { value: "past", icon: History, label: lent ? "Past repayment" : "Past payment", hint: "Paid before FlowFi" },
     { value: "many", icon: Layers, label: lent ? "Several now" : "Pay several", hint: `Pick ${isLoan ? "installments" : "EMIs"}` },
   ];
