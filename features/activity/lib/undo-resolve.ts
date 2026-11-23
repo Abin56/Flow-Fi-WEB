@@ -9,11 +9,12 @@
 
 import { collection, getDocs, query, where, type Firestore } from "firebase/firestore";
 import type { ActivityItem } from "@/features/activity/lib/activity-classify";
-import type { PeopleReference, UndoFacts, UndoHandler } from "@/features/activity/lib/undo-eligibility";
-import { groupRecordedPayments } from "@/features/loans/lib/recorded-payments";
+import type { PairedLender, PairedReceipt, PeopleReference, ScheduleOwner, UndoFacts, UndoHandler } from "@/features/activity/lib/undo-eligibility";
+import { lenderActionForReceipt, receiptsPairedWithPayment } from "@/features/loans/lib/paired-receipts";
+import { groupRecordedPayments, type RecordedPaymentAction } from "@/features/loans/lib/recorded-payments";
 import { createBillOccurrenceRepository, createPaymentRepository } from "@/features/bills/lib/bill-occurrence-factory";
 import { splitExpenseDetailFor } from "@/lib/engines/history-builder";
-import { paymentImpact } from "@/lib/engines/person-payment-impact";
+import { paymentImpact, type PaymentImpact } from "@/lib/engines/person-payment-impact";
 import { purposeCashOf } from "@/lib/engines/purpose-funds";
 import { FirestoreCollections } from "@/lib/firestore/collections";
 import { safeDocs } from "@/lib/firestore/safe-docs";
@@ -97,6 +98,98 @@ async function schedulePayments(uid: string, scheduleId: string): Promise<{ inst
   return { installments, payments: payments.filter((p) => p.deletedAt == null) };
 }
 
+/** What one People payment did and which live cash / income transactions carry it — read fresh. */
+async function receiptImpact(
+  deps: ResolveDeps,
+  personId: string,
+  paymentId: string,
+  ledger: ReturnType<typeof createLedgerRepositoryFor>,
+  funds: PurposeFund[],
+): Promise<{ impact: PaymentImpact | null; legs: Transaction[] }> {
+  const entries = await ledger.getByPaymentId(paymentId);
+  const advanceIds = entries.filter((e) => e.deletedAt == null && e.sourceKind === "advance").map((e) => e.id);
+  const applications: AdvanceApplication[] = [];
+  for (const id of advanceIds) {
+    const snap = await getDocs(query(createAdvanceApplicationsCollection(deps.uid, personId), where("advanceEntryId", "==", id)));
+    applications.push(...safeDocs(snap.docs));
+  }
+  const paymentFunds = funds.filter((f) => f.paymentId === paymentId);
+  const transactionRepository = createTransactionRepository(deps.uid, createAccountRepository(deps.uid));
+  const refIds = [
+    ...entries.flatMap((e) => [e.transactionRef, e.incomeTransactionRef ?? null]),
+    ...paymentFunds.flatMap((f) => [f.receiptTransactionRef, f.incomeTransactionRef ?? null]),
+  ].filter((id): id is string => id != null);
+  const byId = new Map<string, Transaction>();
+  for (const id of new Set(refIds)) {
+    const t = await transactionRepository.getByKey(id);
+    if (t) byId.set(id, t);
+  }
+  const impact = paymentImpact({
+    paymentId,
+    entries,
+    applications,
+    transactionOf: (id) => byId.get(id),
+    purposeAmount: purposeCashOf(funds, paymentId),
+    purposeCashRefs: paymentFunds.map((f) => f.receiptTransactionRef),
+    purposeIncomeRefs: paymentFunds.flatMap((f) => (f.incomeTransactionRef ? [f.incomeTransactionRef] : [])),
+  });
+  return { impact, legs: [...byId.values()].filter((t) => t.deletedAt == null) };
+}
+
+type LenderCandidate = RecordedPaymentAction & { owner: ScheduleOwner; all: RecordedPaymentAction[] };
+
+/** Every live Loan / EMI payment action (with its owner), the pool a People receipt's lender payment is found in. */
+async function liveLenderActions(uid: string): Promise<LenderCandidate[]> {
+  const out: LenderCandidate[] = [];
+  const [loans, emis] = await Promise.all([createLoanRepository(uid).getAll(), createEmiRepository(uid).getAll()]);
+  const pools = [
+    ...loans.map((l) => ({ source: "loan" as const, scheduleId: l.scheduleId, owner: { id: l.id, closed: l.isClosed, trashed: l.deletedAt != null, sharedWithPeople: sharedWithPeople(l) } })),
+    ...emis.map((e) => ({ source: "emi" as const, scheduleId: e.scheduleId, owner: { id: e.id, closed: e.isClosed, trashed: e.deletedAt != null, sharedWithPeople: sharedWithPeople(e) } })),
+  ];
+  await Promise.all(
+    pools.map(async (p) => {
+      const { installments, payments } = await schedulePayments(uid, p.scheduleId);
+      const all = groupRecordedPayments(payments, installments, p.source);
+      for (const a of all) out.push({ ...a, owner: p.owner, all });
+    }),
+  );
+  return out;
+}
+
+/** The lender payment a `pp_hist_` People receipt was written alongside, with every receipt written with it. */
+async function lenderPairedWith(deps: ResolveDeps, personId: string, paymentId: string): Promise<PairedLender | null> {
+  if (!paymentId.startsWith("pp_hist_")) return null;
+  const mine = await createLedgerRepositoryFor(deps.uid, personId, createPersonRepository(deps.uid)).getByPaymentId(paymentId);
+  const entries = mine.map((e) => ({ personId, paymentId: e.paymentId, obligationRef: e.obligationRef, createdAt: e.createdAt, deletedAt: e.deletedAt }));
+  const action = lenderActionForReceipt(entries, paymentId, await liveLenderActions(deps.uid));
+  if (action == null) return null;
+  const transactionRepository = createTransactionRepository(deps.uid, createAccountRepository(deps.uid));
+  const txId = action.transactionId;
+  const transaction = txId != null ? await transactionRepository.getByKey(txId) : action.portions[0] ? ((await transactionRepository.findByInstallmentPaymentId(action.portions[0].id))[0] ?? null) : null;
+  const receipts = await pairedReceiptsOf(deps, action);
+  return { source: action.source, owner: action.owner, action, all: action.all, transaction: transaction && transaction.deletedAt == null ? transaction : null, receipts };
+}
+
+/** Every live People receipt written alongside this lender payment, each with what reverting it does. */
+export async function pairedReceiptsOf(deps: ResolveDeps, action: RecordedPaymentAction): Promise<PairedReceipt[]> {
+  const personRepository = createPersonRepository(deps.uid);
+  const found: PairedReceipt[] = [];
+  await Promise.all(
+    deps.personIds.map(async (personId) => {
+      const ledger = createLedgerRepositoryFor(deps.uid, personId, personRepository);
+      const entries = (await ledger.getAll()).map((e) => ({ personId, paymentId: e.paymentId, obligationRef: e.obligationRef, createdAt: e.createdAt, deletedAt: e.deletedAt }));
+      const refs = receiptsPairedWithPayment(entries, action);
+      if (refs.length === 0) return;
+      const funds = safeDocs((await getDocs(createPurposeFundsCollection(deps.uid, personId))).docs).filter((f) => f.deletedAt == null);
+      for (const ref of refs) {
+        const { impact, legs } = await receiptImpact(deps, personId, ref.paymentId, ledger, funds);
+        if (impact != null) found.push({ personId, paymentId: ref.paymentId, impact, legs });
+      }
+    }),
+  );
+  return found.sort((a, b) => a.paymentId.localeCompare(b.paymentId));
+}
+
 async function peopleFacts(deps: ResolveDeps, fresh: Transaction): Promise<UndoFacts> {
   const personId = fresh.linkedPersonId ?? fresh.fundedByPersonId ?? null;
   if (personId == null) return { kind: "people", fresh, personId: null, paymentId: null, impact: null, entry: null };
@@ -107,34 +200,9 @@ async function peopleFacts(deps: ResolveDeps, fresh: Transaction): Promise<UndoF
   const paymentId = owned.find((e) => e.paymentId != null)?.paymentId ?? funds.find((f) => f.receiptTransactionRef === fresh.id)?.paymentId ?? null;
 
   if (paymentId != null) {
-    const entries = await ledger.getByPaymentId(paymentId);
-    const advanceIds = entries.filter((e) => e.deletedAt == null && e.sourceKind === "advance").map((e) => e.id);
-    const applications: AdvanceApplication[] = [];
-    for (const id of advanceIds) {
-      const snap = await getDocs(query(createAdvanceApplicationsCollection(deps.uid, personId), where("advanceEntryId", "==", id)));
-      applications.push(...safeDocs(snap.docs));
-    }
-    const paymentFunds = funds.filter((f) => f.paymentId === paymentId);
-    const transactionRepository = createTransactionRepository(deps.uid, createAccountRepository(deps.uid));
-    const refIds = [
-      ...entries.flatMap((e) => [e.transactionRef, e.incomeTransactionRef ?? null]),
-      ...paymentFunds.flatMap((f) => [f.receiptTransactionRef, f.incomeTransactionRef ?? null]),
-    ].filter((id): id is string => id != null);
-    const byId = new Map<string, Transaction>();
-    for (const id of new Set(refIds)) {
-      const t = await transactionRepository.getByKey(id);
-      if (t) byId.set(id, t);
-    }
-    const impact = paymentImpact({
-      paymentId,
-      entries,
-      applications,
-      transactionOf: (id) => byId.get(id),
-      purposeAmount: purposeCashOf(funds, paymentId),
-      purposeCashRefs: paymentFunds.map((f) => f.receiptTransactionRef),
-      purposeIncomeRefs: paymentFunds.flatMap((f) => (f.incomeTransactionRef ? [f.incomeTransactionRef] : [])),
-    });
-    return { kind: "people", fresh, personId, paymentId, impact, entry: null };
+    const { impact } = await receiptImpact(deps, personId, paymentId, ledger, funds);
+    const lender = impact != null ? await lenderPairedWith(deps, personId, paymentId) : null;
+    return { kind: "people", fresh, personId, paymentId, impact, entry: null, lender };
   }
 
   // An older single People entry (or a person-funded expense's entry) owned by this transaction.
@@ -159,6 +227,21 @@ async function billFacts(deps: ResolveDeps, fresh: Transaction): Promise<UndoFac
   return { kind: "billPayment", fresh, billId: null, payment: null };
 }
 
+/**
+ * Transactions delete of a People cash leg: the People facts WITH its lender payment, or null when this isn't a receipt
+ * recorded together with a Loan / EMI payment (the cheap `pp_hist_` check runs first, so other People deletes cost one read).
+ */
+export async function resolvePairedReceiptFacts(deps: ResolveDeps, transactionId: string): Promise<UndoFacts | null> {
+  const transactionRepository = createTransactionRepository(deps.uid, createAccountRepository(deps.uid));
+  const fresh = await transactionRepository.getByKey(transactionId);
+  if (fresh == null || fresh.deletedAt != null || !fresh.isPersonLedgerMovement || fresh.linkedPersonId == null) return null;
+  const ledger = createLedgerRepositoryFor(deps.uid, fresh.linkedPersonId, createPersonRepository(deps.uid));
+  const owned = await ledger.getByTransactionRef(fresh.id);
+  if (!owned.some((e) => e.deletedAt == null && e.paymentId?.startsWith("pp_hist_"))) return null;
+  const facts = await peopleFacts(deps, fresh);
+  return facts.kind === "people" && facts.lender != null ? facts : null;
+}
+
 /** Fresh facts for one action (card-payment figures are added by the caller from the Credit Cards preview). */
 export async function resolveUndoFacts(deps: ResolveDeps, item: ActivityItem): Promise<UndoFacts> {
   const transactionRepository = createTransactionRepository(deps.uid, createAccountRepository(deps.uid));
@@ -181,7 +264,8 @@ export async function resolveUndoFacts(deps: ResolveDeps, item: ActivityItem): P
       const { installments, payments } = await schedulePayments(deps.uid, loan.scheduleId);
       const all = groupRecordedPayments(payments, installments, "loan");
       const action = all.find((a) => a.transactionId === fresh.id) ?? null;
-      return { kind: "loanPayment", fresh, loan: { id: loan.id, closed: loan.isClosed, trashed: loan.deletedAt != null, sharedWithPeople: sharedWithPeople(loan) }, action, all };
+      const receipts = action != null && !action.reversed ? await pairedReceiptsOf(deps, action) : [];
+      return { kind: "loanPayment", fresh, loan: { id: loan.id, closed: loan.isClosed, trashed: loan.deletedAt != null, sharedWithPeople: sharedWithPeople(loan) }, action, all, receipts };
     }
     case "emiPayment": {
       const emi: Emi | null = item.emiId ? await createEmiRepository(deps.uid).getByKey(item.emiId) : null;
@@ -189,7 +273,8 @@ export async function resolveUndoFacts(deps: ResolveDeps, item: ActivityItem): P
       const { installments, payments } = await schedulePayments(deps.uid, emi.scheduleId);
       const all = groupRecordedPayments(payments, installments, "emi");
       const action = all.find((a) => a.portions.some((p) => p.id === fresh.installmentPaymentId)) ?? null;
-      return { kind: "emiPayment", fresh, emi: { id: emi.id, closed: emi.isClosed, trashed: emi.deletedAt != null, sharedWithPeople: sharedWithPeople(emi) }, action, all };
+      const receipts = action != null && !action.reversed ? await pairedReceiptsOf(deps, action) : [];
+      return { kind: "emiPayment", fresh, emi: { id: emi.id, closed: emi.isClosed, trashed: emi.deletedAt != null, sharedWithPeople: sharedWithPeople(emi) }, action, all, receipts };
     }
     case "billPayment":
       return billFacts(deps, fresh);
@@ -258,6 +343,25 @@ export async function executeUndo(handler: UndoHandler, deps: ExecuteDeps, ancho
         if (emi == null) throw new Error("This EMI no longer exists — nothing was changed.");
         const result = await deps.reverseEmiPayment(emi, { original: handler.refs });
         return { outcome: result.alreadyReversed ? "alreadyUndone" : "undone", warning: null };
+      }
+      case "reversePaired": {
+        // The lender payment first: its own checks are the likeliest to refuse, and a refusal leaves everything untouched.
+        // The receipts were verified revertible when the decision was made; each is still the People module's own whole-payment revert.
+        const lender = await executeUndo(handler.lender, deps, handler.lenderAnchorId);
+        const failed: string[] = [];
+        for (const r of handler.receipts) {
+          try {
+            const person = await createPersonRepository(deps.uid).getByKey(r.personId);
+            if (person == null) throw new Error("This person no longer exists.");
+            await deps.revertPersonPayment(person, r.paymentId);
+          } catch (e) {
+            failed.push(e instanceof Error ? e.message : String(e));
+          }
+        }
+        if (failed.length > 0) {
+          throw new Error(`The lender payment was undone, but ${failed.length === 1 ? "a person's received payment" : `${failed.length} received payments`} could not be removed (${failed[0]}). Remove ${failed.length === 1 ? "it" : "them"} from People.`);
+        }
+        return lender;
       }
       case "reverseBillPayment": {
         const result = await deps.cancelBillPayment({ billId: handler.billId, paymentId: handler.paymentId });

@@ -140,6 +140,51 @@ describe("decideUndo — Loan / EMI (D4, D6)", () => {
     expect(d.effects[0]).toBe("Installment #5 is due again.");
   });
 
+  describe("a lender payment recorded together with a person's received money", () => {
+    const received = txn({ id: "tx-recv", type: "income", amount: 4_000, accountId: "sbi" });
+    const impact = { paymentId: "pp_hist_b_p1_i5", direction: "theyPaid", received: 4_000, settled: 4_000, canRevert: true, advanceUsed: 0 } as PaymentImpact;
+    const receipt = { personId: "p1", paymentId: "pp_hist_b_p1_i5", impact, legs: [received] };
+    const latest = action("txn:tx-latest", { createdAt: new Date(2026, 9, 2) });
+
+    it("undoing the lender payment undoes the received money too, with one combined account figure", () => {
+      const d = decideUndo(item, { kind: "loanPayment", fresh: t, loan, action: latest, all: [latest], receipts: [receipt] }, ctx);
+      expect(d.kind).toBe("eligible");
+      if (d.kind !== "eligible") return;
+      expect(d.handler).toMatchObject({
+        kind: "reversePaired",
+        lender: { kind: "reverseLoanPayment", transactionId: "tx-latest" },
+        receipts: [{ personId: "p1", paymentId: "pp_hist_b_p1_i5" }],
+      });
+      expect(d.effects).toContain("Ravi's ₹4,000 received payment is removed too — Ravi owes you ₹4,000 again.");
+      // −4,000 spent comes back, +4,000 received goes away → the same account nets to no change.
+      expect(d.effects.some((e) => e.startsWith("SBI balance"))).toBe(false);
+      expect(d.effects).toContain("No account balance changes.");
+    });
+
+    it("undoing the received money from People undoes the lender payment too", () => {
+      const cash = txn({ id: "tx-recv", type: "income", amount: 4_000, linkedPersonId: "p1" });
+      const d = decideUndo(
+        itemOf([cash]),
+        { kind: "people", fresh: cash, personId: "p1", paymentId: "pp_hist_b_p1_i5", impact, entry: null, lender: { source: "loan", owner: loan, action: latest, all: [latest], transaction: t, receipts: [receipt] } },
+        ctx,
+      );
+      expect(d.kind).toBe("eligible");
+      if (d.kind !== "eligible") return;
+      expect(d.handler.kind).toBe("reversePaired");
+    });
+
+    it("is blocked as a whole when a later lender payment exists — never half undone", () => {
+      const newer = action("txn:tx-new", { transactionId: "tx-new", createdAt: new Date(2026, 9, 3) });
+      const d = decideUndo(item, { kind: "loanPayment", fresh: t, loan, action: latest, all: [latest, newer], receipts: [receipt] }, ctx);
+      expect(d).toEqual({ kind: "blocked", reason: MSG.laterLoan });
+    });
+
+    it("is blocked when the person's advance was already used", () => {
+      const used = { ...receipt, impact: { ...impact, canRevert: false, advanceUsed: 100 } };
+      expect(decideUndo(item, { kind: "loanPayment", fresh: t, loan, action: latest, all: [latest], receipts: [used] }, ctx).kind).toBe("blocked");
+    });
+  });
+
   it("an older payment is view-only and points to the module", () => {
     const older = action("txn:tx-latest", { createdAt: new Date(2026, 9, 1) });
     const newer = action("txn:tx-new", { transactionId: "tx-new", createdAt: new Date(2026, 9, 3) });

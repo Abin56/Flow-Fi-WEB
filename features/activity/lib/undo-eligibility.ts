@@ -30,6 +30,26 @@ export interface ScheduleOwner {
   sharedWithPeople: boolean;
 }
 
+/** A People receipt written together with a lender payment ("already paid" → people paid me back). */
+export interface PairedReceipt {
+  personId: string;
+  paymentId: string;
+  impact: PaymentImpact;
+  /** The live cash / income transactions this receipt posted (reverting it removes them). */
+  legs: Transaction[];
+}
+
+/** The Loan / EMI payment a People receipt was written together with, and every receipt written with it. */
+export interface PairedLender {
+  source: "loan" | "emi";
+  owner: ScheduleOwner;
+  action: RecordedPaymentAction;
+  all: RecordedPaymentAction[];
+  /** The lender payment's own cash transaction, when it has one. */
+  transaction: Transaction | null;
+  receipts: PairedReceipt[];
+}
+
 export type UndoFacts =
   /** The anchor document no longer exists. */
   | { kind: "missing" }
@@ -44,25 +64,38 @@ export type UndoFacts =
       impact: PaymentImpact | null;
       /** An older single People entry (or person-funded expense entry) owned by this transaction, with how many entries depend on it. */
       entry: { id: string; dependents: number } | null;
+      /** The lender payment this receipt was written together with (it is undone with it). */
+      lender?: PairedLender | null;
     }
-  | { kind: "loanPayment"; fresh: Transaction; loan: ScheduleOwner | null; action: RecordedPaymentAction | null; all: RecordedPaymentAction[] }
-  | { kind: "emiPayment"; fresh: Transaction; emi: ScheduleOwner | null; action: RecordedPaymentAction | null; all: RecordedPaymentAction[] }
+  | { kind: "loanPayment"; fresh: Transaction; loan: ScheduleOwner | null; action: RecordedPaymentAction | null; all: RecordedPaymentAction[]; receipts?: PairedReceipt[] }
+  | { kind: "emiPayment"; fresh: Transaction; emi: ScheduleOwner | null; action: RecordedPaymentAction | null; all: RecordedPaymentAction[]; receipts?: PairedReceipt[] }
   | { kind: "billPayment"; fresh: Transaction; billId: string | null; payment: { id: string; transactionId: string | null; deleted: boolean } | null }
   /** `legs` = the pair (fresh); `fee` = its live fee, which `deleteTransferPair` removes with it. */
   | { kind: "transfer"; legs: Transaction[]; fee: Transaction | null; reference: PeopleReference | null; card: CardPaymentCancellationPreview | null };
+
+export type ReverseLoanHandler = {
+  kind: "reverseLoanPayment";
+  loanId: string;
+  transactionId: string;
+  refs: ReturnType<typeof originalRefs>;
+  reversalIdempotencyKey: string;
+};
+export type ReverseEmiHandler = { kind: "reverseEmiPayment"; emiId: string; refs: { paymentIds: string[]; installmentIds: string[] } };
 
 export type UndoHandler =
   /** `deleteTransactionWithLinkedEffects` — routes a transfer pair / split Expense / People entry / plain delete by the stored ownership. */
   | { kind: "deleteTransaction"; transaction: Transaction }
   | { kind: "revertPersonPayment"; personId: string; paymentId: string }
+  | ReverseLoanHandler
+  | ReverseEmiHandler
+  /** A lender payment and the People receipts written with it — one undo, both sides. */
   | {
-      kind: "reverseLoanPayment";
-      loanId: string;
-      transactionId: string;
-      refs: ReturnType<typeof originalRefs>;
-      reversalIdempotencyKey: string;
+      kind: "reversePaired";
+      lender: ReverseLoanHandler | ReverseEmiHandler;
+      /** The lender payment's own transaction — only used to confirm it is gone after an error. */
+      lenderAnchorId: string;
+      receipts: { personId: string; paymentId: string }[];
     }
-  | { kind: "reverseEmiPayment"; emiId: string; refs: { paymentIds: string[]; installmentIds: string[] } }
   | { kind: "reverseBillPayment"; billId: string; paymentId: string };
 
 export type UndoDecision =
@@ -139,16 +172,30 @@ function installmentLine(action: RecordedPaymentAction): string | null {
     : `Installments ${installmentRangeLabel(action.installmentSeqs)} are due again.`;
 }
 
+/** "Priya's ₹500 payment is removed too — she owes you again." One line per People receipt that goes with the lender payment. */
+function receiptLines(receipts: readonly PairedReceipt[], ctx: EffectContext): string[] {
+  return receipts.map((r) => {
+    const who = ctx.personName(r.personId) ?? "This person";
+    return `${who}'s ${ctx.money(r.impact.received)} received payment is removed too — ${who} owes you ${ctx.money(r.impact.settled)} again.`;
+  });
+}
+
+/** `fresh` is the lender payment's own transaction — null only when a People receipt reached it and it has none (an EMI payment). */
 function scheduleDecision(
   source: "loan" | "emi",
-  fresh: Transaction,
+  fresh: Transaction | null,
   owner: ScheduleOwner | null,
   action: RecordedPaymentAction | null,
   all: RecordedPaymentAction[],
   ctx: EffectContext,
+  receipts: readonly PairedReceipt[] = [],
 ): UndoDecision {
-  if (fresh.deletedAt != null) return { kind: "alreadyUndone" };
-  if (owner == null || action == null) return { kind: "blocked", reason: source === "loan" ? MSG.noLoanAction : MSG.noEmiAction };
+  if (fresh?.deletedAt != null) return { kind: "alreadyUndone" };
+  if (owner == null || action == null || (source === "loan" && fresh == null)) return { kind: "blocked", reason: source === "loan" ? MSG.noLoanAction : MSG.noEmiAction };
+  for (const r of receipts) {
+    const block = revertBlockReason(r.impact, ctx.money);
+    if (block) return { kind: "blocked", reason: block };
+  }
   if (owner.trashed) return { kind: "blocked", reason: source === "loan" ? MSG.trashedLoan : MSG.trashedEmi };
   if (action.reversed) return { kind: "alreadyUndone" };
   const eligibility = editEligibility(action, all, { closed: owner.closed });
@@ -161,22 +208,38 @@ function scheduleDecision(
   const effects = [
     installmentLine(action),
     action.overflow ? "The extra principal payment is removed and the schedule goes back to how it was before it." : null,
-    // Undoing the lender payment never touches People: what a person paid me for their share is its own record.
-    owner.sharedWithPeople ? "People's shares stay as recorded — anything they paid you is not changed." : null,
-    ...withAccounts([fresh], ctx, action.recordedEarlier != null || fresh.excludeFromCalculations),
-    reportLine(fresh),
+    // A People receipt recorded together with this payment goes with it. Any other People record is its own and stays.
+    ...receiptLines(receipts, ctx),
+    owner.sharedWithPeople && receipts.length === 0 ? "People's shares stay as recorded — anything they paid you is not changed." : null,
+    // One combined figure per account: the lender payment and the received money can sit in the same account.
+    ...withAccounts([...(fresh ? [fresh] : []), ...receipts.flatMap((r) => r.legs)], ctx, receipts.length === 0 && (action.recordedEarlier != null || (fresh?.excludeFromCalculations ?? false))),
+    fresh ? reportLine(fresh) : null,
   ].filter((l): l is string => l != null);
   const refs = originalRefs(action);
-  const handler: UndoHandler =
+  const lender: ReverseLoanHandler | ReverseEmiHandler =
     source === "loan"
-      ? { kind: "reverseLoanPayment", loanId: owner.id, transactionId: fresh.id, refs, reversalIdempotencyKey: `activity_${fresh.id}` }
+      ? { kind: "reverseLoanPayment", loanId: owner.id, transactionId: fresh!.id, refs, reversalIdempotencyKey: `activity_${fresh!.id}` }
       : { kind: "reverseEmiPayment", emiId: owner.id, refs: { paymentIds: refs.paymentIds, installmentIds: refs.installmentIds } };
+  const handler: UndoHandler =
+    receipts.length > 0
+      ? { kind: "reversePaired", lender, lenderAnchorId: fresh?.id ?? action.id, receipts: receipts.map((r) => ({ personId: r.personId, paymentId: r.paymentId })) }
+      : lender;
   return {
     kind: "eligible",
     handler,
     effects,
     warning: action.overflow ? "If another payment lands on the new schedule meanwhile, the money is still reversed but the schedule is left for you to adjust in Loans." : null,
   };
+}
+
+/**
+ * Deleting a People receipt from Transactions: when it was recorded together with a Loan / EMI payment, the same
+ * both-sides undo as Activity applies. Null = not such a receipt — the caller uses the ordinary delete.
+ */
+export function decidePairedReceiptDelete(facts: UndoFacts, ctx: EffectContext): UndoDecision | null {
+  if (facts.kind !== "people" || facts.lender == null || facts.paymentId == null || facts.impact == null) return null;
+  const l = facts.lender;
+  return scheduleDecision(l.source, l.transaction, l.owner, l.action, l.all, ctx, l.receipts);
 }
 
 export function decideUndo(item: ActivityItem, facts: UndoFacts, ctx: EffectContext): UndoDecision {
@@ -222,6 +285,11 @@ export function decideUndo(item: ActivityItem, facts: UndoFacts, ctx: EffectCont
       const who = ctx.personName(facts.personId) ?? "This person";
       if (facts.paymentId != null) {
         if (facts.impact == null) return { kind: "blocked", reason: MSG.peopleMissing };
+        // Received together with a lender payment ("already paid → add to my account"): both sides are undone as one.
+        if (facts.lender != null) {
+          const l = facts.lender;
+          return scheduleDecision(l.source, l.transaction, l.owner, l.action, l.all, ctx, l.receipts);
+        }
         const block = revertBlockReason(facts.impact, ctx.money);
         if (block) return { kind: "blocked", reason: block };
         const i = facts.impact;
@@ -245,10 +313,10 @@ export function decideUndo(item: ActivityItem, facts: UndoFacts, ctx: EffectCont
     }
 
     case "loanPayment":
-      return scheduleDecision("loan", facts.fresh, facts.loan, facts.action, facts.all, ctx);
+      return scheduleDecision("loan", facts.fresh, facts.loan, facts.action, facts.all, ctx, facts.receipts);
 
     case "emiPayment":
-      return scheduleDecision("emi", facts.fresh, facts.emi, facts.action, facts.all, ctx);
+      return scheduleDecision("emi", facts.fresh, facts.emi, facts.action, facts.all, ctx, facts.receipts);
 
     case "billPayment": {
       const t = facts.fresh;
