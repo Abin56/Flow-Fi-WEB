@@ -40,6 +40,7 @@ import {
   X,
   Check,
   CheckCircle2,
+  Users,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Fragment, useDeferredValue, useEffect, useMemo, useState } from "react";
@@ -62,7 +63,10 @@ import { splitAllocation, type SplitAllocation } from "@/lib/split/split-allocat
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useLoans } from "@/hooks/use-loans";
+import { useAllLoanInstallments, useLoans } from "@/hooks/use-loans";
+import { useAllEmiInstallments } from "@/hooks/use-emis";
+import { useEmis } from "@/hooks/use-credit-cards";
+import { buildLoanPaymentInfo, type LoanPaymentInfo } from "@/features/transactions/lib/loan-payment-info";
 import { usePeople } from "@/hooks/use-people";
 import { paidFromLabel } from "@/features/transactions/lib/funding-label";
 import { useExpenses } from "@/hooks/use-expenses";
@@ -262,22 +266,27 @@ export function TransactionsWorkspace() {
   // Which Loan payments are "already paid earlier" — from the payment's structured flag (see historical-payment.ts).
   const listedTransactions = useMemo(() => rows.map((r) => r.transaction), [rows]);
   const isHistoricalPayment = useHistoricalPaymentFlags(listedTransactions, loans);
-  // Plain money in / out wording. A person movement or a Loan / EMI leg never shows loan terminology: it reads
-  // "Received from X" / "Paid to X" (or "Money received" / "Money paid" when the other side isn't a known person or
-  // lender). A description the user wrote on an ordinary transaction is kept. Display only — nothing stored changes.
-  const loanCounterpartyById = useMemo(() => new Map(loans.map((l) => [l.id, (l.personId ? personNameById.get(l.personId) : null) || l.institutionName?.trim() || null])), [loans, personNameById]);
+  // Loan / EMI payments: who the lender is, a Loan / EMI tag and the installment ("2 of 10") — all read from the existing
+  // Loan, EMI and schedule records. Only real transactions are described; nothing stored changes.
+  const { data: emis = [] } = useEmis();
+  const { data: loanInstallments = [] } = useAllLoanInstallments();
+  const { data: emiInstallments = [] } = useAllEmiInstallments();
+  const loanInfoFor = useMemo(() => buildLoanPaymentInfo({ loans, emis, loanInstallments, emiInstallments, personNameById }), [loans, emis, loanInstallments, emiInstallments, personNameById]);
+  // Plain money in / out wording ("Paid to Amazon", "Received from ABIN"). A description the user wrote on an ordinary
+  // transaction is kept. Display only.
   const displayDescription = useMemo(() => {
     return (t: Transaction) => {
       const incoming = t.type === "income";
-      if (t.loanId != null || t.emiId != null) {
-        const who = (t.loanId != null ? loanCounterpartyById.get(t.loanId) : null) ?? (t.linkedPersonId != null ? personNameById.get(t.linkedPersonId) : null) ?? null;
+      const info = loanInfoFor(t);
+      if (info) {
+        const who = info.lender ?? (t.linkedPersonId != null ? (personNameById.get(t.linkedPersonId) ?? null) : null);
         return who ? (incoming ? `Received from ${who}` : `Paid to ${who}`) : incoming ? "Money received" : "Money paid";
       }
       const who = t.isPersonLedgerMovement && t.linkedPersonId != null ? (personNameById.get(t.linkedPersonId) ?? null) : null;
       if (who != null && (t.description.trim() === "" || t.description.trim() === who)) return incoming ? `Received from ${who}` : `Paid to ${who}`;
       return t.description;
     };
-  }, [loanCounterpartyById, personNameById]);
+  }, [loanInfoFor, personNameById]);
 
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
@@ -297,6 +306,8 @@ export function TransactionsWorkspace() {
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(20);
+  // "People" toggle: off = the page exactly as before; on = a compact per-person month summary above the list.
+  const [peopleView, setPeopleView] = useState(false);
   const [viewMode, setViewMode] = useState<"list" | "grid" | "statement">("list");
 
   const [detailRow, setDetailRow] = useState<TransactionRow | null>(null);
@@ -862,6 +873,22 @@ export function TransactionsWorkspace() {
           )}
 
           <div className="ml-auto flex items-center gap-1.5">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={peopleView}
+              aria-label="People view"
+              title="Show what each person gave you and what you paid them, by month"
+              data-testid="tx-people-toggle"
+              onClick={() => setPeopleView((v) => !v)}
+              className={cn(
+                "flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition-colors",
+                peopleView ? "border-primary-accent-text/60 bg-primary text-primary-foreground shadow-e1" : "border-border-strong bg-card text-muted-foreground hover:bg-secondary hover:text-foreground",
+              )}
+            >
+              <Users className="size-3.5" strokeWidth={2} />
+              People
+            </button>
             <div role="radiogroup" aria-label="View" className="flex items-center rounded-full border border-border-strong bg-card p-0.5">
               {(
                 [
@@ -951,7 +978,7 @@ export function TransactionsWorkspace() {
 
       {/* ── What the list below adds up to — sits under the controls that change it ── */}
       {hasTransactions && <ViewSummary rows={filtered} />}
-      {hasTransactions && <PeoplePaymentsByMonth transactions={listedTransactions} personNameById={personNameById} />}
+      {hasTransactions && peopleView && <PeoplePaymentsByMonth transactions={listedTransactions} personNameById={personNameById} />}
 
       {/* ── Ledger ── */}
       {!hasTransactions ? (
@@ -1019,6 +1046,7 @@ export function TransactionsWorkspace() {
               <LedgerTable
                 rows={pageRows}
                 monthTotals={monthTotals}
+                loanInfoFor={loanInfoFor}
                 offset={(safePage - 1) * rowsPerPage}
                 total={count}
                 duplicateIds={duplicateTransactionIds}
@@ -1070,6 +1098,7 @@ export function TransactionsWorkspace() {
                           >
                             {shortDate(t.dateTime)} {t.dateTime.getFullYear()} · {hideCategory(t) ? "" : `${row.category?.name ?? "Uncategorized"} · `}{paidFromLabel(t, row.account?.name, personNameById) ?? "Unknown"}
                           </span>
+                          <LoanInfoLine info={loanInfoFor(t)} />
                         </span>
                         <Amount transaction={t} />
                       </span>
@@ -1711,9 +1740,22 @@ function TxnBadges({
   );
 }
 
+/** Subtle "Loan · EMI 2 of 10" marker for a Loan / EMI payment — a small tag and a secondary text, nothing for ordinary rows. */
+function LoanInfoLine({ info, className }: { info: LoanPaymentInfo | null; className?: string }) {
+  if (!info) return null;
+  const text = info.installment ? `${info.kind === "EMI" ? "Installment" : "EMI"} ${info.installment.number} of ${info.installment.total}` : null;
+  return (
+    <span className={cn("inline-flex shrink-0 items-center gap-1.5 text-[11.5px] text-muted-foreground", className)} data-testid="loan-info">
+      <span className="rounded-[4px] bg-secondary px-1.5 text-[10.5px] leading-4 font-bold text-foreground/70">{info.kind}</span>
+      {text && <span className="tabular-nums">{text}</span>}
+    </span>
+  );
+}
+
 function LedgerTable({
   rows,
   monthTotals,
+  loanInfoFor,
   offset,
   total,
   duplicateIds,
@@ -1732,6 +1774,8 @@ function LedgerTable({
   rows: TransactionRow[];
   /** Cash in / out per month key (`monthKeyOf`) across the whole filtered list. */
   monthTotals: ReadonlyMap<number, { in: number; out: number }>;
+  /** Lender / Loan-or-EMI tag / installment for a Loan or EMI payment, else null. */
+  loanInfoFor: (t: Transaction) => LoanPaymentInfo | null;
   offset: number;
   total: number;
   duplicateIds: Set<string>;
@@ -1902,6 +1946,7 @@ function LedgerTable({
                             {paidFromLabel(row.transaction, row.account?.name) ?? "Unknown account"}
                           </span>
                         </span>
+                        <LoanInfoLine info={loanInfoFor(t)} />
                         {/* The row stays plain — this name is the only accent carrying "a person is involved". */}
                         {personName && (
                           <span className="inline-flex max-w-32 items-center gap-1 truncate text-xs font-semibold text-debt-text" title={personName}>
