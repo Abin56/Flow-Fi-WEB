@@ -22,6 +22,21 @@ describe("Net Worth card breakdown", () => {
     expect(screen.getByTestId("nw-assigned-debt").textContent).toContain("₹2,000");
   });
 
+  it("counts split-expense / lent receivables (ABIN 3,000 + DAD 2,000) under From others, not Mine — totals unchanged", () => {
+    const split = { amount: 105_000, changeAmount: 0, changePercent: 0, trend: [], assets: 105_000, debt: 0, peopleReceivable: 5_000, assignedReceivable: 0, emiDueReceivable: 0 };
+    render(<NetWorthHero netWorth={split} />);
+    const chart = screen.getByRole("img", { name: /You own ₹1,05,000/ });
+    expect(within(chart).getByText("₹5,000")).toBeTruthy(); // From others
+    expect(within(chart).getByText("₹1,00,000")).toBeTruthy(); // Mine = assets − 5,000
+  });
+
+  it("does not double count a due EMI share that is already inside peopleReceivable", () => {
+    render(<NetWorthHero netWorth={{ ...nw, peopleReceivable: 5_000 }} />);
+    expect(screen.getByTestId("nw-emi-receivable").textContent).toContain("₹40,000");
+    const chart = screen.getByRole("img", { name: /You own ₹68,000/ });
+    expect(within(chart).getByText("₹28,000")).toBeTruthy(); // Mine = 68,000 − 40,000
+  });
+
   it("hides every amount when hidden and omits the notes when nothing is assigned", () => {
     const { rerender } = render(<NetWorthHero netWorth={nw} hideAmount />);
     expect(screen.queryByText("₹68,000")).toBeNull();

@@ -89,7 +89,11 @@ const rowEl = (id: string) => screen.getAllByTestId("recon-row").find((r) => r.d
 const states = () => Object.fromEntries(screen.getAllByTestId("recon-row").map((r) => [r.dataset.rowId, r.dataset.state]));
 
 /** Desktop: the full comparison (with the screenshot strip) opens with the O key. */
-const openDetails = () => fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "o" });
+// "o" opens the row's inline review; "Full details" opens the full comparison sheet (screenshot strip, notes, every candidate).
+const openDetails = () => {
+  fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "o" });
+  fireEvent.click(screen.getByTestId("inline-full-details"));
+};
 
 describe("Smart Capture → Reconciliation handoff", () => {
   it("takes the rows with their own ids, keeps the excluded row excluded (re-includable here), and shows the existing SMS transaction as a candidate", () => {
@@ -209,7 +213,7 @@ describe("never silently replacing a review", () => {
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
     pickAccount();
     act(() => void handOff());
-    expect(screen.getByTestId("handoff-notice").textContent).toMatch(/nothing changed, your decisions are kept/);
+    expect(screen.queryByTestId("handoff-notice")).toBeNull(); // "nothing changed" is not worth a banner — decisions are simply kept
   });
 });
 

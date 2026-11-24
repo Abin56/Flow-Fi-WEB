@@ -158,15 +158,28 @@ export function ApprovalDialog({
   const result = approval.result;
   const failed = result?.outcomes.filter((o) => o.kind === "failed").length ?? 0;
   const total = result?.outcomes.length ?? 0;
+  const imported = result?.outcomes.filter((o) => o.kind === "imported").length ?? 0;
+  const others = result ? [["kept existing", "linked"], ["skipped", "ignored"], ["already imported", "already_imported"], ["left in Inbox", "inbox"]].map(([label, kind]) => [label, result.outcomes.filter((o) => o.kind === kind).length] as const).filter(([, n]) => n > 0) : [];
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && approval.close()}>
       <DialogContent className="max-h-[calc(100dvh-1.5rem)] gap-4 sm:max-w-2xl" showCloseButton={!working} data-testid="approval-dialog" data-stage={stage} onInteractOutside={(e) => working && e.preventDefault()} onEscapeKeyDown={(e) => working && e.preventDefault()}>
-        {(stage === "review" || stage === "checking" || stage === "importing") && plan && (
+        {approval.direct && (stage === "checking" || stage === "importing") && (
           <>
             <DialogHeader>
-              <DialogTitle className="text-lg">Final approval</DialogTitle>
-              <DialogDescription>Nothing is written to FlowFi until you confirm below. Kept-existing, skipped and Inbox rows are never written.</DialogDescription>
+              <DialogTitle className="flex items-center gap-2 text-lg">
+                <Loader2 className="size-5 animate-spin text-primary-accent-text" /> {stage === "checking" ? "Checking FlowFi's latest records…" : "Importing…"}
+              </DialogTitle>
+              <DialogDescription data-testid="approval-working">Keep this page open. Every row is re-checked against FlowFi first, and nothing is written twice.</DialogDescription>
+            </DialogHeader>
+          </>
+        )}
+
+        {(stage === "review" || (!approval.direct && (stage === "checking" || stage === "importing"))) && plan && (
+          <>
+            <DialogHeader>
+              <DialogTitle className="text-lg">{approval.repeatRowIds.length > 0 ? "One quick check before importing" : "Import summary"}</DialogTitle>
+              <DialogDescription>Nothing is written to FlowFi until you press Import. Kept-existing, skipped and Inbox rows are never written.</DialogDescription>
             </DialogHeader>
 
             <p className="flex items-center gap-2 rounded-2xl bg-primary/10 px-3 py-2 text-sm text-foreground" data-testid="approval-account">
@@ -224,15 +237,6 @@ export function ApprovalDialog({
                 <Checkbox checked={approval.repeatsAck} onCheckedChange={(v) => approval.setRepeatsAck(v === true)} disabled={working} aria-label="These repeated rows are separate transactions" />
                 <span>
                   {approval.repeatRowIds.length} rows in this import look like repeats of each other (same merchant, amount and day). I checked — they are separate purchases and each should be imported.
-                </span>
-              </label>
-            )}
-
-            {plan.counts.newImports > 0 && (
-              <label className="flex items-start gap-2 text-sm text-foreground">
-                <Checkbox checked={approval.confirmed} onCheckedChange={(v) => approval.setConfirmed(v === true)} disabled={working || approval.liveChanged} aria-label="I confirm this import" data-testid="approval-confirm" />
-                <span>
-                  I&apos;ve checked this summary and want to import <strong>{plan.counts.newImports}</strong> new transaction{plan.counts.newImports === 1 ? "" : "s"} into {accountLabel}.
                 </span>
               </label>
             )}
@@ -306,7 +310,7 @@ export function ApprovalDialog({
               <ClayButton variant="secondary" onClick={approval.close}>
                 Back to reconciliation
               </ClayButton>
-              <ClayButton onClick={approval.refresh}>
+              <ClayButton onClick={() => void approval.importNow()} data-testid="approval-try-again">
                 <RefreshCw className="size-4" /> Try again
               </ClayButton>
             </div>
@@ -319,7 +323,7 @@ export function ApprovalDialog({
               <DialogTitle className="flex items-center gap-2 text-lg" data-testid="approval-result" data-status={result.status}>
                 {result.status === "complete" ? (
                   <>
-                    <CheckCircle2 className="size-5 text-success" /> All {total} rows are resolved
+                    <CheckCircle2 className="size-5 text-success" /> {imported > 0 ? `Imported ${imported} transaction${imported === 1 ? "" : "s"}` : `All ${total} rows are resolved`}
                   </>
                 ) : (
                   <>
@@ -329,13 +333,18 @@ export function ApprovalDialog({
               </DialogTitle>
               <DialogDescription>
                 {result.status === "complete"
-                  ? "Every row is imported, already imported, kept existing, skipped or left in the Inbox."
+                  ? others.length > 0
+                    ? `Also: ${others.map(([label, n]) => `${n} ${label}`).join(" · ")}. Nothing else was written.`
+                    : "Nothing else was written."
                   : "Rows that were imported are safe — retrying only attempts the failed ones, and nothing is written twice."}
               </DialogDescription>
             </DialogHeader>
-            <section className="max-h-72 overflow-y-auto">
-              <Outcomes outcomes={result.outcomes} rows={approval.rowsAtApproval} />
-            </section>
+            <details open={result.status === "partial"} className="group rounded-2xl border border-border" data-testid="approval-outcome-details">
+              <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground select-none hover:text-foreground">Row by row ({total})</summary>
+              <section className="max-h-72 overflow-y-auto border-t border-border">
+                <Outcomes outcomes={result.outcomes} rows={approval.rowsAtApproval} />
+              </section>
+            </details>
             <p className="flex items-center gap-3 text-[11px] text-muted-foreground">
               <span className="inline-flex items-center gap-1">
                 <Link2 className="size-3" /> Kept-existing transactions were not changed
@@ -354,7 +363,7 @@ export function ApprovalDialog({
                 Back to reconciliation
               </ClayButton>
               {result.status === "partial" && (
-                <ClayButton onClick={approval.refresh} data-testid="approval-retry">
+                <ClayButton onClick={() => void approval.importNow()} data-testid="approval-retry">
                   <RefreshCw className="size-4" /> Retry the {failed} failed
                 </ClayButton>
               )}

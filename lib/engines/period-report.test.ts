@@ -198,7 +198,7 @@ describe("periodFigures — previous cycle (18 Oct – 17 Nov), hand-computed", 
   });
 
   it("Debt and People lines", () => {
-    expect(f.debt).toEqual({ emiPaid: 2_500, loanRepaid: 1_200, loanCollected: 0, cardBillPayments: 3_000 });
+    expect(f.debt).toEqual({ emiPaid: 2_500, loanRepaid: 1_200, loanCollected: 0, loanCollectedLegacy: 0, cardBillPayments: 3_000, emiPaidOnCard: 0, emiPaidDirect: 2_500, loanRepaidOnCard: 0, paidTowardsDebts: 6_700 });
     expect(f.people).toEqual({ receivedFromPeople: 700, paidToPeople: 1_500 });
   });
 });

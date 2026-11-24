@@ -28,7 +28,6 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowDownToLine,
   ArrowLeft,
-  ArrowRight,
   ArrowUpFromLine,
   Banknote,
   Briefcase,
@@ -98,6 +97,7 @@ import { formatMonthYear, isSameMonth, transactionFlagFor } from "@/features/tra
 import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/use-duplicate-guarded-create";
 import { suggestCategoryForDescription } from "@/features/transactions/lib/category-suggestion";
 import { buildDescriptionHistory, suggestDescriptionCompletions } from "@/features/transactions/lib/description-autocomplete";
+import { buildCategoryHistory, suggestCategoryIntel } from "@/lib/services/category-intelligence";
 import { resolveDescriptionAndCategory } from "@/features/transactions/lib/description-category";
 import { toast } from "@/store/toast-store";
 import { resolveMixedSplit } from "@/lib/split/mixed-split";
@@ -129,8 +129,7 @@ import {
   TxnSection as FormSection,
   type TxnFormKind,
 } from "./transaction-form-ui";
-import { PeopleSettlementCard, settleCtaLabel } from "@/features/people/components/linked-people-panel";
-import { peopleSettleHref, peopleSettlementGate, type LinkedPeopleReadiness } from "@/lib/engines/linked-people-readiness";
+import { type LinkedPeopleReadiness } from "@/lib/engines/linked-people-readiness";
 import { SplitAllocationBreakdown } from "@/components/finance/split-allocation-breakdown";
 import { splitAllocation } from "@/lib/split/split-allocation";
 
@@ -321,12 +320,13 @@ function AccountSelect({
         </SelectValue>
       </SelectTrigger>
       <SelectContent className="w-(--radix-select-trigger-width) rounded-[14px] border-border-strong p-0 shadow-[0_18px_40px_-16px_rgba(0,0,0,0.35)]">
-        <div className="flex max-h-80 flex-col gap-2 overflow-y-auto p-2">
+        <div className="@container flex max-h-80 flex-col gap-2 overflow-y-auto p-2">
           {accounts.length === 0 && <EmptyPickerOption label="Add account" onNavigate={() => router.push("/accounts")} />}
           {groups.map((group) => (
             <div key={group.key} className="flex flex-col gap-1">
               <p className="px-1 pt-0.5 text-[10.5px] font-bold tracking-[0.08em] text-foreground/55 uppercase">{group.label}</p>
-              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+              {/* Columns follow the popover's own width (it matches the field), not the screen — so a narrow field never squeezes names. */}
+              <div className="grid grid-cols-1 gap-1.5 @min-[30rem]:grid-cols-2">
                 {group.items.map((a) => {
                   const isSelected = a.id === value;
                   return (
@@ -711,6 +711,12 @@ export function TransactionDetailsModal({
   // Previous descriptions for the typing autocomplete — built from data this form already receives, per kind.
   const autocompleteKind = kind === "income" ? "income" : "expense";
   const descriptionHistory = useMemo(() => buildDescriptionHistory(existingTransactions, autocompleteKind), [existingTransactions, autocompleteKind]);
+  // Which category the user chose per payee — built once per snapshot; typing only does map lookups.
+  const categoryHistory = useMemo(() => buildCategoryHistory(existingTransactions), [existingTransactions]);
+  // Auto-selected categories never beat the user: `categoryManualRef` flips on any manual pick/clear (and for an existing
+  // categorised transaction), `autoCategoryRef` is the id WE selected so a later, better auto-pick may replace only that.
+  const categoryManualRef = useRef(false);
+  const autoCategoryRef = useRef<string | null>(null);
 
   const amountRef = useRef<HTMLInputElement>(null);
   const descriptionRef = useRef<HTMLInputElement>(null);
@@ -767,6 +773,8 @@ export function TransactionDetailsModal({
       setAccountId(transaction.accountId);
       setDestinationAccountId("");
       setCategoryId(transaction.categoryId);
+      categoryManualRef.current = transaction.categoryId !== "";
+      autoCategoryRef.current = null;
       setExclude(transaction.excludeFromCalculations);
       setReassign(transaction.accountingMonth != null);
       setMonth(transaction.accountingMonth ?? transaction.dateTime);
@@ -793,6 +801,8 @@ export function TransactionDetailsModal({
       setViaApp("");
       // No category is pre-picked: description or category is enough, so an untouched picker means "uncategorized".
       setCategoryId("");
+      categoryManualRef.current = false;
+      autoCategoryRef.current = null;
       setExclude(false);
       setReassign(false);
       setMonth(new Date());
@@ -854,6 +864,14 @@ export function TransactionDetailsModal({
     suggestionsApply && categoryId === "" && description.trim() !== ""
       ? suggestCategoryForDescription({ description, kind: kind === "income" ? "income" : "expense", categories: filteredCategories })
       : null;
+  // Several plausible categories (the user's history for this payee disagrees): ranked chips instead of an auto-pick.
+  const rankedCategories =
+    suggestionsApply && categoryId === "" && description.trim() !== ""
+      ? (() => {
+          const intel = suggestCategoryIntel({ text: description, kind: autocompleteKind, categories: filteredCategories, history: categoryHistory });
+          return intel.confident ? [] : intel.ranked.filter((c) => !dismissedCategorySuggestions.includes(c.id)).slice(0, 2);
+        })()
+      : [];
   const shownCategorySuggestion = suggestedCategory != null && !dismissedCategorySuggestions.includes(suggestedCategory.id) ? suggestedCategory : null;
   const chosenCategory = categoryId !== "" ? filteredCategories.find((c) => c.id === categoryId) : undefined;
   const shownDescriptionSuggestion =
@@ -867,8 +885,21 @@ export function TransactionDetailsModal({
   const descListShown = descRows.length > 0;
   // Which row is highlighted: the user's arrow choice, else the first row when it directly continues the typed text.
   const descHighlight = !descListShown ? -1 : descActive >= 0 ? Math.min(descActive, descRows.length - 1) : descCompletion.preselect ? 0 : -1;
-  const acceptDescription = (text: string) => {
+  /** Pre-selects the category the text clearly points at — only while the user hasn't chosen one themselves. */
+  const applyAutoCategory = (text: string, preferredId?: string | null) => {
+    if (!suggestionsApply || categoryManualRef.current) return;
+    if (categoryId !== "" && categoryId !== autoCategoryRef.current) return;
+    const preferred = preferredId ? filteredCategories.find((c) => c.id === preferredId && c.isActive !== false) : undefined;
+    const intel = preferred ? null : suggestCategoryIntel({ text, kind: autocompleteKind, categories: filteredCategories, history: categoryHistory });
+    const pick = preferred ?? (intel?.confident ? intel.category : null);
+    if (pick && pick.id !== categoryId) {
+      setCategoryId(pick.id);
+      autoCategoryRef.current = pick.id;
+    }
+  };
+  const acceptDescription = (text: string, categoryOfRow?: string | null) => {
     setDescription(text);
+    applyAutoCategory(text, categoryOfRow);
     setDescListOpen(false);
     setDescActive(-1);
     setDescNavigated(false);
@@ -898,22 +929,10 @@ export function TransactionDetailsModal({
     transaction?.transferId != null && linkedTransferLegs.some((l) => l.deletedAt == null && l.type === "income" && accounts.find((a) => a.id === l.accountId)?.type === "card");
   const linkedTransferFee = linkedTransferId != null ? (existingTransactions.find((t) => t.id === transferFeeIdFor(linkedTransferId)) ?? null) : null;
 
-  // People settlement gate — only a new transfer paying the gated card. Obligations linked to that bill
-  // (by key, from the caller's readiness) gate it; nothing else about the person does.
-  const gateActive = !transaction && kind === "transfer" && peopleGate != null && peopleGate.accountId === destinationAccountId;
-  // Scoped to the amount actually being paid when the caller can (card: only the charges it reaches).
-  const gateReadiness = gateActive ? (peopleGate.readinessFor ? peopleGate.readinessFor(Number(amount) || 0) : peopleGate.readiness) : null;
-  const settlement = peopleSettlementGate(gateReadiness);
-  const gateLoading = gateActive && peopleGate.loading;
-  // "Pay the bill anyway": the user's explicit choice to pay the issuer while people's shares of this bill are still
-  // owed. Sent as the write gate's existing acknowledgement — it marks no share as received, allocates nothing, and
-  // the shares stay owed in People exactly as they are. Card bills only; never preselected.
-  const [payBillAnyway, setPayBillAnyway] = useState(false);
-  const canPayBillAnyway = gateActive && paysCardBill && settlement.blocked && !gateLoading;
-  const gatePeopleAck = canPayBillAnyway && payBillAnyway;
-  const gateBlocked = gateActive && (gateLoading || (settlement.blocked && !gatePeopleAck));
-  /** The footer's Settle action — where Enter / Ctrl+Enter / Save land while the payment is blocked. */
-  const settleCtaRef = useRef<HTMLAnchorElement>(null);
+  // A card bill payment never waits on People repayments: what people owe stays in the People Ledger on its own.
+  // The repository's write guard is satisfied with its existing acknowledgement — it marks no share as received
+  // and allocates nothing.
+  const gatePeopleAck = !transaction && kind === "transfer" && paysCardBill && peopleGate != null && peopleGate.accountId === destinationAccountId;
 
   // Live running total for the percentage split editor — percentages are always hand-typed and
   // must sum to 100, so this is a simple entered-vs-target check.
@@ -1138,12 +1157,6 @@ export function TransactionDetailsModal({
 
   async function handleSaveOnce() {
     if (saving || justSaved) return;
-    // People settlement gate: the bill payment can't be saved yet — no keyboard path bypasses it. Point at
-    // the exact next step instead (never a dead end).
-    if (gateBlocked) {
-      settleCtaRef.current?.focus();
-      return;
-    }
     const validationError = validate();
     if (validationError) {
       // No save: jump straight to the first invalid field (scrolled into view, focused) so the user can fix it.
@@ -1272,12 +1285,8 @@ export function TransactionDetailsModal({
             enforceFunds: true,
             cardStatementIntent,
             fee: ownTransfer ? transferFeeParams({ feeText: transferFee, chargedTo: feeChargedTo, feeCategoryId, viaApp }) : null,
-            // Only when the user chose "Pay the bill anyway" while shares are still owed — the shares stay owed in People.
             peopleGateAcknowledgement: gatePeopleAck
-              ? {
-                  acknowledgedUnsettledPeople: true,
-                  reason: `Card bill paid before collecting ${formatCurrencyPrecise(settlement.outstanding)} from ${settlement.attention.map((p) => p.personName).join(", ")}`,
-                }
+              ? { acknowledgedUnsettledPeople: true, reason: "Card bill paid independently of People repayments" }
               : null,
           });
         } else {
@@ -1627,13 +1636,6 @@ export function TransactionDetailsModal({
             className="contents"
             noValidate
             onKeyDown={(e) => {
-              // Bill payment blocked on People: Enter in a field goes to the Settle step — never a submit underneath.
-              // (A field's own Enter handling — e.g. Amount stepping to an empty Description — still runs first.)
-              if (gateBlocked && e.key === "Enter" && !e.defaultPrevented && !e.shiftKey && !e.nativeEvent.isComposing && e.target instanceof HTMLInputElement) {
-                e.preventDefault();
-                settleCtaRef.current?.focus();
-                return;
-              }
               handleEnterAdvance(e);
             }}
             onSubmit={(e) => {
@@ -2055,6 +2057,7 @@ export function TransactionDetailsModal({
                     value={description}
                     onChange={(e) => {
                       setDescription(e.target.value);
+                      applyAutoCategory(e.target.value);
                       setDescListOpen(true);
                       setDescActive(-1);
                       setDescNavigated(false);
@@ -2070,10 +2073,10 @@ export function TransactionDetailsModal({
                         setDescActive(e.key === "ArrowDown" ? (descHighlight >= last ? 0 : descHighlight + 1) : descHighlight <= 0 ? last : descHighlight - 1);
                       } else if (e.key === "Tab" && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && descHighlight >= 0) {
                         e.preventDefault(); // Tab accepts the ready completion; the next Tab moves on as usual
-                        acceptDescription(descRows[descHighlight].text);
+                        acceptDescription(descRows[descHighlight].text, descRows[descHighlight].categoryId);
                       } else if (e.key === "Enter" && descNavigated && descHighlight >= 0 && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
                         e.preventDefault(); // only after arrowing to a row — a plain Enter keeps moving to the next field
-                        acceptDescription(descRows[descHighlight].text);
+                        acceptDescription(descRows[descHighlight].text, descRows[descHighlight].categoryId);
                       }
                     }}
                     placeholder={kind === "income" ? "e.g. Salary, Freelance payment" : kind === "transfer" ? (paysCardBill ? "e.g. Card bill payment" : "e.g. Savings sweep") : "e.g. Blue Tokai Coffee"}
@@ -2106,7 +2109,7 @@ export function TransactionDetailsModal({
                             // mousedown (not click) + preventDefault: the field keeps focus, so the list never blurs shut first.
                             onMouseDown={(e) => {
                               e.preventDefault();
-                              acceptDescription(row.text);
+                              acceptDescription(row.text, row.categoryId);
                               descriptionRef.current?.focus();
                             }}
                             className={cn(
@@ -2127,7 +2130,15 @@ export function TransactionDetailsModal({
                             {active && i === 0 && descCompletion.preselect && !descNavigated ? (
                               <kbd className="hidden shrink-0 rounded-[5px] border border-border-strong bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground sm:inline">Tab</kbd>
                             ) : (
-                              row.source !== "keyword" && <span className="shrink-0 text-[11px] text-muted-foreground">{row.source === "history" ? "Used before" : "Category"}</span>
+                              row.source !== "keyword" && (
+                                <span className="shrink-0 truncate text-[11px] text-muted-foreground" data-testid="description-row-meta">
+                                  {(() => {
+                                    const cat = row.categoryId ? filteredCategories.find((c) => c.id === row.categoryId)?.name : null;
+                                    const label = row.source === "history" ? "Used before" : row.source === "merchant" ? "Known merchant" : "Category";
+                                    return cat && row.source !== "category" ? `${cat} · ${label}` : label;
+                                  })()}
+                                </span>
+                              )
                             )}
                           </li>
                         );
@@ -2146,6 +2157,21 @@ export function TransactionDetailsModal({
                   onDismiss={() => setDismissedCategorySuggestions((list) => [...list, shownCategorySuggestion.id])}
                 />
               )}
+              {!shownCategorySuggestion &&
+                rankedCategories.map((c) => (
+                  <SuggestionChip
+                    key={c.id}
+                    testId="category-ranked-suggestion"
+                    label="Category"
+                    value={c.name}
+                    applyLabel={`Use ${c.name} as the category`}
+                    onApply={() => {
+                      categoryManualRef.current = true;
+                      setCategoryId(c.id);
+                    }}
+                    onDismiss={() => setDismissedCategorySuggestions((list) => [...list, c.id])}
+                  />
+                ))}
               {shownDescriptionSuggestion && (
                 <SuggestionChip
                   testId="description-suggestion"
@@ -2163,7 +2189,10 @@ export function TransactionDetailsModal({
                       allowClear
                       categories={filteredCategories}
                       value={categoryId}
-                      onChange={setCategoryId}
+                      onChange={(id) => {
+                        categoryManualRef.current = true; // a manual pick or clear is final — typing never replaces it
+                        setCategoryId(id);
+                      }}
                       type={kind === "income" ? "income" : "expense"}
                     />
                   </FormRow>
@@ -2282,39 +2311,6 @@ export function TransactionDetailsModal({
                 />
                 <TransferEffectPreview effect={ownTransferEffect} source={sourceAccount} destination={destinationAccount} />
               </FormSection>
-            )}
-
-            {gateActive && (gateLoading || (gateReadiness?.people.length ?? 0) > 0) && (
-              <div className="px-4 py-4 sm:px-6">
-                <PeopleSettlementCard
-                  readiness={gateReadiness}
-                  gate={settlement}
-                  loading={gateLoading}
-                  dueLabel="Bill"
-                  subject="this card bill"
-                  payeeName={peopleGate.payeeName}
-                  returnTo={peopleGate.returnTo}
-                  canPayAnyway={canPayBillAnyway}
-                />
-                {canPayBillAnyway && (
-                  <label
-                    className={cn(
-                      "mt-2 flex cursor-pointer items-start gap-2.5 rounded-[8px] border px-3 py-2 transition-colors duration-150 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
-                      payBillAnyway ? "border-foreground bg-secondary" : "border-border-strong hover:bg-secondary/60",
-                    )}
-                    data-testid="gate-pay-anyway"
-                  >
-                    <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-[var(--color-primary)]" checked={payBillAnyway} onChange={(e) => setPayBillAnyway(e.target.checked)} />
-                    <span className="min-w-0 text-xs text-foreground">
-                      <span className="block text-[13px] font-semibold">Pay the bill now anyway</span>
-                      <span className="block text-[11.5px] text-foreground/75">
-                        {formatCurrencyPrecise(settlement.outstanding)} from {settlement.attention.map((p) => p.personName).join(", ")} stays owed to you in People — nothing is
-                        marked received.
-                      </span>
-                    </span>
-                  </label>
-                )}
-              </div>
             )}
 
             {kind === "expense" && (
@@ -2799,7 +2795,7 @@ export function TransactionDetailsModal({
               </motion.div>
             )}
           </AnimatePresence>
-          {view === "form" && !transaction && !gateBlocked && requiredChecks.length > 0 && (
+          {view === "form" && !transaction && requiredChecks.length > 0 && (
             <div className="flex shrink-0 items-center gap-3 border-t border-border bg-secondary/40 px-4 py-2 sm:px-6" aria-live="polite">
               <div className="flex shrink-0 gap-1" aria-hidden>
                 {requiredChecks.map((c) => (
@@ -2858,12 +2854,6 @@ export function TransactionDetailsModal({
                   <Button variant="ghost" size="sm" className="shrink-0 text-danger hover:bg-danger/10 hover:text-danger" onClick={() => setConfirmDeleteOpen(true)}>
                     <Trash2 className="size-3.5" /> {isCardBillPaymentRecord ? "Cancel recorded payment" : isTransferLeg ? "Delete Transfer" : "Delete"}
                   </Button>
-                ) : gateBlocked && settlement.next ? (
-                  // Step 1 is People, step 2 the bill — say why the bill can't be paid yet, in one line.
-                  <p className="min-w-0 flex-1 text-xs leading-snug font-medium text-foreground/85" data-testid="gate-reason">
-                    <span className="font-semibold text-foreground tabular-nums">{formatCurrencyPrecise(settlement.outstanding)}</span> of this bill is still owed by{" "}
-                    {settlement.attention.map((p) => p.personName).join(", ")}. Settle first, then pay the bill.
-                  </p>
                 ) : (
                   <FooterSummary
                     kind={kind}
@@ -2876,26 +2866,6 @@ export function TransactionDetailsModal({
                   <button type="button" className={cn(WS_GHOST, "h-10")} onClick={() => onOpenChange(false)} disabled={saving}>
                     Cancel
                   </button>
-                  {gateBlocked ? (
-                    // People settlement first: the bill payment stays unavailable, and the primary action is the
-                    // exact next step — never a bare "can't continue".
-                    settlement.next ? (
-                      <Link
-                        ref={settleCtaRef}
-                        href={peopleSettleHref(settlement.next.personId, settlement.next.obligationKey, peopleGate?.returnTo)}
-                        data-gate="settle"
-                        className={cn(WS_PRIMARY, "min-w-0 flex-1 sm:min-w-44 sm:flex-none")}
-                      >
-                        <span className="truncate">{paysCardBill ? `Settle with ${settlement.next.personName}` : settleCtaLabel(settlement)}</span>
-                        <ArrowRight className="size-3.5 shrink-0" aria-hidden />
-                      </Link>
-                    ) : (
-                      <button type="button" disabled className={cn(WS_PRIMARY, "min-w-0 flex-1 sm:min-w-36 sm:flex-none")}>
-                        <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                        <span className="truncate">Checking People…</span>
-                      </button>
-                    )
-                  ) : (
                   <button
                     type="submit"
                     className={cn(WS_PRIMARY, "h-10 min-w-0 flex-1 rounded-[8px] sm:flex-none sm:min-w-40", (saving || justSaved) && "disabled:opacity-80")}
@@ -2927,7 +2897,6 @@ export function TransactionDetailsModal({
                               : `Add ${KIND_META[kind].label}`}
                     </span>
                   </button>
-                  )}
                 </div>
               </>
             )}

@@ -413,6 +413,8 @@ export function RecordPaymentDialog({
         : null,
     defaultAccountId: accountId,
     noBalanceChange: earlier && !directPayer,
+    // "<Person> paid directly": their share starts as covered in full with no account change (not "Leave pending").
+    paidDirectly: directPayer && earlier,
     // The people's rows start on the date already given for the lender payment — not asked again from today's calendar.
     defaultDateOf: () => (earlier ? (dateUnknown ? null : earlierDate) : date),
   });

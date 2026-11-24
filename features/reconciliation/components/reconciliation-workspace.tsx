@@ -47,11 +47,9 @@ import {
   existingEntries,
   hasPossibleMatch,
   linkedRowsByRecord,
-  rowsCandidateFor,
-  type ExistingSheetMode,
 } from "../lib/merge-studio";
 import { buildExistingRecords } from "../lib/existing-records";
-import { accountHintsByRow, accountHintsForRow, suggestStatementAccounts, type AccountHint } from "../lib/account-hints";
+import { accountHintsByRow, suggestStatementAccounts, type AccountHint } from "../lib/account-hints";
 import { ownedAccountIdentities } from "../lib/internal-payment-guard";
 import { computeMatches, siblingAccountIdsFor, type ReconciliationData } from "../lib/analyze";
 import type { ApprovalDeps } from "../lib/approval-commit";
@@ -59,10 +57,9 @@ import { buildApprovalPlan } from "../lib/approval-plan";
 import { readinessCounts, type ReadinessCounts } from "../lib/readiness";
 import type { MatchState, ReconRow, RowDecision, RowMatch } from "../lib/types";
 import { ApprovalDialog } from "./approval-dialog";
-import { ExistingSheet } from "./existing-sheet";
+import { InlineMatchReview } from "./inline-match-review";
 import { MobileExistingList, MobileSheetSwitch, type MobileTab } from "./recon-mobile-compare";
 import { ImportConfirm, type ImportPatch } from "./import-confirm";
-import { SheetDivider, useSheetSplit } from "./sheet-divider";
 import { MatchPanel } from "./match-panel";
 import type { QuickAction } from "./recon-decision-menu";
 import { ReconAccountBar, type AccountOption, type AccountSuggestionView } from "./recon-header";
@@ -71,6 +68,8 @@ import { ReconIntake } from "./recon-intake";
 import { ReconMobileList } from "./recon-mobile-list";
 import { categoriesForDirection, ReconRowEditor, ReconRowSheet } from "./recon-row-editor";
 import { BulkImportDialog, Count, Figure, ReviewImportSummary, type SummaryCounts } from "./review-import-summary";
+import { autoReadyDecisions, withAutoReady } from "../lib/auto-ready";
+import { rowStatus, type RowStatus } from "../lib/row-status";
 import { ReviewToolbar } from "./review-toolbar";
 import { ReconTable } from "./recon-table";
 import { ReconToolbar, type ReconFilter, type ReconSort } from "./recon-toolbar";
@@ -103,6 +102,21 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   const [handoffNotice, setHandoffNotice] = useState<string | null>(null);
   const [replaceOpen, setReplaceOpen] = useState(false);
   const matchStatus: MatchStatus = !accountId ? "need_account" : sync.failed.length > 0 ? "error" : sync.loading.length > 0 ? "loading" : "ready";
+  const loadingActive = !!accountId && (matchStatus === "loading" || (matchStatus === "ready" && (sync.bills ?? "ready") === "loading"));
+  const loadingKey = loadingActive ? `${sync.loading.join(",")}|${sync.bills ?? ""}` : "";
+  // "Slow" is a real state, not an animation: after 8s of waiting the loading line says so and offers Retry.
+  const [slowKey, setSlowKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (!loadingActive) return;
+    const t = window.setTimeout(() => setSlowKey(loadingKey), 8000);
+    return () => {
+      window.clearTimeout(t);
+      setSlowKey(null);
+    };
+  }, [loadingActive, loadingKey]);
+  const slowLoading = loadingActive && slowKey === loadingKey;
+  const errorKey = `${sync.failed.join(",")}|${sync.bills ?? ""}`;
+  const [errorDismissedKey, setErrorDismissedKey] = useState<string | null>(null);
   const screenshot = screenshotFor(session?.fingerprint)?.capture ?? null;
   const isDesktop = useMediaQuery("(min-width: 1024px)");
 
@@ -122,13 +136,10 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   const [pendingAccount, setPendingAccount] = useState<string | null>(null);
   const [discardOpen, setDiscardOpen] = useState(false);
   const gridRef = useRef<HTMLDivElement>(null);
-  const existingGridRef = useRef<HTMLDivElement>(null);
-  const dualRef = useRef<HTMLDivElement>(null);
-  const { split, setSplit, bounds: splitRange } = useSheetSplit(dualRef);
-  // ---- dual-sheet state (view-only, never saved) ----
-  const [sheetMode, setSheetMode] = useState<ExistingSheetMode>("matches");
-  const [existingQuery, setExistingQuery] = useState("");
-  /** The FlowFi transaction picked in the right sheet — for one statement row; another row starts on its own default. */
+  /** The row whose inline match review is open under it (desktop). Always the selected row — see `inlineOpenId`. */
+  const [inlineId, setInlineId] = useState<string | null>(null);
+  // ---- inline review state (view-only, never saved) ----
+  /** The FlowFi transaction picked in the inline comparison — for one statement row; another row starts on its own default. */
   const [recordPick, setRecordPick] = useState<{ rowId: string; recordId: string } | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [undoNotice, setUndoNotice] = useState<string | null>(null);
@@ -222,7 +233,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
       const outcome = taken ? s.applySameCaptureHandoff(taken) : null;
       if (outcome) {
         const parts = [outcome.changed && `${outcome.changed} changed (their decisions were cleared)`, outcome.added && `${outcome.added} added`, outcome.removed && `${outcome.removed} removed`].filter(Boolean);
-        setHandoffNotice(parts.length ? `Updated from Smart Capture: ${parts.join(", ")}. Your other decisions are kept.` : "Back from Smart Capture — nothing changed, your decisions are kept.");
+        setHandoffNotice(parts.length ? `Updated from Smart Capture: ${parts.join(", ")}. Your other decisions are kept.` : null);
       }
     }
     // A different capture waits for the user's explicit choice (handoffConflict).
@@ -236,16 +247,45 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   const gate = useCallback((row: ReconRow): RowGateContext => ({ isCardAccount, cycle: row.date ? cycleOf(row.date) : null, ownedAccounts, isTransferLeg }), [isCardAccount, cycleOf, ownedAccounts, isTransferLeg]);
 
   const rows = useMemo(() => session?.rows ?? [], [session]);
-  const decisions = useMemo(() => session?.decisions ?? {}, [session]);
+  /** The user's own decisions (what is saved in the draft). */
+  const userDecisions = useMemo(() => session?.decisions ?? {}, [session]);
+  const categoryIndex = useMemo(() => merchantCategoryIndex(data.transactions, data.categories), [data.transactions, data.categories]);
+  // Card bills decide the closed-bill rule only; until they have loaded no row is called Ready (or imported).
+  const billsState = account?.type === "card" ? (sync.bills ?? "ready") : "ready";
+  const statusReady = matchStatus === "ready" && billsState === "ready";
+  /** Clean rows with no possible match are Ready by default — derived, never saved; an explicit decision always wins. */
+  const autoDecisions = useMemo(
+    () => (session && accountId && statusReady ? autoReadyDecisions({ rows, matches, decisions: userDecisions, gate, categoryIndex, categories: data.categories }) : {}),
+    [session, accountId, statusReady, rows, matches, userDecisions, gate, categoryIndex, data.categories],
+  );
+  const decisions = useMemo(() => withAutoReady(userDecisions, autoDecisions), [userDecisions, autoDecisions]);
+  /** Removes the derived default rows from a decisions map before it is saved, so only the user's own choices are stored. */
+  const userOnly = (d: Record<string, RowDecision>) => {
+    const out = { ...d };
+    for (const k of Object.keys(autoDecisions)) if (out[k] === autoDecisions[k]) delete out[k];
+    return out;
+  };
+  const approvalSession = useMemo(() => (session ? { ...session, decisions } : null), [session, decisions]);
   const numberOf = useCallback((rowId: string) => rows.findIndex((r) => r.id === rowId) + 1, [rows]);
-  const summary = useMemo(() => (session && matchStatus === "ready" ? reviewSummary(rows, matches, decisions, gate) : null), [session, matchStatus, rows, matches, decisions, gate]);
-  const readiness = useMemo(() => (session && matchStatus === "ready" ? readinessCounts(rows, matches, decisions, gate) : null), [session, matchStatus, rows, matches, decisions, gate]);
-  const plan = useMemo(() => (session && accountId && matchStatus === "ready" ? buildApprovalPlan({ rows, matches, decisions, gate }) : null), [session, accountId, matchStatus, rows, matches, decisions, gate]);
-  const approval = useReconciliationApproval({ uid, session, plan, account, liveData: data, dataReady: matchStatus === "ready", deps: approvalDeps });
+  const summary = useMemo(() => (session && statusReady ? reviewSummary(rows, matches, decisions, gate) : null), [session, statusReady, rows, matches, decisions, gate]);
+  const readiness = useMemo(() => (session && statusReady ? readinessCounts(rows, matches, decisions, gate) : null), [session, statusReady, rows, matches, decisions, gate]);
+  const plan = useMemo(() => (session && accountId && statusReady ? buildApprovalPlan({ rows, matches, decisions, gate }) : null), [session, accountId, statusReady, rows, matches, decisions, gate]);
+  const approval = useReconciliationApproval({ uid, session: approvalSession, plan, account, liveData: data, dataReady: statusReady, deps: approvalDeps });
   const period = useMemo(() => {
     const dates = rows.filter((r) => r.include && r.date).map((r) => r.date!.getTime());
     return dates.length ? { from: new Date(Math.min(...dates)), to: new Date(Math.max(...dates)) } : null;
   }, [rows]);
+
+  /** The row's one status — null until matching AND card bills have loaded (never claimed early). */
+  const statusFor = useCallback(
+    (row: ReconRow): RowStatus | null => {
+      if (matchStatus !== "ready") return null;
+      const st = rowStatus(row, matches.get(row.id), decisions, gate(row));
+      // Ready / Possible duplicate / Fix required could still change with the card bills; "skipped" cannot.
+      return statusReady || st?.kind === "skipped" ? st : null;
+    },
+    [matchStatus, statusReady, matches, decisions, gate],
+  );
 
   const filterOf = useCallback(
     (row: ReconRow): ReconFilter[] => {
@@ -272,9 +312,11 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
         const valid = decision.kind != null && decision.kind !== "investigate" && decisionErrors(row, match, decision, gate(row)).length === 0;
         out.push(valid ? "decided" : "open");
       }
+      const st = statusFor(row);
+      if (st) out.push(st.kind);
       return out;
     },
-    [matches, decisions, gate],
+    [matches, decisions, gate, statusFor],
   );
 
   // ---- Review & Import summary + bulk "Import new rows" (draft only) ----
@@ -287,7 +329,6 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     }).length;
     return { included: included.length, possibleDuplicates, toCheck: included.filter((r) => rowCheckLabel(r) != null).length, willImport: readiness?.proposedNew ?? 0 };
   }, [rows, matches, readiness]);
-  const categoryIndex = useMemo(() => merchantCategoryIndex(data.transactions, data.categories), [data.transactions, data.categories]);
   const bulkPlan = useMemo(
     () => (session && accountId && matchStatus === "ready" ? bulkImportPlan(rows, matches, decisions, gate, categoryIndex) : { rows: [], creditsLeft: 0 }),
     [session, accountId, matchStatus, rows, matches, decisions, gate, categoryIndex],
@@ -296,7 +337,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   const expenseCategoryNames = useMemo(() => categoriesForDirection(data.categories, "debit").map((c) => c.name), [data.categories]);
 
   const counts = useMemo(() => {
-    const c = { all: 0, open: 0, possible: 0, exact: 0, near: 0, multiple: 0, no_match: 0, in_inbox: 0, conflict: 0, imported: 0, decided: 0, excluded: 0 } satisfies Record<ReconFilter, number>;
+    const c = { all: 0, ready: 0, duplicate: 0, fix: 0, skipped: 0, open: 0, possible: 0, exact: 0, near: 0, multiple: 0, no_match: 0, in_inbox: 0, conflict: 0, imported: 0, decided: 0, excluded: 0 } satisfies Record<ReconFilter, number>;
     for (const row of rows) for (const f of filterOf(row)) c[f]++;
     return c;
   }, [rows, filterOf]);
@@ -364,18 +405,12 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     return visible[0]?.id ?? null;
   }, [selectedId, visible, rows]);
   const activeRow = rows.find((r) => r.id === activeId) ?? null;
+  // The inline review belongs to the selected row: moving the selection closes it (set during render, like openedFor).
+  if (inlineId && inlineId !== activeId) setInlineId(null);
+  const inlineOpenId = inlineId && inlineId === activeId ? inlineId : null;
   const activeMatch = activeId ? matches.get(activeId) : undefined;
   const activeDecision = activeId ? decisionFor(decisions, activeId) : null;
   const bulkPairs = useMemo(() => bulkLinkEligible(rows, matches, decisions), [rows, matches, decisions]);
-  /** Rows (other than the selected one) that still have an undecided possible match — the FlowFi sheet's "jump" list. */
-  const otherMatchRows = useMemo(() => foundMatches.filter((m) => m.rowId !== activeId).slice(0, 8), [foundMatches, activeId]);
-  /** The selected row's similar transactions on OTHER accounts (or on any account while none is chosen). */
-  const activeHints = useMemo(() => {
-    if (!activeRow || !recordsReady) return [] as AccountHint[];
-    if (!accountId) return (hintsByRow.get(activeRow.id) ?? []).slice(0, 12);
-    return matchStatus === "ready" ? accountHintsForRow(activeRow, records, { excludeAccountId: accountId, limit: 5 }) : [];
-  }, [activeRow, recordsReady, accountId, hintsByRow, matchStatus, records]);
-
   // ---- the Existing FlowFi sheet and the comparison dock (read-only views over the matcher's evidence) ----
   const linkedRows = useMemo(() => linkedRowsByRecord(rows, decisions), [rows, decisions]);
   const periodDays = useMemo(() => (period ? { fromDay: calendarDayIndex(period.from), toDay: calendarDayIndex(period.to) } : null), [period]);
@@ -384,9 +419,9 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   const entries = useMemo(
     () =>
       activeRow && accountId && sheetReady
-        ? existingEntries({ row: activeRow, match: activeMatch, records, accountId, period: periodDays, linkedRows, rejectedRecordIds: rejectedIds, rowNumberOf: numberOf, mode: sheetMode, query: existingQuery })
+        ? existingEntries({ row: activeRow, match: activeMatch, records, accountId, period: periodDays, linkedRows, rejectedRecordIds: rejectedIds, rowNumberOf: numberOf, mode: "matches" })
         : [],
-    [activeRow, activeMatch, records, accountId, sheetReady, periodDays, linkedRows, rejectedIds, numberOf, sheetMode, existingQuery],
+    [activeRow, activeMatch, records, accountId, sheetReady, periodDays, linkedRows, rejectedIds, numberOf],
   );
   // Every record the row could be compared with (unfiltered), so a search never loses the picked transaction.
   const allEntries = useMemo(
@@ -396,11 +431,6 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   const matchEntriesCount = activeMatch ? new Set([activeMatch.alreadyImportedId, ...activeMatch.candidates.map((c) => c.recordId), ...activeMatch.pendingSms.map((c) => c.recordId)].filter(Boolean)).size : 0;
   const targetId = recordPick && recordPick.rowId === activeId ? recordPick.recordId : defaultTargetId(activeMatch, activeDecision ?? undefined);
   const target = (targetId && allEntries.find((e) => e.record.id === targetId)) || null;
-  const highlightIds = useMemo(() => {
-    const ids = rowsCandidateFor(target?.record.id ?? null, matches);
-    if (activeId) ids.delete(activeId);
-    return ids;
-  }, [target, matches, activeId]);
 
   // Remember the row in focus for this tab — but only once the opening selection above has been settled, so a not-yet-ready
   // review never overwrites what it is about to restore.
@@ -432,10 +462,24 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     const timers = [window.setTimeout(settle, 240), window.setTimeout(settle, 520)];
     return () => timers.forEach((t) => window.clearTimeout(t));
   }, [inspectorOpen, activeId]);
-  const targetRecordId = target?.record.id ?? null;
+  // When the inline review opens (or its candidate / decision list changes height), keep the row and the panel's decision
+  // buttons inside the table's own scroll body — scrolling only that body, never the page, and never past the row's top.
   useEffect(() => {
-    if (targetRecordId) document.getElementById(`existing-row-${targetRecordId}`)?.scrollIntoView?.({ block: "nearest" });
-  }, [targetRecordId]);
+    if (!inlineOpenId) return;
+    const settle = () => {
+      const rowEl = document.getElementById(`recon-row-${inlineOpenId}`);
+      const panel = document.querySelector<HTMLElement>('[data-testid="inline-review"]');
+      const body = rowEl?.closest<HTMLElement>('[data-testid="recon-grid-body"]');
+      if (!rowEl || !panel || !body) return;
+      const b = body.getBoundingClientRect();
+      const r = rowEl.getBoundingClientRect();
+      const pn = panel.getBoundingClientRect();
+      if (pn.bottom > b.bottom) body.scrollTop += Math.min(pn.bottom - b.bottom + 4, Math.max(r.top - b.top, 0));
+      else if (r.top < b.top) body.scrollTop -= b.top - r.top;
+    };
+    const t = window.setTimeout(settle, 30);
+    return () => window.clearTimeout(t);
+  }, [inlineOpenId]);
 
   // ---- draft decisions, with Undo ----
   const remember = (label: string, next: Record<string, RowDecision>, rowIds: string[]) => {
@@ -447,6 +491,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   const decide = (rowId: string, patch: Partial<RowDecision>, label?: string) => {
     remember(label ?? `${patch.kind ? DECISION_META[patch.kind].short : "Change"} · row ${numberOf(rowId)}`, setDecision(decisions, rowId, patch), [rowId]);
     s.decide(rowId, patch);
+    if (patch.kind !== undefined) setInlineId((id) => (id === rowId ? null : id));
     if (patch.kind && autoNext && isDesktop && rowId === activeId && !inspectorOpen && !label?.startsWith("Details")) advanceAfter(rowId, patch.kind);
   };
   /** The next row still waiting for a decision after `rowId`, in statement order — wrapping round to the start. */
@@ -492,7 +537,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     const result = undoLast(history, decisions);
     if (!result.entry) return;
     setHistory(result.stack);
-    if (result.restored > 0) s.replaceDecisions(result.decisions);
+    if (result.restored > 0) s.replaceDecisions(userOnly(result.decisions));
     // Back to the row that was undone, so the decision can be revisited.
     const undone = result.entry.changes[0]?.rowId;
     if (undone && rows.some((r) => r.id === undone)) setSelectedId(undone);
@@ -505,6 +550,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   });
   const resetView = () => {
     setSelectedId(null);
+    setInlineId(null);
     setInspectorOpen(false);
     setLastBulk(null);
     setFilter("all");
@@ -544,8 +590,11 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   /** Compare a row with FlowFi: desktop focuses the Existing FlowFi sheet; phones open the row's sheet. */
   const compare = (rowId: string) => {
     setSelectedId(rowId);
-    if (isDesktop) requestAnimationFrame(() => existingGridRef.current?.focus());
-    else setCompareOpen(true);
+    if (isDesktop) {
+      // One workspace at a time: the editor sheet closes, the row's inline review opens (or closes on a second click).
+      setInspectorOpen(false);
+      setInlineId((id) => (id === rowId ? null : rowId));
+    } else setCompareOpen(true);
   };
   /** "Compare with FlowFi" from the row's sheet: one bottom workspace at a time — the sheet closes, the dock takes over. */
   const compareFromSheet = (rowId: string) => {
@@ -652,7 +701,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     let next = decisions;
     for (const c of choices) next = setDecision(next, c.rowId, { kind: "import_new", category: c.category, notSameAck: false });
     remember(`Import new · ${choices.length} row${choices.length === 1 ? "" : "s"}`, next, choices.map((c) => c.rowId));
-    s.replaceDecisions(next);
+    s.replaceDecisions(userOnly(next));
     setBulkImportOpen(false);
   }
 
@@ -670,7 +719,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
 
   // The next row that still needs a decision, after the one in focus (wrapping round), within the rows now showing.
   function goToNextOpen() {
-    const isOpen = (r: ReconRow) => filterOf(r).includes("open");
+    const isOpen = (r: ReconRow) => (statusReady ? filterOf(r).includes("duplicate") || filterOf(r).includes("fix") : filterOf(r).includes("open"));
     let pool = visible.filter(isOpen);
     if (pool.length === 0) {
       pool = rows.filter(isOpen);
@@ -746,60 +795,19 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
           e.preventDefault();
           move(-1);
           return;
-        case "ArrowRight":
-          // Across the spine into the Existing FlowFi sheet.
-          if (isDesktop) {
-            e.preventDefault();
-            existingGridRef.current?.focus();
-          }
-          return;
         case "Enter":
           if (activeRow) {
             e.preventDefault();
+            setInlineId(null);
             setInspectorOpen((open) => !open);
           }
           return;
         case "Escape":
           setInspectorOpen(false);
+          setInlineId(null);
           return;
         case "o":
-          if (activeRow && activeMatch) {
-            if (isDesktop) setCompareOpen(true);
-            else compare(activeRow.id);
-          }
-          return;
-      }
-    }
-    resolutionKey(e);
-  }
-
-  function onExistingKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
-    if (isTypingTarget(e.target)) return;
-    const idx = entries.findIndex((en) => en.record.id === targetRecordId);
-    const move = (delta: number) => {
-      const next = entries[Math.min(Math.max(idx + delta, 0), entries.length - 1)];
-      if (next && activeId) setRecordPick({ rowId: activeId, recordId: next.record.id });
-    };
-    if (!e.metaKey && !e.ctrlKey && !e.altKey) {
-      switch (e.key) {
-        case "ArrowDown":
-        case "j":
-          e.preventDefault();
-          move(idx < 0 ? 0 : 1);
-          return;
-        case "ArrowUp":
-        case "k":
-          e.preventDefault();
-          move(-1);
-          return;
-        case "ArrowLeft":
-        case "Escape":
-          e.preventDefault();
-          gridRef.current?.focus();
-          return;
-        case "Enter":
-          e.preventDefault();
-          if (activeRow && activeMatch) quickDecide(activeRow, activeMatch, "link");
+          if (activeRow && activeMatch) compare(activeRow.id);
           return;
       }
     }
@@ -811,6 +819,39 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     return <div className="h-40 animate-pulse rounded-3xl bg-muted/60" aria-label="Loading" />;
   }
 
+  /** The inline match review under a row (desktop): the matcher's candidates for THIS row, one comparison, four decisions. */
+  const inlineFor = (row: ReconRow) => {
+    const match = matches.get(row.id);
+    if (!match || !accountId || row.id !== activeId) return null;
+    const keepBoth = (patch: ImportPatch) => importRow(row, match, patch);
+    return (
+      <InlineMatchReview
+        row={row}
+        rowNumber={numberOf(row.id)}
+        match={match}
+        decision={decisionFor(decisions, row.id)}
+        gate={gate(row)}
+        entries={entries}
+        targetId={targetId}
+        onPick={(recordId) => setRecordPick({ rowId: row.id, recordId })}
+        accountName={accountName}
+        statementAccount={statementAccount}
+        captureSource={session?.source ?? "text"}
+        categories={data.categories}
+        onKeepExisting={(recordId) => keepExisting(row, recordId)}
+        onKeepBoth={keepBoth}
+        onImportNew={keepBoth}
+        onReviewLater={() => quickDecide(row, match, "investigate")}
+        onNotThisOne={(recordId) => {
+          reject(row.id, recordId);
+          setRecordPick(null);
+        }}
+        onClearDecision={() => quickDecide(row, match, "clear")}
+        onClose={() => setInlineId(null)}
+        onFullDetails={() => setCompareOpen(true)}
+      />
+    );
+  };
   const panelFor = (row: ReconRow, match: RowMatch) => {
     const at = visible.findIndex((r) => r.id === row.id);
     const go = (delta: number) => {
@@ -1056,18 +1097,34 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
         </section>
       )}
 
-      {session && accountId && matchStatus === "loading" && (
-        <p role="status" className="flex items-center gap-2 rounded-2xl bg-muted/60 px-4 py-2.5 text-sm text-muted-foreground" data-testid="records-loading">
-          <Loader2 className="size-4 shrink-0 animate-spin" /> Loading your FlowFi {sync.loading.map(sourceLabel).join(", ")}… Matches appear once everything has loaded.
-        </p>
+      {session && accountId && (matchStatus === "loading" || (matchStatus === "ready" && billsState === "loading")) && (
+        <div role="status" data-testid="records-loading" data-phase={slowLoading ? "slow" : "loading"} className="flex shrink-0 items-center gap-2 rounded-lg bg-muted/60 px-3 py-1 text-xs text-muted-foreground">
+          <Loader2 className="size-3.5 shrink-0 animate-spin" />
+          <span className="min-w-0 flex-1 truncate">
+            {matchStatus === "loading" ? `Loading your FlowFi ${sync.loading.map(sourceLabel).join(", ")}… Your rows are shown; matches fill in as soon as these load.` : "Matches are ready. Checking card bills before statuses and import are shown…"}
+            {slowLoading ? " This is taking longer than usual." : ""}
+          </span>
+          {slowLoading && (
+            <button type="button" onClick={sync.retry} data-testid="records-retry" className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md px-2 font-medium text-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+              <RefreshCw className="size-3" /> Retry
+            </button>
+          )}
+        </div>
       )}
-      {session && accountId && matchStatus === "error" && (
-        <div role="alert" className="flex flex-wrap items-center gap-2 rounded-2xl border border-danger/30 bg-danger/10 px-4 py-2.5 text-sm text-danger" data-testid="records-error">
-          <TriangleAlert className="size-4 shrink-0" />
-          <span className="min-w-0 flex-1">Couldn&apos;t load your FlowFi {sync.failed.map(sourceLabel).join(", ")}, so rows can&apos;t be compared — nothing is shown as &quot;No match&quot; until this works.</span>
-          <ClayButton size="sm" variant="secondary" onClick={sync.retry}>
-            <RefreshCw className="size-3.5" /> Retry
-          </ClayButton>
+      {session && accountId && (matchStatus === "error" || billsState === "failed") && errorDismissedKey !== errorKey && (
+        <div role="alert" className="flex shrink-0 items-center gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-1.5 text-xs text-danger" data-testid="records-error">
+          <TriangleAlert className="size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1">
+            {matchStatus === "error"
+              ? `Couldn't load your FlowFi ${sync.failed.map(sourceLabel).join(", ")}, so rows can't be compared — nothing is shown as "No match" until this works.`
+              : "Couldn't load your card bills — matches are shown, but statuses and import are paused until they load."}
+          </span>
+          <button type="button" onClick={sync.retry} data-testid="records-retry" className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md px-2 font-medium hover:bg-danger/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+            <RefreshCw className="size-3" /> Retry
+          </button>
+          <button type="button" aria-label="Dismiss" onClick={() => setErrorDismissedKey(errorKey)} className="grid size-5 shrink-0 place-items-center rounded-full hover:bg-danger/10">
+            <X className="size-3" />
+          </button>
         </div>
       )}
 
@@ -1124,8 +1181,9 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
 
           {isDesktop ? (
             <>
-              <div ref={dualRef} className="flex min-h-[12rem] min-w-0 flex-1" data-testid="dual-sheet">
-                <div className="min-h-0 min-w-0 shrink-0" style={{ flexBasis: `${split}%` }}>
+              {accountId && matchStatus === "ready" && <ReviewFilterStrip filter={filter} onFilter={setFilter} captured={rows.length} counts={counts} checking={!statusReady} />}
+              <div className="flex min-h-[12rem] min-w-0 flex-1" data-testid="review-sheet">
+                <div className="min-h-0 min-w-0 flex-1">
                   <ReconTable
                     ref={gridRef}
                     rows={visible}
@@ -1138,6 +1196,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
                     onToggleExpand={(id) => {
                       const closing = inspectorOpen && id === activeId;
                       setSelectedId(id);
+                      setInlineId(null);
                       setInspectorOpen(!closing);
                     }}
                     onFixRow={fixRow}
@@ -1145,44 +1204,21 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
                     pendingLabel={pendingLabel}
                     onKeyDown={onGridKeyDown}
                     quickActions={quickActionsFor}
-                    highlightIds={highlightIds}
                     accountMissing={accountMissing && recordsReady}
                     accountHintOf={accountHintOf}
+                    statusOf={statusFor}
+                    onRemove={(id) => {
+                      const r = rowsById.get(id);
+                      if (r) removeFromReview(r);
+                    }}
+                    inlineId={inlineOpenId}
+                    renderInline={inlineFor}
                     header={
                       <SheetTitleBar
-                        title="New statement"
+                        title="Statement review"
                         subtitle={`${session.source === "ocr" ? "Smart Capture screenshot" : "Pasted statement"} · ${rows.length} row${rows.length === 1 ? "" : "s"}${visible.length !== rows.length ? ` · ${visible.length} shown` : ""}`}
                       />
                     }
-                  />
-                </div>
-                <SheetDivider split={split} onSplit={setSplit} bounds={splitRange} containerRef={dualRef} linkCount={activeMatch && sheetReady ? matchEntriesCount : null} />
-                <div className="min-h-0 min-w-0 flex-1">
-                  <ExistingSheet
-                    ref={existingGridRef}
-                    entries={entries}
-                    mode={sheetMode}
-                    onMode={setSheetMode}
-                    query={existingQuery}
-                    onQuery={setExistingQuery}
-                    row={activeRow}
-                    rowNumber={activeRow ? numberOf(activeRow.id) : null}
-                    selectedRecordId={targetRecordId}
-                    onSelect={(recordId) => activeId && setRecordPick({ rowId: activeId, recordId })}
-                    accountLabel={statementAccount || "No account chosen"}
-                    numberOf={numberOf}
-                    onKeyDown={onExistingKeyDown}
-                    pendingLabel={sheetPending}
-                    matchCount={matchEntriesCount}
-                    hints={activeHints}
-                    accountMissing={accountMissing && recordsReady}
-                    accountName={accountName}
-                    onUseAccount={chooseAccount}
-                    otherMatches={otherMatchRows}
-                    onJumpToRow={(rowId) => {
-                      if (!visible.some((r) => r.id === rowId)) setFilter("all");
-                      setSelectedId(rowId);
-                    }}
                   />
                 </div>
               </div>
@@ -1226,7 +1262,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
             readiness={readiness}
             canApprove={approval.canOpen}
             hasAccount={!!accountId}
-            onApprove={approval.open}
+            onApprove={() => void approval.importNow()}
             onNextOpen={goToNextOpen}
             onUndo={undo}
             undoLabel={lastRemoved ? `Removed row ${numberOf(lastRemoved)}` : (history.at(-1)?.label ?? null)}
@@ -1422,12 +1458,12 @@ function ReadinessBar({
     ? [
         { key: "included", label: "Included", value: readiness.included, tone: "default" },
         { key: "already-recorded", label: "Keep existing", value: readiness.alreadyRecorded, tone: "success" },
-        { key: "add-new", label: "Import new", value: readiness.proposedNew, tone: "primary" },
+        { key: "add-new", label: "Ready", value: readiness.proposedNew, tone: "primary" },
         { key: "imported-earlier", label: "Imported earlier", value: readiness.alreadyImported, tone: "success", hideZero: true },
         { key: "skipped", label: "Skipped", value: readiness.skipped, tone: "default" },
         { key: "inbox", label: "Left for Inbox", value: readiness.inbox, tone: "default", hideZero: true },
         { key: "review-later", label: "Review later", value: readiness.reviewLater, tone: readiness.reviewLater > 0 ? "warning" : "default" },
-        { key: "undecided", label: "Needs review", value: readiness.unresolved, tone: "default" },
+        { key: "undecided", label: "To resolve", value: readiness.unresolved, tone: "default" },
         { key: "blocked", label: "Blocked by rules", value: readiness.blocked, tone: readiness.blocked > 0 ? "danger" : "default" },
       ]
     : [];
@@ -1439,9 +1475,9 @@ function ReadinessBar({
       ? "Waiting for your FlowFi records before anything can be compared."
       : canApprove
         ? readiness.proposedNew > 0
-          ? `Final approval would add ${readiness.proposedNew} new transaction${readiness.proposedNew === 1 ? "" : "s"}; kept-existing, skipped and Inbox rows are never written. Nothing is written until you confirm in the next step.`
-          : "Final approval would add nothing new — kept-existing, skipped and Inbox rows are never written."
-        : `${open} row${open === 1 ? "" : "s"} still need${open === 1 ? "s" : ""} a decision before final approval. Nothing is written to FlowFi while you review.`;
+          ? `Import adds ${readiness.proposedNew} new transaction${readiness.proposedNew === 1 ? "" : "s"}; kept-existing, skipped and Inbox rows are never written. Every row is re-checked against FlowFi first.`
+          : "Nothing to import — kept-existing, skipped and Inbox rows are never written."
+        : `${open} row${open === 1 ? "" : "s"} still need${open === 1 ? "s" : ""} a decision before importing. Nothing is written to FlowFi while you review.`;
   const HintIcon = canApprove ? CheckCircle2 : Info;
 
   if (desktop) {
@@ -1531,11 +1567,11 @@ function ReadinessBar({
             )}
             {open > 0 && (
               <ClayButton size="sm" variant="secondary" className="h-7 px-2 text-xs" onClick={onNextOpen} data-testid="next-open" aria-label={`Go to next row that needs a decision (${open} left)`} title="Next row that still needs a decision (U)">
-                <ArrowDownToLine className="size-3.5" /> Next undecided
+                <ArrowDownToLine className="size-3.5" /> Next to resolve
               </ClayButton>
             )}
-            <ClayButton size="sm" className="h-7 px-2.5 text-xs" variant={canApprove ? "primary" : "secondary"} onClick={onApprove} disabled={!canApprove} data-testid="open-approval" title={hint}>
-              {readiness && readiness.proposedNew > 0 ? `Import ${readiness.proposedNew} transaction${readiness.proposedNew === 1 ? "" : "s"}…` : "Finish review…"}
+            <ClayButton size="sm" className="h-7 px-2.5 text-xs" variant={canApprove ? "primary" : "secondary"} onClick={onApprove} disabled={!canApprove || !readiness || readiness.proposedNew === 0} data-testid="open-approval" title={hint}>
+              {`Import ${readiness?.proposedNew ?? 0} transaction${readiness?.proposedNew === 1 ? "" : "s"}`}
             </ClayButton>
           </div>
         )}
@@ -1602,8 +1638,8 @@ function ReadinessBar({
                 <span className="hidden sm:inline">Next undecided</span>
               </ClayButton>
             )}
-            <ClayButton size="sm" variant={canApprove ? "primary" : "secondary"} onClick={onApprove} disabled={!canApprove} data-testid="open-approval">
-              {readiness && readiness.proposedNew > 0 ? `Import ${readiness.proposedNew} transaction${readiness.proposedNew === 1 ? "" : "s"}…` : "Finish review…"}
+            <ClayButton size="sm" variant={canApprove ? "primary" : "secondary"} onClick={onApprove} disabled={!canApprove || !readiness || readiness.proposedNew === 0} data-testid="open-approval">
+              {`Import ${readiness?.proposedNew ?? 0} transaction${readiness?.proposedNew === 1 ? "" : "s"}`}
             </ClayButton>
           </div>
         )}
@@ -1632,6 +1668,15 @@ function SheetTitleBar({ title, subtitle }: { title: string; subtitle: string })
 
 /** A slim one-line status notice (restored review, handoff, fullscreen fallback) — never a banner card. */
 function Notice({ children, onDismiss, testId, icon: Icon = History }: { children: React.ReactNode; onDismiss: () => void; testId?: string; icon?: typeof History }) {
+  // Informational only: it goes away by itself after a few seconds (the X still works).
+  const dismissRef = useRef(onDismiss);
+  useEffect(() => {
+    dismissRef.current = onDismiss;
+  });
+  useEffect(() => {
+    const t = window.setTimeout(() => dismissRef.current(), 6000);
+    return () => window.clearTimeout(t);
+  }, []);
   return (
     <div role="status" className="flex min-h-7 shrink-0 items-center gap-2 rounded-lg bg-primary/10 px-2.5 py-0.5 text-xs text-foreground" data-testid={testId}>
       <Icon className="size-3.5 shrink-0 text-primary-accent-text" />
@@ -1648,4 +1693,44 @@ function handoffNoticeText(rows: ReconRow[]): string {
   const included = rows.filter((r) => r.include);
   const toCheck = included.filter((r) => !isComplete(r) || openIssues(r).length > 0).length;
   return `${included.length} row${included.length === 1 ? "" : "s"} arrived from Smart Capture${toCheck > 0 ? ` — ${toCheck} need${toCheck === 1 ? "s" : ""} a check before import` : ", all read clearly"}.`;
+}
+
+/**
+ * One compact line above the statement table: the review summary AND the focus filters in a single control, so the
+ * counts and the filter can never disagree (both come from the same `filterOf`). Captured is every captured row;
+ * the rest are the live match / decision states.
+ */
+function ReviewFilterStrip({ filter, onFilter, captured, counts, checking }: { filter: ReconFilter; onFilter: (f: ReconFilter) => void; captured: number; counts: Record<ReconFilter, number>; checking: boolean }) {
+  const items: { key: ReconFilter; label: string; value: number; testId: string }[] = [
+    { key: "all", label: "All", value: captured, testId: "rf-all" },
+    { key: "duplicate", label: "Possible duplicates", value: counts.duplicate, testId: "rf-duplicate" },
+    { key: "fix", label: "Fix required", value: counts.fix, testId: "rf-fix" },
+    { key: "ready", label: "Ready", value: counts.ready, testId: "rf-ready" },
+    { key: "skipped", label: "Skipped", value: counts.skipped, testId: "rf-skipped" },
+  ];
+  return (
+    <div role="group" aria-label="Review summary and filter" data-testid="review-filter-strip" className="flex shrink-0 flex-wrap items-center gap-1 px-0.5 text-xs">
+      <span className="mr-1 text-[11px] text-muted-foreground">
+        Captured <span className="font-semibold text-foreground tabular-nums" data-testid="rf-captured">{captured}</span>
+      </span>
+      {items.map((i) => (
+        <button
+          key={i.key}
+          type="button"
+          aria-pressed={filter === i.key}
+          onClick={() => onFilter(filter === i.key && i.key !== "all" ? "all" : i.key)}
+          data-testid={i.testId}
+          className={cn(
+            "inline-flex h-6 items-center gap-1.5 rounded-md border px-2 font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+            filter === i.key ? "border-foreground bg-foreground text-background" : "border-border-strong/60 bg-card text-foreground/80 hover:bg-muted",
+          )}
+        >
+          {i.label}
+          <span className={cn("tabular-nums", filter === i.key ? "text-background/80" : "text-muted-foreground")} data-testid={`${i.testId}-count`}>
+            {i.key === "all" || !checking ? i.value : "…"}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
 }

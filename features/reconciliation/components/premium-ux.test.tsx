@@ -79,7 +79,7 @@ function tripwire() {
 const rowEl = (id: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === id)!;
 const states = () => Object.fromEntries(screen.getAllByTestId("recon-row").map((r) => [r.dataset.rowId, r.dataset.state]));
 /** Desktop: the full comparison (MatchPanel) opens in a drawer (key O); phones show it in the row's sheet. */
-const panel = () => screen.queryByTestId("match-panel") ?? (fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "o" }), screen.getByTestId("match-panel"));
+const panel = () => screen.queryByTestId("match-panel") ?? (fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "o" }), fireEvent.click(screen.getByTestId("inline-full-details")), screen.getByTestId("match-panel"));
 const select = (id: string) => fireEvent.click(rowEl(id));
 const count = (key: string) => screen.getByTestId(`readiness-${key}`).querySelector("dd")!.textContent;
 
@@ -184,7 +184,7 @@ describe("readiness summary", () => {
     expect(within(panel()).getByTestId("import-blocked").textContent).toMatch(/Can't import/);
     fireEvent.click(within(panel()).getByRole("button", { name: "Skip this transaction" }));
     const hint = screen.getByTestId("approval-hint").textContent!;
-    expect(hint).toMatch(/Final approval would add 1 new transaction;/);
+    expect(hint).toMatch(/Import adds 1 new transaction;/);
     expect(hint).toMatch(/kept-existing, skipped and Inbox rows are never written/);
     expect(hint).not.toMatch(/\ball\b/i);
     expect(count("blocked")).toBe("0");
@@ -212,7 +212,7 @@ describe("draft-only editor and zero writes", () => {
     openImportConfirm();
     fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: "Food" } });
     fireEvent.click(screen.getByTestId("import-confirm-submit"));
-    expect(within(rowEl("r3")).getByTestId("decision-chip").textContent).toBe("Import new");
+    expect(within(rowEl("r3")).getByTestId("decision-chip").textContent).toBe("Ready");
     pick("SBI Savings");
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Change account" }));
     expect(readData).not.toHaveBeenCalled();
@@ -221,11 +221,11 @@ describe("draft-only editor and zero writes", () => {
 });
 
 describe("layout contracts", () => {
-  it("desktop: each sheet's body is its own scroll region; the progress bar is a fixed part of the workspace (not floating over rows)", () => {
+  it("desktop: the single sheet's body is its own scroll region; the progress bar is a fixed part of the workspace (not floating over rows)", () => {
     seed("acc-card");
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
     expect(screen.getByTestId("recon-grid-body").className).toMatch(/overflow-y-auto/);
-    expect(screen.getByTestId("existing-grid-body").className).toMatch(/overflow-y-auto/);
+    expect(screen.queryByTestId("existing-grid-body")).toBeNull(); // one sheet — no second scroll region
     const bar = screen.getByTestId("status-bar");
     expect(bar.className).toMatch(/shrink-0/);
     expect(bar.className).not.toMatch(/sticky/);

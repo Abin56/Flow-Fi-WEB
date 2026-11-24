@@ -131,7 +131,7 @@ export function useDashboardData() {
   const { standings: cardStandings, isLoading: cardStandingsLoading } = useCreditCardStandings();
 
   // Net Worth adds loan principal to account balances (Decision 6 — see `netWorthWithLoans`).
-  const { netWorth: netWorthAmount, sheet: balanceSheet, peoplePayable, peopleAdvanceHeld, assignedReceivable, emiDueReceivable, assignedDebt, unpaidLenderCharges, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
+  const { netWorth: netWorthAmount, sheet: balanceSheet, peoplePayable, peopleAdvanceHeld, peopleReceivable, assignedReceivable, emiDueReceivable, assignedDebt, unpaidLenderCharges, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
   // Billed lender charges: dated Net Worth events for the trend, and one-time expenses on their billed date for spend.
   const { charges: lenderCharges } = useLenderCharges();
   const lenderChargeEvents = useMemo(() => lenderChargeNetWorthEvents(lenderCharges), [lenderCharges]);
@@ -203,11 +203,12 @@ export function useDashboardData() {
       lenderChargeDebt: unpaidLenderCharges,
       assignedReceivable,
       emiDueReceivable,
+      peopleReceivable,
       // How much of the (legally mine) debt belongs to other people / is my own — a view on `debt`, never a change.
       assignedDebt: Math.min(assignedDebt, debt.total),
       myDebt: Math.max(composition.debt - Math.min(assignedDebt, debt.total), 0),
     };
-  }, [netWorthAmount, balanceSheet, peoplePayable, peopleAdvanceHeld, assignedReceivable, emiDueReceivable, assignedDebt, unpaidLenderCharges, lenderChargeEvents, accounts, creditCards, transactions, now]);
+  }, [netWorthAmount, balanceSheet, peoplePayable, peopleAdvanceHeld, peopleReceivable, assignedReceivable, emiDueReceivable, assignedDebt, unpaidLenderCharges, lenderChargeEvents, accounts, creditCards, transactions, now]);
 
   // --- Cash Flow (lib/engines/cash-flow.ts:cashFlowThisMonth via useCashFlowThisMonth) ---
   const cashFlow = useMemo(() => {

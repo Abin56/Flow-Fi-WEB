@@ -20,7 +20,7 @@ import { FOCUS_TOGGLE_TESTID } from "../hooks/use-focus-mode";
 import { FILTER_HINT, FILTER_LABEL, SHORTCUTS, SORT_LABEL, type ReconFilter, type ReconSort } from "./recon-toolbar";
 import { Count, type SummaryCounts } from "./review-import-summary";
 
-const FILTER_ORDER: ReconFilter[] = ["all", "open", "possible", "exact", "near", "multiple", "no_match", "in_inbox", "conflict", "imported", "decided", "excluded"];
+const FILTER_ORDER: ReconFilter[] = ["all", "duplicate", "fix", "ready", "skipped", "excluded"];
 
 function Divider() {
   return <span aria-hidden className="h-5 w-px shrink-0 bg-border" />;
@@ -72,7 +72,7 @@ export interface ReviewToolbarProps {
 
 export function ReviewToolbar(p: ReviewToolbarProps) {
   const filterActive = p.filter !== "all";
-  const filters = FILTER_ORDER.filter((f) => f === "all" || f === "open" || p.counts[f] > 0);
+  const filters = FILTER_ORDER.filter((f) => f === "all" || p.counts[f] > 0);
   return (
     <header className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-0.5 rounded-lg border border-border-strong/60 bg-card px-1.5 py-0.5" data-testid="workspace-header">
       <Link
@@ -92,29 +92,6 @@ export function ReviewToolbar(p: ReviewToolbarProps) {
         <>
           <Divider />
           <div className="flex shrink-0 items-center gap-1 text-[11px]" aria-label="Review status">
-            <button
-              type="button"
-              onClick={() => p.onFilter(p.filter === "open" ? "all" : "open")}
-              aria-pressed={p.filter === "open"}
-              title={FILTER_HINT.open}
-              className={cn("inline-flex h-6 items-center gap-1 rounded-md px-1.5 font-medium transition-colors hover:bg-muted", p.filter === "open" ? "bg-foreground text-background hover:bg-foreground/90" : "text-foreground/75")}
-              data-testid="status-pending"
-            >
-              <span aria-hidden className={cn("size-1.5 rounded-full", p.filter === "open" ? "bg-current" : p.counts.open > 0 ? "bg-warning" : "bg-muted-foreground/50")} />
-              <span className="tabular-nums">{p.counts.open}</span> pending
-            </button>
-            <button
-              type="button"
-              onClick={() => p.onFilter(p.filter === "possible" ? "all" : "possible")}
-              aria-pressed={p.filter === "possible"}
-              title="Rows where FlowFi already has a transaction that could be the same one — check each before deciding."
-              className={cn("inline-flex h-6 items-center rounded-md px-1.5 transition-colors hover:bg-muted [&_dl]:contents [&_dt]:order-2 [&_dd]:order-1", p.filter === "possible" && "bg-foreground hover:bg-foreground/90 [&_*]:text-background!")}
-              data-testid="status-possible"
-            >
-              <dl className="flex items-baseline gap-1">
-                <Count label="possible matches" value={p.summary.possibleDuplicates} testId="summary-duplicates" tone={p.summary.possibleDuplicates > 0 ? "primary" : undefined} />
-              </dl>
-            </button>
             {p.summary.toCheck > 0 ? (
               <button
                 type="button"

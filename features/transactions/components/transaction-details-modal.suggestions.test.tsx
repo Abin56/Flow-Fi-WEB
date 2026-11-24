@@ -85,42 +85,43 @@ async function pickCategory(user: ReturnType<typeof userEvent.setup>, name: RegE
 }
 
 describe("category suggestion from the description", () => {
-  it("1–2. Coffee and Mandi suggest Food", async () => {
+  it("1–2. Coffee and Mandi pre-select Food automatically (no click)", async () => {
     const user = userEvent.setup();
     renderAdd();
     await user.type(descriptionInput(), "Coffee");
-    expect(categorySuggestion()?.textContent).toMatch(/Food/);
+    expect(categoryTrigger().textContent).toMatch(/Food/);
+    expect(categorySuggestion()).toBeNull();
     await user.clear(descriptionInput());
     await user.type(descriptionInput(), "Mandi");
-    expect(categorySuggestion()?.textContent).toMatch(/Food/);
+    expect(categoryTrigger().textContent).toMatch(/Food/);
   });
 
-  it("3. Apply updates the category selector, the chip goes away, and the save carries it", async () => {
+  it("3. the auto-selected category is what the save carries", async () => {
     const user = userEvent.setup();
     renderAdd();
     await user.type(amountInput(), "120");
     await user.type(descriptionInput(), "Coffee");
-    await user.click(screen.getByRole("button", { name: /use food as the category/i }));
-    expect(categorySuggestion()).toBeNull();
     expect(categoryTrigger().textContent).toMatch(/Food/);
     await user.keyboard("{Control>}{Enter}{/Control}");
     await waitFor(() => expect(actions.createTransaction).toHaveBeenCalledTimes(1));
     expect(actions.createTransaction.mock.calls[0][0]).toMatchObject({ type: "expense", amount: 120, description: "Coffee", categoryId: "food" });
   });
 
-  it("4. Dismiss hides it for good; the category stays manual and empty; saving is still uncategorized", async () => {
+  it("4. a manual category choice made after the auto-pick is never replaced while typing on", async () => {
     const user = userEvent.setup();
     renderAdd();
     await user.type(amountInput(), "120");
     await user.type(descriptionInput(), "Coffee");
-    await user.click(screen.getByRole("button", { name: /dismiss suggested category/i }));
-    expect(categorySuggestion()).toBeNull();
-    await user.type(descriptionInput(), " beans"); // typing on does not bring it back
-    expect(categorySuggestion()).toBeNull();
-    expect(categoryTrigger().textContent).toMatch(/Optional/);
+    expect(categoryTrigger().textContent).toMatch(/Food/);
+    await pickCategory(user, /Transport/);
+    await user.type(descriptionInput(), " beans");
+    await user.clear(descriptionInput());
+    await user.type(descriptionInput(), "Mandi"); // would auto-pick Food again if the manual pick were not protected
+    expect(categoryTrigger().textContent).toMatch(/Transport/);
     await user.keyboard("{Control>}{Enter}{/Control}");
     await waitFor(() => expect(actions.createTransaction).toHaveBeenCalledTimes(1));
-    expect(actions.createTransaction.mock.calls[0][0]).toMatchObject({ description: "Coffee beans", categoryId: "" });
+    expect(actions.createTransaction.mock.calls[0][0]).toMatchObject({ description: "Mandi" });
+    expect(actions.createTransaction.mock.calls[0][0].categoryId).not.toBe("food");
   });
 
   it("ambiguous or unknown text suggests nothing, and no category is ever pre-selected", async () => {
@@ -140,18 +141,15 @@ describe("category suggestion from the description", () => {
     expect(categoryTrigger().textContent).toMatch(/Transport/);
   });
 
-  it("8. Income vs Expense: income never gets an expense category; switching kind re-evaluates", async () => {
+  it("8. Income vs Expense: income never gets an expense category", async () => {
     const user = userEvent.setup();
     renderAdd();
-    await user.type(descriptionInput(), "Coffee");
-    expect(categorySuggestion()?.textContent).toMatch(/Food/);
     await user.click(screen.getByRole("button", { name: /^income/i }));
-    expect(categorySuggestion()).toBeNull();
+    await user.type(descriptionInput(), "Coffee");
+    expect(categoryTrigger().textContent).not.toMatch(/Food/);
     await user.clear(descriptionInput());
     await user.type(descriptionInput(), "Salary");
-    expect(categorySuggestion()?.textContent).toMatch(/Salary/);
-    await user.click(screen.getByRole("button", { name: /^expense/i }));
-    expect(categorySuggestion()).toBeNull();
+    expect(categoryTrigger().textContent).toMatch(/Salary/);
   });
 });
 

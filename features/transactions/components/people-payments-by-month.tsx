@@ -30,7 +30,7 @@ export function PeoplePaymentsByMonth({ transactions, personNameById }: { transa
     const quiet: PersonMonth[] = [...personNameById.keys()]
       .filter((id) => !byId.has(id))
       .sort((a, b) => (personNameById.get(a) ?? "").localeCompare(personNameById.get(b) ?? ""))
-      .map((personId) => ({ personId, received: 0, paid: 0, movements: [] }));
+      .map((personId) => ({ personId, received: 0, paid: 0, paidFor: 0, movements: [] }));
     // A person who moved money but is no longer listed still shows (named "Someone") so the total stays whole.
     return [...moved, ...quiet];
   }, [moved, personNameById]);
@@ -38,6 +38,7 @@ export function PeoplePaymentsByMonth({ transactions, personNameById }: { transa
   const nameOf = (id: string) => personNameById.get(id) ?? "Someone";
   const totalIn = moved.reduce((n, p) => n + p.received, 0);
   const totalOut = moved.reduce((n, p) => n + p.paid, 0);
+  const totalFor = moved.reduce((n, p) => n + p.paidFor, 0);
   const step = (d: number) => setMonth((m) => new Date(m.getFullYear(), m.getMonth() + d, 1));
   const arrow = "flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground";
   const cell = (v: number, tone: string) => (v > 0 ? <span className={cn("font-semibold", tone)}>{formatCurrency(v)}</span> : <span className="text-muted-foreground/40">—</span>);
@@ -50,7 +51,12 @@ export function PeoplePaymentsByMonth({ transactions, personNameById }: { transa
           <span className="min-w-[8.5rem] text-center text-sm font-semibold tabular-nums">{month.toLocaleDateString("en-IN", { month: "long", year: "numeric" })}</span>
           <button type="button" aria-label="Next month" onClick={() => step(1)} className={arrow}><ChevronRight className="size-4" /></button>
         </div>
-        <span className="text-[11px] text-muted-foreground">Actual money only · not income</span>
+        <span
+          className="text-[11px] text-muted-foreground"
+          title="Incoming = money they paid you. Outgoing = money you paid them directly. Paid for them = expenses you covered on their behalf (e.g. a card purchase they owe you for) — shown separately, never added to Outgoing."
+        >
+          Cash with each person · “Paid for them” is separate, not cash · not income
+        </span>
       </div>
 
       {rows.length === 0 ? (
@@ -63,6 +69,7 @@ export function PeoplePaymentsByMonth({ transactions, personNameById }: { transa
                 <th className={cn(TH, "text-left")}>Person</th>
                 <th className={cn(TH, "w-32 text-right sm:w-40")}>Incoming (Received)</th>
                 <th className={cn(TH, "w-32 text-right sm:w-40")}>Outgoing (Paid)</th>
+                <th className={cn(TH, "w-32 text-right sm:w-40")} title="Expenses you paid on their behalf — they owe you; not cash to them">Paid for them</th>
               </tr>
             </thead>
             <tbody className="tabular-nums">
@@ -86,17 +93,19 @@ export function PeoplePaymentsByMonth({ transactions, personNameById }: { transa
                       </td>
                       <td className={cn(TD, "text-right")}>{cell(p.received, "text-success")}</td>
                       <td className={cn(TD, "text-right")}>{cell(p.paid, "text-expense")}</td>
+                      <td className={cn(TD, "text-right")}>{cell(p.paidFor, "text-debt-text")}</td>
                     </tr>
                     {isOpen &&
                       p.movements.map((m) => (
                         <tr key={m.id} className="bg-secondary/30 text-[11.5px]" data-testid="tx-people-movement">
                           <td className={cn(TD, "pl-9")}>
                             <span className="inline-block w-14 text-muted-foreground">{m.date.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</span>
-                            <span className="font-medium">{m.dir === "in" ? "Received" : "Paid"}</span>
+                            <span className="font-medium">{m.dir === "in" ? "Received" : m.dir === "out" ? "Paid" : "Paid for them"}</span>
                             {m.note && <span className="text-muted-foreground"> · {m.note}</span>}
                           </td>
                           <td className={cn(TD, "text-right text-success")}>{m.dir === "in" ? formatCurrency(m.amount) : ""}</td>
                           <td className={cn(TD, "text-right text-expense")}>{m.dir === "out" ? formatCurrency(m.amount) : ""}</td>
+                          <td className={cn(TD, "text-right text-debt-text")}>{m.dir === "for" ? formatCurrency(m.amount) : ""}</td>
                         </tr>
                       ))}
                   </Fragment>

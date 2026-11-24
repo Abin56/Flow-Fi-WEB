@@ -14,7 +14,8 @@ import type { ReconciliationData } from "../lib/analyze";
 import { DRAFT_KEY_PREFIX, buildReconciliationDraft, saveReconciliationDraft } from "../lib/reconciliation-draft";
 import { APPROVAL_NOW, reconData, reconRow, reconSession, txn } from "../lib/test-fixtures";
 import type { ReconRow, RowDecision } from "../lib/types";
-import { menuItem } from "./menu-test-utils";
+import { activeRowId, menuItem } from "./menu-test-utils";
+import type { Category } from "@/lib/models/category";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
 
 beforeAll(() => {
@@ -49,6 +50,10 @@ const ROWS: ReconRow[] = [
   reconRow({ id: "r4", day: OCT(21), description: "GYM", amount: 700 }),
 ];
 const DATA: ReconciliationData = reconData({
+  categories: [
+    { id: "c1", name: "Food", type: "expense", isActive: true, deletedAt: null } as unknown as Category,
+    { id: "c-other", name: "Other", type: "both", isActive: true, deletedAt: null } as unknown as Category,
+  ],
   transactions: [txn({ id: "t-sw", amount: 452, description: "Swiggy", dateTime: at(24) }), txn({ id: "t-am", amount: 1299.5, description: "Amazon Mktp", dateTime: at(23) })],
 });
 const NO_MATCH_DATA: ReconciliationData = reconData({ transactions: [] });
@@ -59,9 +64,16 @@ function seed(decisions: Record<string, Partial<RowDecision>> = {}) {
 }
 const open = (data = DATA) => render(<ReconciliationWorkspace uid="u1" data={data} sync={LOADED} />);
 const rowEl = (id: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === id)!;
-const comparing = () => screen.getByTestId("existing-comparing").dataset.rowId;
-const existingEl = (id: string) => screen.getAllByTestId("existing-row").find((r) => r.dataset.recordId === id)!;
-const existingIds = () => screen.queryAllByTestId("existing-row").map((r) => r.dataset.recordId);
+const comparing = () => activeRowId();
+/** The match chip opens the row's inline review. */
+const compare = (n: number) => fireEvent.click(screen.getByRole("button", { name: `Compare row ${n}` }));
+/** The FlowFi transactions the open inline review shows (the candidate list, or the single compared one). */
+const existingIds = () => {
+  const list = screen.queryAllByTestId("inline-candidate").map((r) => r.dataset.recordId);
+  if (list.length > 0) return list;
+  const one = screen.queryByTestId("inline-compare")?.dataset.recordId;
+  return one ? [one] : [];
+};
 const draftText = () => sessionStorage.getItem(`${DRAFT_KEY_PREFIX}u1`);
 
 describe("detected matches are visible on open", () => {
@@ -71,27 +83,27 @@ describe("detected matches are visible on open", () => {
     open();
     expect(comparing()).toBe("r2");
     expect(rowEl("r2").getAttribute("aria-selected")).toBe("true");
+    expect(existingIds()).toEqual([]); // nothing is expanded until the match chip is clicked
+    compare(2);
     expect(existingIds()).toEqual(["t-sw"]);
     expect(rowEl("r2").dataset.decision).toBe("");
     expect(draftText()).toBe(before); // viewing a match never edits the draft
   });
 
-  it("the right side is a compact list (Date · Description · Amount · Match) with no explanation block; a row with no match keeps the others one click away", () => {
+  it("one sheet, no second table: a row with a match expands in place under it; a row with no match says so", () => {
     seed();
     open();
-    expect(screen.queryByTestId("existing-heading")).toBeNull();
-    expect(screen.queryByTestId("existing-evidence")).toBeNull();
-    expect(within(screen.getByRole("grid", { name: "Existing FlowFi transactions" })).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Date", "Description", "Amount", "Match"]);
-    expect(existingIds()).toEqual(["t-sw"]);
-    expect(within(existingEl("t-sw")).getByText("Possible match")).toBeTruthy();
-
+    expect(screen.queryByTestId("existing-sheet")).toBeNull();
+    expect(screen.queryByRole("grid", { name: "Existing FlowFi transactions" })).toBeNull();
     fireEvent.click(rowEl("r1")); // no match for this one
-    expect(screen.getByTestId("existing-empty").textContent).toMatch(/No match for Row 1/);
-    expect(within(screen.getByTestId("existing-other-rows")).getAllByTestId("existing-other-row")).toHaveLength(2);
-    fireEvent.click(within(screen.getByTestId("existing-other-rows")).getByRole("button", { name: "Compare row 3" }));
-    expect(comparing()).toBe("r3");
+    compare(1);
+    expect(screen.getByTestId("inline-no-candidate").textContent).toMatch(/Nothing on this account looks like this row/);
+    // Opening another row's review replaces it — only one panel is ever open, directly under its row.
+    compare(3);
+    expect(screen.getAllByTestId("inline-review")).toHaveLength(1);
+    expect(rowEl("r3").nextElementSibling).toBe(screen.getByTestId("inline-review"));
     expect(existingIds()).toEqual(["t-am"]);
-    expect(within(existingEl("t-am")).getByTestId("existing-difference").textContent).toMatch(/0\.50/); // the difference is named, not hidden
+    expect(screen.getByTestId("inline-compare").textContent).toMatch(/0\.50/); // the difference is named, not hidden
   });
 
   it("deciding the match removes it from the stepper; with no matches anywhere there is no match heading", () => {
@@ -102,7 +114,6 @@ describe("detected matches are visible on open", () => {
     sessionStorage.removeItem("flowfi.recon.selectedRow"); // a fresh visit, not a return to r3
     seed();
     open(NO_MATCH_DATA);
-    expect(screen.queryByTestId("existing-other-rows")).toBeNull();
     expect(comparing()).toBe("r1");
   });
 
@@ -121,9 +132,11 @@ describe("detected matches are visible on open", () => {
     open();
     expect(within(rowEl("r2")).getByRole("button", { name: "Compare row 2" }).textContent).toBe("Possible match");
     expect(within(rowEl("r1")).getByRole("button", { name: "Compare row 1" }).textContent).toBe("No match");
-    expect(within(rowEl("r2")).getByTestId("decision-chip").textContent).toBe("Needs review");
-    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Needs review");
+    // One status per row: a possible match is a Possible duplicate; a clean row with no match is simply Ready.
+    expect(within(rowEl("r2")).getByTestId("decision-chip").textContent).toBe("Possible duplicate");
+    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Ready");
     expect(screen.queryByText("Undecided")).toBeNull();
+    expect(screen.queryByText("Needs review")).toBeNull();
   });
 });
 

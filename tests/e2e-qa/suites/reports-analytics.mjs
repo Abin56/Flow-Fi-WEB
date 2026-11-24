@@ -672,7 +672,8 @@ async function recordPayment(page, name, payLabel) {
   await card.click();
   await page.getByRole("button", { name: "Record Payment" }).click({ timeout: 90000 });
   const dlg = page.getByRole("dialog", { name: /Pay installment|Pay EMI/ });
-  await dlg.getByText("TO PAY LENDER").waitFor({ timeout: 90000 });
+  // The dialog's summary label differs by agreement kind ("To pay lender" / "Lender installment balance").
+  await dlg.getByText(/to pay lender|lender installment balance/i).first().waitFor({ timeout: 90000 });
   await dlg.getByText("Choose paying account").click();
   await page.getByRole("option", { name: /QA Bank/ }).click();
   await dlg.getByRole("button", { name: payLabel }).click();
@@ -882,6 +883,92 @@ scenario(
     chk("tab B Net worth KPI = Net worth today", close2(await kpi(b, "networth"), today), `${await kpi(b, "networth")} vs ${today}`);
     chk("tab B was not reloaded", (await b.evaluate(() => window.__noReload)) === "same-document");
     await b.close();
+  },
+  { viewport: { width: 1440, height: 900 } },
+);
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Round 4 (2026-11-24): a custom date range in the REAL pages, a loan collection with no schedule detail (never guessed),
+// the first window month must never leak into the range, and the CSV file equals the on-screen figures.
+// Synthetic emulator documents only (demo project).
+// ---------------------------------------------------------------------------------------------------------------------
+scenario(
+  "rpt-range-collect",
+  "Custom range on Analytics + Reports: KPI tiles = the range (not the window's first month), unsplit loan collection is flagged, CSV = screen",
+  async ({ page }, chk, notes) => {
+    const now = new Date();
+    const rangeMonth = new Date(now.getFullYear(), now.getMonth() - 8, 1); // quiet month far from the seeded data
+    const earlyMonth = new Date(now.getFullYear(), now.getMonth() - 19, 1); // first month of the 12-month window ending at rangeMonth
+    const at = (m, day) => new Date(m.getFullYear(), m.getMonth(), day, 12);
+    const bank = (await h.list("accounts")).find((a) => a.name === "QA Bank");
+    const cat = (await h.list("transactions")).find((t) => !t.deletedAt).categoryId;
+    const base = { notes: "", status: "posted", source: "manual", deletedAt: null, excludeFromCalculations: false, editHistory: [], transferId: null, emiId: null, loanId: null, isPersonLedgerMovement: false, linkedPersonId: null, owesPersonToggle: false, isBusiness: false, accountId: bank.id, categoryId: cat };
+    const tx = (id, f) => h.createDocUnderUser(`transactions/${id}`, { ...base, createdAt: f.dateTime, ...f });
+    await tx("rr_early_income", { type: "income", amount: 9999, dateTime: at(earlyMonth, 4), description: "RR early income" });
+    await tx("rr_income", { type: "income", amount: 4000, dateTime: at(rangeMonth, 3), description: "RR salary" });
+    await tx("rr_expense", { type: "expense", amount: 700, dateTime: at(rangeMonth, 5), description: "RR groceries" });
+    await tx("rr_collect", { type: "income", amount: 2200, dateTime: at(rangeMonth, 8), description: "RR loan collected", loanId: "rr-orphan-loan", paymentAllocationType: "regularEmi" });
+    await tx("rr_outside", { type: "expense", amount: 555, dateTime: at(rangeMonth, 15), description: "RR outside the range" });
+
+    // Independent expectation straight from the stored documents (the range is days 1-10 of rangeMonth).
+    const lo = new Date(rangeMonth.getFullYear(), rangeMonth.getMonth(), 1);
+    const hi = new Date(rangeMonth.getFullYear(), rangeMonth.getMonth(), 10, 23, 59, 59, 999);
+    const inRange = (await h.list("transactions")).filter((t) => !t.deletedAt && !t.excludeFromCalculations && !t.transferId && new Date(t.dateTime) >= lo && new Date(t.dateTime) <= hi);
+    const income = inRange.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
+    const spend = inRange.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+    notes.push(`documents in range: ${inRange.map((t) => `${t.id}:${t.type}:${t.amount}`).join(", ")}`);
+    chk("fixture is isolated: the range holds exactly my 3 documents (income 6,200 / expense 700)", inRange.length === 3 && income === 6200 && spend === 700, `${inRange.length} docs, income ${income}, spend ${spend}`);
+
+    const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const setRange = async () => {
+      await page.getByTestId("period-mode").getByText("Custom").first().click();
+      await page.getByTestId("period-label").click();
+      await page.getByTestId("range-from").fill(iso(lo));
+      await page.getByTestId("range-to").fill(iso(hi));
+      await page.getByTestId("range-apply").click();
+      await page.waitForTimeout(1500);
+    };
+
+    // ---- Analytics
+    await slowGo(page, "/analytics");
+    await page.getByTestId("an-metric-income-value").waitFor({ timeout: 60000 });
+    await page.waitForTimeout(2500);
+    await setRange();
+    const a = { income: await metric(page, "income"), outflow: await metric(page, "outflow"), mySpend: await metric(page, "mySpend"), net: await metric(page, "net") };
+    notes.push(`Analytics tiles: ${JSON.stringify(a)}`);
+    chk("Analytics Income tile = 6,200 for the custom range (NOT the window's first month 9,999)", a.income === 6200, String(a.income));
+    chk("Analytics Outflow = My spend = 700", a.outflow === 700 && a.mySpend === 700, JSON.stringify(a));
+    chk("Analytics Net = 5,500", a.net === 5500, String(a.net));
+    const incomeTile = await page.getByTestId("an-metric-income").innerText();
+    chk("Income tile says 2,200 of it is a loan collection that could not be split, earned 4,000", /2,200 loan collection not split/.test(incomeTile) && /earned ₹4,000/.test(incomeTile), incomeTile.replace(/\s+/g, " "));
+    chk("Income tile never claims principal / interest it cannot know", !/principal recovered|loan interest/.test(incomeTile));
+    chk("the period bar says custom range", /Custom range/.test(await page.getByTestId("period-basis").innerText()));
+    await h.shot(page, "rpt-range-analytics");
+
+    // ---- Reports (same range)
+    await slowGo(page, "/reports");
+    await page.getByTestId("kpi-income-value").waitFor({ timeout: 60000 });
+    await page.waitForTimeout(2500);
+    await setRange();
+    const r = { income: await kpi(page, "income"), outflow: await kpi(page, "outflow"), mySpend: await kpi(page, "myspend"), net: await kpi(page, "net") };
+    notes.push(`Reports KPIs: ${JSON.stringify(r)}`);
+    chk("Reports KPIs = Analytics tiles for the same range", r.income === a.income && r.outflow === a.outflow && r.mySpend === a.mySpend && r.net === a.net, JSON.stringify(r));
+    chk("Reports Income KPI = 6,200 and carries the unsplit-collection note", r.income === 6200 && /loan collection not split/.test(await page.getByTestId("kpi-income").innerText()));
+    const cashIn = Number(await page.getByTestId("rep-cash-in").locator("[data-value]").getAttribute("data-value"));
+    const cashOut = Number(await page.getByTestId("rep-cash-out").locator("[data-value]").getAttribute("data-value"));
+    chk("cash basis Money In 6,200 / Money Out 700 (collection is real cash in once)", cashIn === 6200 && cashOut === 700, `${cashIn} / ${cashOut}`);
+
+    // ---- CSV = screen
+    const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("rep-export").click()]);
+    const fs = await import("node:fs");
+    const csv = fs.readFileSync(await download.path(), "utf8");
+    const row = (label) => csv.split("\n").find((l) => l.includes(label)) ?? "";
+    const num = (label) => Number(row(label).split(",").slice(-2)[0]);
+    chk("CSV Income / Total outflow / My spend equal the KPIs", num("Income,") === r.income && num("Total outflow") === r.outflow && num("My spend") === r.mySpend, [row("Income,"), row("Total outflow"), row("My spend")].join(" | "));
+    chk("CSV: loan collection not split 2,200 · principal 0 · earned 4,000", num("not split") === 2200 && num("principal recovered") === 0 && num("earned income") === 4000, [row("not split"), row("principal recovered"), row("earned income")].join(" | "));
+    chk("CSV: cash money in / out equal the cash basis tiles", num("Cash money in") === cashIn && num("Cash money out") === cashOut);
+    chk("CSV header names the range", csv.includes(iso(lo)) && csv.includes(iso(hi)));
+    await h.shot(page, "rpt-range-reports");
   },
   { viewport: { width: 1440, height: 900 } },
 );

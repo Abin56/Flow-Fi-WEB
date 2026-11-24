@@ -36,6 +36,11 @@ export interface MatchContext {
   windowDays?: number;
 }
 
+/** Letters and digits only, upper-cased — the form `containsReference` compares in. */
+function normalizeReference(value: string | null | undefined): string {
+  return (value ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
 /** How far "Find another transaction" searches (and how far an explicit manual Link may reach). */
 export const MANUAL_LINK_WINDOW_DAYS = 31;
 
@@ -166,6 +171,19 @@ export function matchRows(rows: ReconRow[], ctx: MatchContext): RowMatch[] {
     if (row.include && d?.kind === "link" && d.linkedRecordId) claimedBy[d.linkedRecordId] ??= row.id;
   }
 
+  // Indexes built once per call: records by IST day, and the reference-normalised text of every other-account
+  // transaction (normalised once here instead of once per row).
+  const byDay = new Map<number, number[]>();
+  const indexById = new Map<string, number>();
+  const referenceHaystacks: { index: number; texts: string[] }[] = [];
+  ctx.records.forEach((record, index) => {
+    indexById.set(record.id, index);
+    const bucket = byDay.get(record.day);
+    if (bucket) bucket.push(index);
+    else byDay.set(record.day, [index]);
+    if (record.kind === "transaction" && !record.deleted && record.accountId !== ctx.accountId) referenceHaystacks.push({ index, texts: [normalizeReference(record.description), normalizeReference(record.notes)] });
+  });
+
   const candidatesByRow = new Map<string, MatchCandidate[]>();
   const smsByRow = new Map<string, MatchCandidate[]>();
   const notesByRow = new Map<string, RowNote[]>();
@@ -192,7 +210,21 @@ export function matchRows(rows: ReconRow[], ctx: MatchContext): RowMatch[] {
     const smsCandidates: MatchCandidate[] = [];
 
     const linkedId = ctx.decisions[row.id]?.kind === "link" ? ctx.decisions[row.id]!.linkedRecordId : null;
-    for (const record of ctx.records) {
+    // Only records that can matter for this row are visited, in their original order (so notes keep their order): the
+    // statement window ±windowDays (a record outside it can never be a candidate or a note), the record the user linked
+    // by hand (which may sit further out), and — only for a row with a reference number — other-account transactions
+    // carrying that reference. Same result as visiting every record, without the rows × records scan.
+    const picked = new Set<number>();
+    for (let d = -windowDays; d <= windowDays; d++) for (const i of byDay.get(rowDay + d) ?? []) picked.add(i);
+    if (linkedId) {
+      const i = indexById.get(linkedId);
+      if (i != null) picked.add(i);
+    }
+    const rowRefFull = normalizeReference(row.referenceNumber);
+    const rowRef = rowRefFull.length >= 4 ? rowRefFull : ""; // shorter references never match (see containsReference)
+    if (rowRef) for (const o of referenceHaystacks) if (o.texts.some((t) => t.includes(rowRef))) picked.add(o.index);
+    for (const index of [...picked].sort((a, b) => a - b)) {
+      const record = ctx.records[index]!;
       if (record.id === importedId) continue;
       const otherRowsImport = ownerOfImportedId.get(record.id);
       if (otherRowsImport != null && otherRowsImport !== row.id) continue;

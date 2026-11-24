@@ -126,7 +126,7 @@ export function Sparkline({ values, color, focusIndex, width = 96, height = 28 }
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="shrink-0 overflow-visible" aria-hidden>
       <path d={`${d} L${width},${height} L0,${height} Z`} fill={color} opacity={0.1} />
       <path d={d} fill="none" stroke={color} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={x(focusIndex)} cy={y(values[focusIndex] ?? 0)} r={3} fill={color} stroke="var(--card)" strokeWidth={1.5} />
+      {focusIndex >= 0 && focusIndex < values.length && <circle cx={x(focusIndex)} cy={y(values[focusIndex])} r={3} fill={color} stroke="var(--card)" strokeWidth={1.5} />}
     </svg>
   );
 }

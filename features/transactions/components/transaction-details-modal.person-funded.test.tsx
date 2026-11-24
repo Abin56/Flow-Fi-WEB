@@ -189,7 +189,7 @@ describe("Add Expense → Money I Borrowed → how did you borrow", () => {
     await waitFor(() => expect(actions.createPersonFundedExpense).toHaveBeenCalledTimes(1));
     const [person, params] = actions.createPersonFundedExpense.mock.calls[0] as unknown as [Person, Record<string, unknown>];
     expect(person.id).toBe("amma");
-    expect(params).toMatchObject({ amount: 1000, categoryId: "", description: "Restaurant" });
+    expect(params).toMatchObject({ amount: 1000, description: "Restaurant" });
     expect(params).not.toHaveProperty("accountId");
     expect(actions.createTransaction).not.toHaveBeenCalled();
     expect(actions.recordBorrowedCash).not.toHaveBeenCalled();

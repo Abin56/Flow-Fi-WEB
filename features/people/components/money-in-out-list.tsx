@@ -2,7 +2,9 @@
 
 import { ArrowDownLeft, ArrowUpRight, ChevronDown, ExternalLink, HandCoins, Pencil, Trash2, Undo2, Users } from "lucide-react";
 import Link from "next/link";
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { AccountChip } from "@/components/finance/account-chip";
+import { useAccounts } from "@/hooks/use-accounts";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { cn } from "@/lib/utils";
 
@@ -31,10 +33,14 @@ export interface MoneyItem {
   account: string | null;
   /** Recorded as already received before FlowFi tracked it — no account change. */
   earlier: boolean;
+  /** The person paid the lender directly: settles the share, never "already in my balance" and never a cash movement. */
+  direct?: boolean;
   /** A short status under the amount ("₹600 to receive", "Settled"). */
   caption: string | null;
   /** Link to the underlying transaction in Transactions, when there is one. */
   openHref: string | null;
+  /** Who shared a split expense and each share (display only). */
+  split?: { total: number; participants: { name: string; share: number; isMe: boolean; isThisPerson: boolean }[] };
   actions: { id: MoneyActionId; onClick: () => void }[];
   /** Shown under the row while it is being edited (the existing inline edit form). */
   extra?: ReactNode;
@@ -48,9 +54,9 @@ const ACTION = {
 } as const;
 
 // Same classes as the Transactions table (kept in sync by hand — they are private to that file).
-const TH =
+export const TH =
   "sticky top-0 z-[2] border-b border-r border-b-border-strong/70 border-r-border-strong/50 bg-secondary/90 px-2 py-1.5 text-left text-[10.5px] font-semibold tracking-[0.06em] whitespace-nowrap text-foreground/65 uppercase backdrop-blur last:border-r-0 sm:px-3";
-const TD = "border-b border-r border-b-border-strong/60 border-r-border-strong/40 px-2 py-[5px] align-middle last:border-r-0 sm:px-2.5";
+export const TD = "border-b border-r border-b-border-strong/60 border-r-border-strong/40 px-2 py-[5px] align-middle last:border-r-0 sm:px-2.5";
 const MONTH_BANDS = [
   "border-l-sky-500 from-sky-400/30 via-sky-300/15 to-sky-200/5 dark:from-sky-500/30 dark:via-sky-500/10 dark:to-transparent",
   "border-l-amber-500 from-amber-400/30 via-amber-300/15 to-amber-200/5 dark:from-amber-500/30 dark:via-amber-500/10 dark:to-transparent",
@@ -58,20 +64,28 @@ const MONTH_BANDS = [
   "border-l-emerald-500 from-emerald-400/30 via-emerald-300/15 to-emerald-200/5 dark:from-emerald-500/30 dark:via-emerald-500/10 dark:to-transparent",
 ] as const;
 const monthKey = (d: Date) => d.getFullYear() * 12 + d.getMonth();
-const ICON_BTN = "flex size-6 items-center justify-center rounded-full text-foreground/75 transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
+export const ICON_BTN ="flex size-6 items-center justify-center rounded-full text-foreground/75 transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
 const COLS = 6;
 
 const longDate = (d: Date) => d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 
-export function MoneyInOutList({ items, isLoading, empty }: { items: readonly MoneyItem[]; isLoading?: boolean; empty: ReactNode }) {
+export function MoneyInOutList({ items, isLoading, empty, maxRows }: { items: readonly MoneyItem[]; isLoading?: boolean; empty: ReactNode; /** Preview mode: only the newest N rows, and the table never scrolls on its own. */ maxRows?: number }) {
   const [openKey, setOpenKey] = useState<string | null>(null);
+  // Display only: the rows carry an account name; resolve it to the account so the same chip as Transactions can render.
+  const { data: accounts = [] } = useAccounts();
+  const accountByName = useMemo(() => {
+    const map = new Map<string, (typeof accounts)[number]>();
+    for (const a of accounts) if (!map.has(a.name)) map.set(a.name, a);
+    return map;
+  }, [accounts]);
   if (isLoading) return <div className="rounded-[10px] border border-border bg-card p-4 text-sm text-muted-foreground shadow-e1">Loading…</div>;
   if (items.length === 0) return <div className="rounded-[10px] border border-border bg-card shadow-e1">{empty}</div>;
-  const sorted = [...items].sort((a, b) => b.date.getTime() - a.date.getTime() || b.createdAt.getTime() - a.createdAt.getTime());
+  const everything = [...items].sort((a, b) => b.date.getTime() - a.date.getTime() || b.createdAt.getTime() - a.createdAt.getTime());
+  const sorted = maxRows != null ? everything.slice(0, maxRows) : everything;
 
   // Cash in / out per month for the month band (real cash only).
   const totals = new Map<number, { in: number; out: number }>();
-  for (const it of sorted) {
+  for (const it of everything) {
     if (it.kind !== "cash") continue;
     const m = totals.get(monthKey(it.date)) ?? { in: 0, out: 0 };
     m[it.dir] += it.amount;
@@ -79,14 +93,14 @@ export function MoneyInOutList({ items, isLoading, empty }: { items: readonly Mo
   }
 
   return (
-    <div data-testid="money-in-out-list" className="@container overflow-x-auto rounded-[10px] border border-border bg-card shadow-e1 sm:max-h-[calc(100dvh-16rem)] sm:overflow-y-auto sm:overscroll-contain">
+    <div data-testid="money-in-out-list" className={cn("@container overflow-x-auto rounded-[10px] border border-border bg-card shadow-e1", maxRows == null && "sm:max-h-[calc(100dvh-16rem)] sm:overflow-y-auto sm:overscroll-contain")}>
       <table className="isolate w-full border-separate border-spacing-0 text-sm">
         <thead>
           <tr>
             <th className={cn(TH, "w-[6.25rem]")}>Date</th>
             <th className={TH}>Description</th>
             <th className={cn(TH, "hidden w-32 md:table-cell")}>Type</th>
-            <th className={cn(TH, "hidden w-36 sm:table-cell")}>Account</th>
+            <th className={cn(TH, "hidden w-44 sm:table-cell")}>Account</th>
             <th className={cn(TH, "w-28 text-right sm:w-36")}>Amount</th>
             <th className={cn(TH, "w-[6.25rem]")}>
               <span className="sr-only sm:not-sr-only">Actions</span>
@@ -137,10 +151,12 @@ export function MoneyInOutList({ items, isLoading, empty }: { items: readonly Mo
                         <Icon className="size-3.5" strokeWidth={2.25} />
                       </span>
                       <div className="flex min-w-0 flex-1 items-center gap-2">
-                        <p className="min-w-[35%] shrink truncate text-[13px] leading-tight font-semibold text-foreground">{it.title}</p>
+                        {/* What the money was for leads; the Type column already says Received / Paid, so the generic title is only the fallback (and a small-screen hint, where Type is hidden). */}
+                        <p className="min-w-[35%] shrink truncate text-[13px] leading-tight font-semibold text-foreground">{it.description || it.title}</p>
                         <span className="truncate text-[11.5px] text-muted-foreground">
-                          {it.description}
-                          {it.earlier && <span>{it.description ? " · " : ""}already in balance</span>}
+                          {it.description && <span className="md:hidden">{it.title}</span>}
+                          {it.direct && <span>{it.description ? <span className="md:hidden"> · </span> : null}paid directly to lender · no account change</span>}
+                          {it.earlier && !it.direct && <span>{it.description ? <span className="md:hidden"> · </span> : null}already in balance</span>}
                           <span className="sm:hidden">{(it.description || it.earlier) && it.account ? " · " : ""}{it.account}</span>
                         </span>
                       </div>
@@ -153,10 +169,14 @@ export function MoneyInOutList({ items, isLoading, empty }: { items: readonly Mo
                     </span>
                   </td>
                   <td className={cn(TD, "hidden sm:table-cell")}>
-                    <p className="truncate text-xs text-foreground/85">{it.account ?? "—"}</p>
+                    {it.account && accountByName.get(it.account) ? (
+                      <AccountChip account={accountByName.get(it.account)!} />
+                    ) : (
+                      <p className="truncate text-xs text-foreground/85">{it.account ?? "—"}</p>
+                    )}
                   </td>
                   <td className={cn(TD, "text-right whitespace-nowrap")}>
-                    <p className={cn("text-[13.5px] font-semibold tabular-nums", cash ? (incoming ? "text-success" : "text-expense") : "text-foreground")}>
+                    <p className={cn("text-[13.5px] font-semibold tabular-nums", cash ? (incoming ? "text-success" : "text-expense") : incoming ? "text-foreground" : "text-expense")}>
                       {cash ? (incoming ? "+" : "−") : ""}
                       {money(it.amount)}
                     </p>
@@ -198,6 +218,35 @@ export function MoneyInOutList({ items, isLoading, empty }: { items: readonly Mo
                         <dd>{cash ? (incoming ? "Money received" : "Money paid") : incoming ? "Paid for you — you owe them" : "Paid for them — they owe you"}</dd>
                         {it.account && (<><dt className="text-muted-foreground">Account</dt><dd>{it.account}</dd></>)}
                         {it.description && (<><dt className="text-muted-foreground">Note</dt><dd>{it.description}</dd></>)}
+                        {it.split && (
+                          <>
+                            <dt className="text-muted-foreground">Split</dt>
+                            <dd data-testid="money-split">
+                              <table className="w-full max-w-sm border-collapse text-xs tabular-nums">
+                                <thead>
+                                  <tr className="text-[10.5px] tracking-wide text-muted-foreground uppercase">
+                                    <th className="border-b border-border-strong/50 py-1 pr-6 text-left font-semibold">Person</th>
+                                    <th className="border-b border-border-strong/50 py-1 pl-6 text-right font-semibold">Share</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {it.split.participants.map((p, k) => (
+                                    <tr key={k} className={cn(p.isThisPerson && "font-semibold text-foreground")}>
+                                      <td className="border-b border-border-strong/30 py-1 pr-6 text-left">{p.name}</td>
+                                      <td className="border-b border-border-strong/30 py-1 pl-6 text-right">{money(p.share)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                                <tfoot>
+                                  <tr className="font-semibold text-foreground">
+                                    <td className="py-1 pr-6 text-left">Total</td>
+                                    <td className="py-1 pl-6 text-right">{money(it.split.total)}</td>
+                                  </tr>
+                                </tfoot>
+                              </table>
+                            </dd>
+                          </>
+                        )}
                         {it.caption && (<><dt className="text-muted-foreground">Status</dt><dd>{it.caption}</dd></>)}
                         {it.openHref && (
                           <>

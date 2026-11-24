@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { formatCurrencyPrecise } from "@/lib/format";
 import type { Account } from "@/lib/models/account";
 import type { CreditCardProfile } from "@/lib/models/credit-card";
+import type { RowStatus, RowStatusKind } from "../lib/row-status";
 import type { DecisionKind, ExistingOrigin, ExistingOwner, MatchState, MerchantStrength, ReconRow } from "../lib/types";
 
 type Tone = "neutral" | "primary" | "warning" | "danger" | "success" | "purple" | "muted";
@@ -168,6 +169,35 @@ export function DecisionChip({ kind, keepBoth = false }: { kind: DecisionKind | 
     <span data-testid="decision-chip" data-pending="false" title={meta.label} className={cn("inline-flex max-w-full min-w-0 items-center gap-1.5 text-[12px] leading-4 font-medium", TONE_TEXT[meta.tone === "primary" ? "primary" : meta.tone])}>
       <Icon className="size-3.5 shrink-0" aria-hidden />
       <span className="truncate">{decisionShort(kind, keepBoth)}</span>
+    </span>
+  );
+}
+
+/**
+ * The row's single status — Ready · Possible duplicate · Fix required · Skipped (see lib/row-status.ts). Quiet text
+ * with a small mark, like the rest of the sheet. `data-pending` stays true for the two states that still need the user.
+ */
+const STATUS_STYLE: Record<RowStatusKind, { tone: Tone; icon: LucideIcon }> = {
+  ready: { tone: "success", icon: CheckCircle2 },
+  duplicate: { tone: "primary", icon: Copy },
+  fix: { tone: "warning", icon: TriangleAlert },
+  skipped: { tone: "muted", icon: EyeOff },
+};
+
+export function StatusChip({ status }: { status: RowStatus | null }) {
+  if (!status) {
+    return (
+      <span data-testid="decision-chip" data-pending="true" data-status="checking" title="Matching isn't finished yet — no status is shown until it is." className="inline-flex items-center gap-1.5 text-[12px] leading-4 text-muted-foreground">
+        <span aria-hidden className="size-1.5 shrink-0 animate-pulse rounded-full bg-muted-foreground/50" />
+        <span className="truncate">Checking…</span>
+      </span>
+    );
+  }
+  const { tone, icon: Icon } = STATUS_STYLE[status.kind];
+  return (
+    <span data-testid="decision-chip" data-pending={status.kind === "duplicate" || status.kind === "fix" ? "true" : "false"} data-status={status.kind} title={status.reason} className={cn("inline-flex max-w-full min-w-0 items-center gap-1.5 text-[12px] leading-4 font-medium", TONE_TEXT[tone])}>
+      <Icon className="size-3.5 shrink-0" aria-hidden />
+      <span className="truncate">{status.label}</span>
     </span>
   );
 }

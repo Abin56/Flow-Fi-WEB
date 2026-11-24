@@ -2,7 +2,7 @@
  * Review & Import helpers: every per-transaction action lives in the statement row's ⋯ menu (there is no bottom dock).
  * Menu item ids: keep_existing · import · review_later · ignore_match · inbox · details · clear · remove · restore.
  */
-export const activeRowId = (page) => page.getByTestId("existing-comparing").getAttribute("data-row-id");
+export const activeRowId = (page) => page.locator('[data-testid="recon-row"][aria-selected="true"]').first().getAttribute("data-row-id");
 
 export const rowLoc = (page, rowId) => page.locator(`[data-testid="recon-row"][data-row-id="${rowId}"]`);
 

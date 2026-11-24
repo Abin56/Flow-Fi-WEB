@@ -43,7 +43,7 @@ afterEach(() => {
 });
 
 const ACCOUNTS = [{ id: "acc-card", name: "QA Card", type: "card", deletedAt: null, accountNumberLast4: "4242" } as unknown as Account];
-const CATEGORIES = [{ id: "food", name: "Food", type: "expense", isActive: true, deletedAt: null } as unknown as Category, { id: "shop", name: "Shopping", type: "expense", isActive: true, deletedAt: null } as unknown as Category];
+const CATEGORIES = [{ id: "other", name: "Other", type: "both", isActive: true, deletedAt: null } as unknown as Category, { id: "food", name: "Food", type: "expense", isActive: true, deletedAt: null } as unknown as Category, { id: "shop", name: "Shopping", type: "expense", isActive: true, deletedAt: null } as unknown as Category];
 
 const DATA: ReconciliationData = {
   accounts: ACCOUNTS,
@@ -99,9 +99,9 @@ describe("Review & Import", () => {
     expect(value("total-credits")).toBe("999.00");
     expect(value("total-net")).toBe("-613.00");
     expect(count("summary-included")).toBe("5");
-    expect(count("summary-duplicates")).toBe("1"); // CAFE ₹100.00 vs ₹100.70
+    expect(screen.getByTestId("rf-duplicate-count").textContent).toBe("1"); // CAFE ₹100.00 vs ₹100.70
     expect(count("summary-to-check")).toBe("1"); // ZOMATO's unclear amount
-    expect(count("summary-will-import")).toBe("0");
+    expect(count("summary-will-import")).toBe("2"); // SWIGGY and NEW SHOP are Ready by default
     expect(within(rowEl("ZOMATO")).getByTestId("row-check-label").textContent).toBe("Check amount");
     expect(within(rowEl("SWIGGY")).queryByTestId("row-check-label")).toBeNull();
   });
@@ -129,33 +129,23 @@ describe("Review & Import", () => {
     expect(within(screen.getByTestId("row-editor")).getByTestId("confirm-row")).toBeTruthy();
   });
 
-  it("bulk Import new rows takes only clean unmatched charges: history fills SWIGGY, one pick fills the rest", () => {
+  it("clean unmatched charges are Ready by default — history fills SWIGGY, 'Other' covers the rest; unclear, possible-duplicate and credit rows are not defaulted", () => {
     open();
-    fireEvent.click(screen.getByTestId("bulk-import-open"));
-    const dialog = screen.getByTestId("bulk-import-dialog");
-    const listed = within(dialog).getAllByTestId("bulk-import-row").map((r) => r.textContent);
-    // Not ZOMATO (unclear), not CAFE (possible duplicate), not the refund (a credit needs Refund/Income).
-    expect(listed.some((t) => /SWIGGY/.test(t ?? ""))).toBe(true);
-    expect(listed.some((t) => /NEW SHOP/.test(t ?? ""))).toBe(true);
-    expect(listed).toHaveLength(2);
-    expect((within(dialog).getByLabelText("Category for SWIGGY") as HTMLSelectElement).value).toBe("Food");
-    expect((within(dialog).getByLabelText("Category for NEW SHOP") as HTMLSelectElement).value).toBe("");
-    fireEvent.change(within(dialog).getByTestId("bulk-fill-all"), { target: { value: "Shopping" } });
-    expect((within(dialog).getByLabelText("Category for NEW SHOP") as HTMLSelectElement).value).toBe("Shopping");
-    fireEvent.click(within(dialog).getByTestId("bulk-import-apply"));
+    const status = (desc: string) => within(rowEl(desc)).getByTestId("decision-chip").dataset.status;
+    expect(status("SWIGGY")).toBe("ready");
+    expect(status("NEW SHOP")).toBe("ready");
+    expect(status("ZOMATO")).toBe("fix"); // the unclear OCR amount still needs its one look
+    expect(status("CAFE")).toBe("duplicate"); // ₹100.00 vs FlowFi ₹100.70
+    expect(status("REFUND")).toBe("fix"); // a credit is never assumed to be a refund or income
+    expect(screen.queryByTestId("bulk-import-open")).toBeNull(); // nothing left for a bulk step
     expect(count("summary-will-import")).toBe("2");
-    expect(screen.getByTestId("open-approval").textContent).toMatch(/Finish review|Import/);
   });
 
-  it("the final button says how many will be imported once every row is decided", () => {
+  it("the final button says how many will be imported and waits for the rows that still need the user", () => {
     open();
-    fireEvent.click(screen.getByTestId("bulk-import-open"));
-    const dialog = screen.getByTestId("bulk-import-dialog");
-    fireEvent.change(within(dialog).getByTestId("bulk-fill-all"), { target: { value: "Shopping" } });
-    fireEvent.click(within(dialog).getByTestId("bulk-import-apply"));
-    // Remaining rows still need their own decision — the final import waits for them.
+    // Three rows still need the user (unclear amount, possible duplicate, a credit) — Import waits, and names the count.
     expect((screen.getByTestId("open-approval") as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByTestId("open-approval").textContent).toBe("Import 2 transactions…");
+    expect(screen.getByTestId("open-approval").textContent).toBe("Import 2 transactions");
   });
 
   it("excluding a row updates the totals at once; including it again restores them", () => {

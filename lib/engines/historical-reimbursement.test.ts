@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { buildPersonCycleStatement, type StatementInstallment, type StatementLoanSource } from "@/lib/engines/person-cycle-statement";
 import { installmentBreakdown } from "@/lib/engines/installment-participants";
 import {
+  isPaidDirectlyEntry,
+  PAID_DIRECTLY_NOTE,
   planReimbursements,
   reimbursementLineKey as lk,
   reimbursementLines,
@@ -277,5 +279,56 @@ describe("loan cancellation / deletion leaves People reimbursements and accounts
     });
     expect(p).toMatchObject({ ownedTransactions: [], personDelta: 0, ledgerEntryIds: [] });
     expect(p.accountDeltas.size).toBe(0);
+  });
+});
+
+describe("Paid directly — the starting answer (covered in full, no account change)", () => {
+  // The dialog's starting draft for a line nobody touched when "<person> paid directly" is chosen.
+  const direct: ReimbursementDraft = { choice: "full", amount: "", treatment: "included", date: "2026-09-10" };
+
+  it("settles the person's whole share with a no-balance-change settlement; bank/cash totals untouched", () => {
+    const ls = linesFor([inst("i1", 1, SEP_5, 9000)], ["i1"]);
+    const p = planReimbursements({ lines: ls.filter((l) => l.personId === "sanju"), draft: { [key("sanju")]: direct }, batchId: "b", today: TODAY });
+    expect(p.ok).toBe(true);
+    if (!p.ok) return;
+    expect(p.items).toHaveLength(1);
+    expect(p.items[0]).toMatchObject({ personId: "sanju", amount: 3000, recordedEarlier: true });
+    expect(p.summary).toMatchObject({ total: 3000, balanceChange: 0 });
+    expect(p.summary.people[0]).toMatchObject({ remainingAfter: 0 });
+  });
+
+  it("a partial direct payment reduces only what was paid; the rest stays pending", () => {
+    const ls = linesFor([inst("i1", 1, SEP_5, 9000)], ["i1"]).filter((l) => l.personId === "sanju");
+    const p = planReimbursements({ lines: ls, draft: { [key("sanju")]: { choice: "some", amount: "1000", treatment: "included", date: "2026-09-10" } }, batchId: "b", today: TODAY });
+    expect(p.ok && p.summary.people[0]).toMatchObject({ receivedNow: 1000, remainingAfter: 2000 });
+  });
+
+  it("two installments: covering one never settles the other", () => {
+    const ls = linesFor([inst("i1", 1, SEP_5, 9000), inst("i2", 2, OCT_5, 9000)], ["i1", "i2"]).filter((l) => l.personId === "sanju");
+    const p = planReimbursements({ lines: ls, draft: { [key("sanju", "i1")]: direct }, batchId: "b", today: TODAY });
+    expect(p.ok && p.items.map((i) => i.installmentId)).toEqual(["i1"]);
+    expect(p.ok && p.summary.people[0]).toMatchObject({ remainingAfter: 3000 });
+  });
+
+  it("an already-settled share is never offered or written again (no duplicate, never negative)", () => {
+    const settled = paid("e1", "sanju", 3000, "loan-inst:i1", { recordedEarlier: true });
+    const ls = linesFor([inst("i1", 1, SEP_5, 9000)], ["i1"], [settled]).filter((l) => l.personId === "sanju");
+    expect(ls[0].remaining).toBe(0);
+    const p = planReimbursements({ lines: ls, draft: { [key("sanju")]: direct }, batchId: "b", today: TODAY });
+    expect(p.ok && p.items).toEqual([]);
+  });
+
+  it("the same batch keeps the same idempotency key, so a double submit writes once", () => {
+    const ls = linesFor([inst("i1", 1, SEP_5, 9000)], ["i1"]).filter((l) => l.personId === "sanju");
+    const a = planReimbursements({ lines: ls, draft: { [key("sanju")]: direct }, batchId: "b", today: TODAY });
+    const b = planReimbursements({ lines: ls, draft: { [key("sanju")]: direct }, batchId: "b", today: TODAY });
+    expect(a.ok && b.ok && a.items[0].key).toBe(b.ok && b.items[0].key);
+  });
+
+  it("history marker: only a recordedEarlier entry noted as paid directly reads as such", () => {
+    expect(isPaidDirectlyEntry({ recordedEarlier: true, note: `${PAID_DIRECTLY_NOTE} — no money through my account` })).toBe(true);
+    expect(isPaidDirectlyEntry({ recordedEarlier: true, note: "Received earlier — already in my account" })).toBe(false);
+    expect(isPaidDirectlyEntry({ recordedEarlier: false, note: PAID_DIRECTLY_NOTE })).toBe(false);
+    expect(isPaidDirectlyEntry(undefined)).toBe(false);
   });
 });

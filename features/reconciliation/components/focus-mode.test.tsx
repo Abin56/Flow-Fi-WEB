@@ -104,8 +104,8 @@ describe("Focus Mode", () => {
     expect(toggle().getAttribute("aria-label")).toBe("Exit Focus Mode");
     expect(screen.getByTestId("recon-workspace").dataset.focus).toBe("true");
     expect(screen.getByTestId("recon-workspace").className).toMatch(/100dvh-1\.5rem/);
-    // Both sheets and the approval bar are all still there.
-    for (const id of ["statement-sheet", "existing-sheet", "status-bar"]) expect(screen.getByTestId(id)).toBeTruthy();
+    // The single review sheet and the approval bar are all still there.
+    for (const id of ["statement-sheet", "review-sheet", "status-bar"]) expect(screen.getByTestId(id)).toBeTruthy();
     fireEvent.click(toggle());
     expect(focusOn()).toBe(false);
     await flushFrames();

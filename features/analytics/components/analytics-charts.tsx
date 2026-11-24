@@ -32,6 +32,7 @@ import {
 import type { PeriodDetail, PeriodFigures } from "@/lib/engines/period-report";
 import type { ReportPeriod } from "@/lib/engines/report-period";
 import { reportDayKey } from "@/lib/engines/period-report";
+import { incomeCompositionNote } from "@/features/reports/lib/income-note";
 import { formatCurrency, formatCurrencyCompact } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
@@ -57,7 +58,7 @@ export type MetricKey = "income" | "outflow" | "mySpend" | "net";
 export type MainView = "flow" | MetricKey;
 
 export const METRICS: { key: MetricKey; label: string; color: string; upIsGood: boolean; read: (f: PeriodFigures) => number; hint: string }[] = [
-  { key: "income", label: "Income", color: MONEY.in, upIsGood: true, read: (f) => f.income, hint: "Money earned" },
+  { key: "income", label: "Income", color: MONEY.in, upIsGood: true, read: (f) => f.income, hint: "Month Cycle income" },
   { key: "outflow", label: "Outflow", color: MONEY.out, upIsGood: false, read: (f) => f.outflow, hint: "Everything spent (Month Cycle)" },
   { key: "mySpend", label: "My spend", color: MONEY.spend, upIsGood: false, read: (f) => f.mySpend, hint: "My share only" },
   { key: "net", label: "Net cash flow", color: MONEY.net, upIsGood: true, read: (f) => f.net, hint: "Income − outflow" },
@@ -78,24 +79,33 @@ const complete = (points: SeriesPoint[]) => points.filter((p) => !p.period.isCur
 export function KpiStrip({
   points,
   focusIndex,
+  focusFigures,
   previous,
   view,
   onView,
 }: {
   points: SeriesPoint[];
+  /** Window point of the focused period, or -1 when it isn't one of them (a custom range). */
   focusIndex: number;
+  /** The focused period's own figures — the tiles read these, never `points[focusIndex]` (a custom range has no point). */
+  focusFigures: PeriodFigures;
   /** The comparable previous period's figures, or null when it has no records. */
   previous: PeriodFigures | null;
   view: MainView;
   onView: (v: MainView) => void;
 }) {
-  const focus = points[focusIndex]?.figures;
+  const focus = focusFigures;
   return (
     <div className="grid grid-cols-2 gap-3 @4xl:grid-cols-4" role="tablist" aria-label="Metric" data-testid="an-kpis">
       {METRICS.map((m) => {
         const v = focus ? m.read(focus) : 0;
         const active = view === m.key;
-        const saved = m.key === "net" && focus?.savingsRate != null ? `Saved ${percentLabel(focus.savingsRate, 0)} of income` : null;
+        const saved =
+          m.key === "net" && focus?.savingsRate != null
+            ? `Saved ${percentLabel(focus.savingsRate, 0)} of income`
+            : m.key === "income" && focus
+              ? incomeCompositionNote(focus, formatCurrency)
+              : null;
         return (
           <button
             key={m.key}
@@ -175,7 +185,7 @@ export function MainChart({
   }));
   const done = complete(points);
   const average = m ? avg(done.map((p) => m.read(p.figures))) : 0;
-  const focusIndex = Math.max(0, data.findIndex((d) => d.key === focusKey));
+  const focusIndex = data.findIndex((d) => d.key === focusKey);
 
   return (
     <section className="flex min-w-0 flex-col rounded-2xl border border-border/60 bg-card p-4 shadow-e1" data-testid="an-hero">

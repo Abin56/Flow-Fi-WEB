@@ -7,6 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Skeleton } from "@/components/ui/skeleton";
 import { PeriodBar } from "@/features/reports/components/period-bar";
 import { Segmented, signedCurrency } from "@/features/reports/components/report-ui";
+import { focusedPointIndex } from "@/features/analytics/lib/focus-point";
 import { buildInsights } from "@/features/analytics/lib/insights";
 import { useFinancialReportData, useSyncedReportPeriod, type FinancialReportData } from "@/features/reports/hooks/use-financial-report-data";
 import type { PeriodDetail } from "@/lib/engines/period-report";
@@ -88,7 +89,7 @@ export function AnalyticsWorkspace() {
   const focusedDetail = useMemo(() => detailFor(focused), [detailFor, focused]);
   const previousPeriod = useMemo(() => previousOf(focused), [previousOf, focused]);
   const previousDetail = useMemo(() => (hasRecordsIn(previousPeriod) ? detailFor(previousPeriod) : null), [hasRecordsIn, previousPeriod, detailFor]);
-  const focusIndex = Math.max(0, points.findIndex((p) => p.period.start.getTime() === focused.start.getTime()));
+  const focusIndex = focusedPointIndex(points, focused);
 
   const balanceData = useMemo(() => {
     const balances = accountBalancesAtEnds(periods);
@@ -176,7 +177,7 @@ export function AnalyticsWorkspace() {
         </p>
       )}
 
-      <KpiStrip points={points} focusIndex={focusIndex} previous={previousDetail} view={view} onView={setView} />
+      <KpiStrip points={points} focusIndex={focusIndex} focusFigures={focusedDetail} previous={previousDetail} view={view} onView={setView} />
 
       <div className="grid gap-3 @5xl:grid-cols-[minmax(0,1fr)_20rem]">
         <MainChart points={points} comparePoints={comparePoints} focused={focused} onFocus={focus} view={view} onView={setView} compare={compare} onCompare={setCompare} canCompare={canCompare} recordsNote={recordsNote} />

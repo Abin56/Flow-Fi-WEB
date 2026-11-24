@@ -31,6 +31,8 @@ export interface CandidateSplitParticipantDraft {
 export interface CandidateImportDraft {
   categoryId: string | null;
   destinationKey: string | null;
+  /** The transaction's title. Seeded from the detected merchant/bank; blank falls back to that name on import. */
+  description: string;
   notes: string;
   /** Only ever applied when the candidate is a debit (expense) — see `resolvePersonAssignment`. */
   personId: string | null;
@@ -67,6 +69,7 @@ export function initialImportDraft(
   return {
     categoryId: null,
     destinationKey: resolveCandidateDestinationKey(candidate, accounts, creditCards),
+    description: initialNotes(candidate),
     notes: initialNotes(candidate),
     personId: null,
     owesPersonToggle: false,
@@ -210,6 +213,7 @@ export function isDraftDirty(draft: CandidateImportDraft, initial: CandidateImpo
   if (draft.categoryId !== initial.categoryId) return true;
   if (draft.destinationKey !== initial.destinationKey) return true;
   if (draft.notes !== initial.notes) return true;
+  if (draft.description !== initial.description) return true;
   if (draft.personId !== initial.personId || draft.owesPersonToggle !== initial.owesPersonToggle) return true;
   if (draft.splitOpen !== initial.splitOpen) return true;
   if (draft.splitOpen) {

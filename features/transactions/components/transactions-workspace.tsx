@@ -41,8 +41,11 @@ import {
   Check,
   CheckCircle2,
   Users,
+  ArrowDown,
+  ArrowUp,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Fragment, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { readPeopleReturnContext, type PeopleReturnContext } from "@/features/people/lib/people-return-link";
 import { useSavingsTransactionTags } from "@/features/savings/hooks/use-savings-data";
@@ -60,7 +63,6 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { formatCurrency, formatCurrencyPrecise } from "@/lib/format";
 import { SplitAllocationBreakdown } from "@/components/finance/split-allocation-breakdown";
 import { splitAllocation, type SplitAllocation } from "@/lib/split/split-allocation";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAllLoanInstallments, useLoans } from "@/hooks/use-loans";
@@ -282,6 +284,11 @@ export function TransactionsWorkspace() {
       const info = loanInfoFor(t);
       if (info) {
         const who = info.lender ?? (t.linkedPersonId != null ? (personNameById.get(t.linkedPersonId) ?? null) : null);
+        // A short, what-happened title for an installment payment: "EMI #1 paid · Federal Bank".
+        if (!incoming && info.installment) {
+          const head = `EMI #${info.installment.number} paid`;
+          return who ? `${head} · ${who}` : head;
+        }
         return who ? (incoming ? `Received from ${who}` : `Paid to ${who}`) : incoming ? "Money received" : "Money paid";
       }
       const who = t.isPersonLedgerMovement && t.linkedPersonId != null ? (personNameById.get(t.linkedPersonId) ?? null) : null;
@@ -307,6 +314,8 @@ export function TransactionsWorkspace() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
+  // Sort applies to the whole filtered list (before paging). Date is the default and keeps month groups.
+  const [sort, setSort] = useState<{ key: "date" | "amount"; dir: "desc" | "asc" }>({ key: "date", dir: "desc" });
   const [rowsPerPage, setRowsPerPage] = useState(20);
   // "People" toggle: off = the page exactly as before; on = a compact per-person month summary above the list.
   const [peopleView, setPeopleView] = useState(false);
@@ -397,17 +406,33 @@ export function TransactionsWorkspace() {
       list = list.filter((r) => r.transaction.dateTime <= to);
     }
 
-    // Transaction date first (so month groups stay contiguous); same day → most recently touched first,
-    // and transfer legs stay adjacent.
-    return [...list].sort((a, b) => {
+    // Date sort: transaction date first (so month groups stay contiguous); same day -> most recently touched first,
+    // and transfer legs stay adjacent. Oldest first is the exact mirror. Amount sort keeps both legs of a transfer
+    // together (same amount -> same transferId -> adjacent).
+    const dateNewestFirst = (a: TransactionRow, b: TransactionRow) => {
       const ta = a.transaction;
       const tb = b.transaction;
       const dayDelta = dayKeyOf(tb.dateTime) - dayKeyOf(ta.dateTime);
       if (dayDelta !== 0) return dayDelta;
       if (ta.transferId && ta.transferId === tb.transferId) return 0;
       return compareTransactionsNewestFirst(ta, tb);
-    });
-  }, [rows, deferredSearch, accountFilter, categoryFilter, typeFilter, paymentMethodFilter, dateFrom, dateTo, displayDescription]);
+    };
+    const sorted = [...list];
+    if (sort.key === "amount") {
+      const sign = sort.dir === "asc" ? 1 : -1;
+      sorted.sort((a, b) => {
+        const delta = a.transaction.amount - b.transaction.amount;
+        if (delta !== 0) return sign * delta;
+        const ia = a.transaction.transferId ?? "";
+        const ib = b.transaction.transferId ?? "";
+        if (ia !== ib) return ia < ib ? -1 : 1;
+        return dateNewestFirst(a, b);
+      });
+      return sorted;
+    }
+    sorted.sort((a, b) => (sort.dir === "desc" ? dateNewestFirst(a, b) : dateNewestFirst(b, a)));
+    return sorted;
+  }, [rows, deferredSearch, accountFilter, categoryFilter, typeFilter, paymentMethodFilter, dateFrom, dateTo, displayDescription, sort]);
 
   // Computed over the full, unfiltered `rows` — not `filtered` — so a duplicate is still flagged even
   // if its pair got filtered out of the current view.
@@ -490,11 +515,23 @@ export function TransactionsWorkspace() {
     [rows],
   );
 
-  const setThisMonth = () => {
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    setDateFrom(localDateInput(start));
-    setDateTo(localDateInput(now));
+  // Months that actually have transactions ("yyyy-mm") — display only; picking one just sets the From/To filter.
+  const availableMonths = useMemo(() => {
+    const seen = new Set<string>();
+    for (const r of rows) {
+      const d = r.transaction.dateTime;
+      seen.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    }
+    return seen;
+  }, [rows]);
+  // The active month is whichever whole calendar month From/To currently spans (null for anything else).
+  const selectedMonth = useMemo(() => {
+    if (!dateFrom || !dateTo) return null;
+    const [y, m, d] = dateFrom.split("-").map(Number);
+    return d === 1 && dateTo === localDateInput(new Date(y, m, 0)) ? dateFrom.slice(0, 7) : null;
+  }, [dateFrom, dateTo]);
+  const toggleSort = (key: "date" | "amount") => {
+    setSort((cur) => (cur.key === key ? { key, dir: cur.dir === "desc" ? "asc" : "desc" } : { key, dir: "desc" }));
     setPage(1);
   };
 
@@ -812,56 +849,17 @@ export function TransactionsWorkspace() {
             )}
           </label>
 
-          <Popover>
-            <PopoverTrigger asChild>
-              <button type="button" className={cn(TX_FILTER, (dateFrom || dateTo) && TX_FILTER_ACTIVE)}>
-                <Calendar className="size-4 text-muted-foreground" strokeWidth={1.75} />
-                {dateFrom || dateTo ? dateRangeLabel(dateFrom, dateTo) : "Date"}
-                <ChevronDown className="size-3.5 text-muted-foreground" strokeWidth={2} />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent align="start" className="w-64 rounded-[10px] p-3">
-              <div className="flex flex-col gap-3 text-sm">
-                <button type="button" onClick={setThisMonth} className={cn(TX_UTILITY, "justify-center border border-border-strong")}>
-                  This month
-                </button>
-                <label className="flex flex-col gap-1">
-                  <span className="text-[11px] font-medium text-muted-foreground">From</span>
-                  <DateInput
-                    className={TX_INPUT}
-                    value={dateFrom}
-                    onChange={(e) => {
-                      setDateFrom(e.target.value);
-                      setPage(1);
-                    }}
-                  />
-                </label>
-                <label className="flex flex-col gap-1">
-                  <span className="text-[11px] font-medium text-muted-foreground">To</span>
-                  <DateInput
-                    className={TX_INPUT}
-                    value={dateTo}
-                    onChange={(e) => {
-                      setDateTo(e.target.value);
-                      setPage(1);
-                    }}
-                  />
-                </label>
-                {(dateFrom || dateTo) && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDateFrom("");
-                      setDateTo("");
-                    }}
-                    className="self-start text-xs font-semibold text-primary-accent-text hover:underline"
-                  >
-                    Clear dates
-                  </button>
-                )}
-              </div>
-            </PopoverContent>
-          </Popover>
+          <MonthMenu
+            availableMonths={availableMonths}
+            month={selectedMonth}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onChange={(from, to) => {
+              setDateFrom(from);
+              setDateTo(to);
+              setPage(1);
+            }}
+          />
 
           {filters.map((f) =>
             f.id === "account" ? (
@@ -1056,6 +1054,8 @@ export function TransactionsWorkspace() {
                 monthTotals={monthTotals}
                 loanInfoFor={loanInfoFor}
                 offset={(safePage - 1) * rowsPerPage}
+                sort={sort}
+                onSort={toggleSort}
                 total={count}
                 duplicateIds={duplicateTransactionIds}
                 borrowedIds={borrowedTransactionIds}
@@ -1443,7 +1443,7 @@ const TX_FILTER =
   "flex h-9 max-w-full min-w-0 items-center gap-1.5 rounded-full border border-border-strong bg-card px-3 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:border-primary-accent-text dark:bg-input";
 const TX_FILTER_ACTIVE = "border-primary-accent-text bg-primary/15 dark:bg-primary/10";
 const TX_INPUT =
-  "h-9 rounded-[6px] border border-border-strong bg-card px-2.5 text-sm text-foreground outline-none focus:border-primary-accent-text focus:ring-2 focus:ring-ring dark:bg-input";
+  "h-8 w-full rounded-[6px] border border-border-strong bg-card px-2 text-xs text-foreground outline-none focus:border-primary-accent-text focus:ring-2 focus:ring-ring dark:bg-input";
 const PAGE_BTN =
   "flex h-7 min-w-7 items-center justify-center rounded-[6px] border border-transparent px-1.5 text-muted-foreground transition-colors hover:bg-card hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
 
@@ -1478,6 +1478,175 @@ const COLS = 7;
 
 function shortDate(d: Date): string {
   return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+}
+
+const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * One date filter, two modes: Month (year stepper + month chips, only months with transactions are selectable) and
+ * Date range (From / To with Apply and Clear). Both just set the existing From / To filter, so only one is ever active.
+ */
+function MonthMenu({
+  availableMonths,
+  month,
+  dateFrom,
+  dateTo,
+  onChange,
+}: {
+  availableMonths: ReadonlySet<string>;
+  /** "yyyy-mm" when From/To spans exactly one calendar month. */
+  month: string | null;
+  dateFrom: string;
+  dateTo: string;
+  onChange: (from: string, to: string) => void;
+}) {
+  const custom = (dateFrom || dateTo) && !month;
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"month" | "range">("month");
+  const years = useMemo(() => {
+    const ys = new Set<number>([...availableMonths].map((k) => Number(k.slice(0, 4))));
+    if (ys.size === 0) ys.add(new Date().getFullYear());
+    return [...ys].sort((a, b) => a - b);
+  }, [availableMonths]);
+  const [year, setYear] = useState(() => (month ? Number(month.slice(0, 4)) : years[years.length - 1]));
+  const [draftFrom, setDraftFrom] = useState(dateFrom);
+  const [draftTo, setDraftTo] = useState(dateTo);
+
+  const onOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (next) {
+      // Re-open on whichever filter is active, with the drafts matching what is applied.
+      setMode(custom ? "range" : "month");
+      setYear(month ? Number(month.slice(0, 4)) : years[years.length - 1]);
+      setDraftFrom(dateFrom);
+      setDraftTo(dateTo);
+    }
+  };
+  const yi = years.indexOf(year);
+  const pickMonth = (m: number) => {
+    onChange(localDateInput(new Date(year, m, 1)), localDateInput(new Date(year, m + 1, 0)));
+    setOpen(false);
+  };
+  const clear = () => {
+    onChange("", "");
+    setDraftFrom("");
+    setDraftTo("");
+    setOpen(false);
+  };
+  const canApply = Boolean(draftFrom || draftTo);
+  const apply = () => {
+    let from = draftFrom;
+    let to = draftTo;
+    if (from && to && from > to) [from, to] = [to, from];
+    onChange(from, to);
+    setOpen(false);
+  };
+  const label = month
+    ? new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1, 1).toLocaleDateString("en-IN", { month: "short", year: "numeric" })
+    : custom
+      ? dateRangeLabel(dateFrom, dateTo)
+      : "Month";
+
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <PopoverTrigger asChild>
+        <button type="button" aria-label="Filter by month or date range" className={cn(TX_FILTER, (month || custom) && TX_FILTER_ACTIVE)}>
+          <Calendar className="size-4 text-muted-foreground" strokeWidth={1.75} />
+          {label}
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={2} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 rounded-[10px] p-2.5">
+        <div role="tablist" aria-label="Date filter mode" className="mb-2 grid grid-cols-2 rounded-full bg-secondary/80 p-[3px] text-xs ring-1 ring-border-strong/50 ring-inset">
+          {([["month", "Month"], ["range", "Date range"]] as const).map(([id, text]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={mode === id}
+              onClick={() => setMode(id)}
+              className={cn("h-6 rounded-full font-semibold transition-colors", mode === id ? "bg-card text-foreground shadow-e1" : "text-muted-foreground hover:text-foreground")}
+            >
+              {text}
+            </button>
+          ))}
+        </div>
+
+        {mode === "month" ? (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <button type="button" aria-label="Previous year" disabled={yi <= 0} onClick={() => setYear(years[yi - 1])} className="rounded-[6px] p-1 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-30">
+                <ChevronLeft className="size-4" />
+              </button>
+              <span className="text-sm font-semibold tabular-nums">{year}</span>
+              <button type="button" aria-label="Next year" disabled={yi >= years.length - 1} onClick={() => setYear(years[yi + 1])} className="rounded-[6px] p-1 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-30">
+                <ChevronRight className="size-4" />
+              </button>
+            </div>
+            <div className="grid grid-cols-4 gap-1">
+              {MONTH_SHORT.map((name, m) => {
+                const key = `${year}-${String(m + 1).padStart(2, "0")}`;
+                const has = availableMonths.has(key);
+                const selected = month === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    disabled={!has}
+                    aria-pressed={selected}
+                    onClick={() => pickMonth(m)}
+                    className={cn(
+                      "h-8 rounded-[6px] text-xs font-semibold transition-colors",
+                      selected ? "bg-primary text-primary-foreground" : has ? "text-foreground hover:bg-secondary" : "cursor-not-allowed text-muted-foreground/40",
+                    )}
+                  >
+                    {name}
+                  </button>
+                );
+              })}
+            </div>
+            <button type="button" onClick={clear} className={cn("h-7 rounded-[6px] border text-xs font-semibold", !month && !custom ? "border-primary-accent-text text-primary-accent-text" : "border-border-strong text-foreground hover:bg-secondary")}>
+              All months
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex flex-col gap-1">
+                <span className="text-[11px] font-medium text-muted-foreground">From</span>
+                <DateInput className={TX_INPUT} value={draftFrom} onChange={(e) => setDraftFrom(e.target.value)} />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-[11px] font-medium text-muted-foreground">To</span>
+                <DateInput className={TX_INPUT} value={draftTo} onChange={(e) => setDraftTo(e.target.value)} />
+              </label>
+            </div>
+            <div className="flex items-center justify-between">
+              <button type="button" onClick={clear} className="text-xs font-semibold text-primary-accent-text hover:underline">
+                Clear
+              </button>
+              <button type="button" onClick={apply} disabled={!canApply} className="h-7 rounded-[6px] bg-primary px-3 text-xs font-semibold text-primary-foreground disabled:opacity-40">
+                Apply
+              </button>
+            </div>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** A sortable column header: one click toggles direction, an arrow shows the active sort. */
+function SortTh({ label, active, dir, hint, onClick, className, align }: { label: string; active: boolean; dir: "desc" | "asc"; hint: string; onClick: () => void; className?: string; align?: "right" }) {
+  const Arrow = !active ? ArrowUpDown : dir === "desc" ? ArrowDown : ArrowUp;
+  return (
+    <th className={cn(TH, align === "right" && "text-right", className)} aria-sort={active ? (dir === "asc" ? "ascending" : "descending") : "none"}>
+      <button type="button" onClick={onClick} title={hint} className={cn("inline-flex items-center gap-1 uppercase hover:text-foreground", active && "text-foreground")}>
+        {label}
+        <Arrow className={cn("size-3", !active && "opacity-40")} strokeWidth={2.25} aria-hidden />
+      </button>
+    </th>
+  );
 }
 
 function dateRangeLabel(from: string, to: string): string {
@@ -1773,6 +1942,8 @@ function LedgerTable({
   monthTotals,
   loanInfoFor,
   offset,
+  sort,
+  onSort,
   total,
   duplicateIds,
   borrowedIds,
@@ -1793,6 +1964,8 @@ function LedgerTable({
   /** Lender / Loan-or-EMI tag / installment for a Loan or EMI payment, else null. */
   loanInfoFor: (t: Transaction) => LoanPaymentInfo | null;
   offset: number;
+  sort: { key: "date" | "amount"; dir: "desc" | "asc" };
+  onSort: (key: "date" | "amount") => void;
   total: number;
   duplicateIds: Set<string>;
   /** People "Borrowed" cash legs — money in that must be repaid. */
@@ -1829,11 +2002,11 @@ function LedgerTable({
       <thead>
         <tr>
           <th className={cn(TH, "hidden w-12 text-right lg:table-cell")}>#</th>
-          <th className={cn(TH, "w-[6.25rem]")}>Date</th>
+          <SortTh label="Date" active={sort.key === "date"} dir={sort.dir} hint={sort.key === "date" && sort.dir === "desc" ? "Newest first - click for oldest first" : "Oldest first - click for newest first"} onClick={() => onSort("date")} className="w-[6.25rem]" />
           <th className={TH}>Description</th>
           <th className={cn(TH, "hidden w-48 xl:table-cell")}>Type</th>
           <th className={cn(TH, "hidden w-56 lg:table-cell")}>Account</th>
-          <th className={cn(TH, "w-28 text-right sm:w-36")}>Amount</th>
+          <SortTh label="Amount" align="right" active={sort.key === "amount"} dir={sort.dir} hint={sort.key === "amount" && sort.dir === "desc" ? "Highest first - click for lowest first" : "Sort by amount, highest first"} onClick={() => onSort("amount")} className="w-28 sm:w-36" />
           {/* Edit / Delete move into the expanded row wherever the table is narrow (phones, and the md range where the
               sidebar takes a third of the screen) — tap a row — so Description keeps room. */}
           <th className={cn(TH, "hidden w-[6.25rem] sm:table-cell md:hidden lg:table-cell")}>
@@ -1871,7 +2044,7 @@ function LedgerTable({
           const personName = personNameFor(t);
           return (
             <Fragment key={t.id}>
-              {(i === 0 || monthKeyOf(rows[i - 1].transaction.dateTime) !== monthKeyOf(t.dateTime)) && (
+              {sort.key === "date" && (i === 0 || monthKeyOf(rows[i - 1].transaction.dateTime) !== monthKeyOf(t.dateTime)) && (
                 <tr>
                   <td
                     colSpan={7}

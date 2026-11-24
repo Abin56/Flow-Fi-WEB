@@ -26,6 +26,7 @@ import {
   type SettlementTone,
 } from "@/features/people/lib/settlement-presentation";
 import { formatStatementDate, type PersonCycleStatement, type StatementRow } from "@/lib/engines/person-cycle-statement";
+import { isPaidDirectlyEntry } from "@/lib/engines/historical-reimbursement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import type { LedgerEntry } from "@/lib/models/person";
 import { splitAllocation, splitCountLabel, type SplitAllocation } from "@/lib/split/split-allocation";
@@ -562,7 +563,7 @@ export function statementView(statement: PersonCycleStatement, options: Statemen
         inbound: isInboundPayment(head),
         advance: head.category === "advance" || head.category === "advanceApplied",
         toward,
-        note: entry?.recordedEarlier === true ? "Received earlier · recorded later" : null,
+        note: isPaidDirectlyEntry(entry) ? "Paid directly to lender · no money received" : entry?.recordedEarlier === true ? "Received earlier · recorded later" : null,
       };
     });
 

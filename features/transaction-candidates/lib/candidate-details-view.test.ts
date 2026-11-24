@@ -127,6 +127,7 @@ describe("isImportReady", () => {
   const readyDraft = {
     categoryId: "cat-1",
     destinationKey: "account:acc-1",
+    description: "",
     notes: "",
     personId: null,
     owesPersonToggle: false,

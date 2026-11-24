@@ -1,19 +1,19 @@
-/**
- * Reports / Analytics figures for any `ReportPeriod` — a COMPOSITION of the existing engines, never a new formula.
+﻿/**
+ * Reports / Analytics figures for any `ReportPeriod` â€” a COMPOSITION of the existing engines, never a new formula.
  * Three accounting meanings already exist in FlowFi and are kept apart here, exactly as their own screens define them:
  *
- *  1. Month Cycle meaning — `income` / `outflow` (`amountFor("income" | "combinedExpenses")` over
+ *  1. Month Cycle meaning â€” `income` / `outflow` (`amountFor("income" | "combinedExpenses")` over
  *     `monthCycleFinancialInputs`): card purchases count when made, EMI payments by the date paid, transfers / loan
  *     principal / People cash legs never count. `outflowBreakdown` = the exact lines `outflow` adds.
- *  2. Cash basis — `cash` (`cashFlowForRange`, the Dashboard's `cashFlowThisMonth` for any window): money that left /
- *     reached cash accounts — card purchases are NOT cash until the bill is paid, so card bill payments count instead;
+ *  2. Cash basis â€” `cash` (`cashFlowForRange`, the Dashboard's `cashFlowThisMonth` for any window): money that left /
+ *     reached cash accounts â€” card purchases are NOT cash until the bill is paid, so card bill payments count instead;
  *     split-expense collections count as money in.
- *  3. My Spend — `mySpend` (`my-spend.ts`): MY consumption only (my share of splits, billed lender charges on their
+ *  3. My Spend â€” `mySpend` (`my-spend.ts`): MY consumption only (my share of splits, billed lender charges on their
  *     billed date, no liability repayments of an already-recorded purchase).
  *
  * The other blocks are direct projections of the same live rows (no totals re-derived from a different rule):
  *  - `accounts`: per account, opening / closing balance (walked back from the stored balance, `balanceEffect`) and the
- *    movements in between — closing − opening = moneyIn − moneyOut exactly (transfers included: they move accounts).
+ *    movements in between â€” closing âˆ’ opening = moneyIn âˆ’ moneyOut exactly (transfers included: they move accounts).
  *  - `cards`: purchases / refunds posted on card accounts and payments received by them.
  *  - `debt`: EMI installments paid (non recorded-earlier), Loan payments made / collected (each Loan money movement
  *    once: the linked Transaction if live, else the legacy schedule-only payment).
@@ -31,24 +31,33 @@ import { mySpendBucketDate } from "@/lib/engines/month-cycle-range";
 import { mySpendRows, summarizeMySpend, type MySpendContext, type MySpendRow } from "@/lib/engines/my-spend";
 import { accountBalancesAtCutoffs } from "@/lib/engines/net-worth-trend";
 import type { ReportPeriod } from "@/lib/engines/report-period";
-import { balanceEffect, effectiveMonth, type Transaction } from "@/lib/models/transaction";
+import { balanceEffect, effectiveMonth, isLoanPrincipalDisbursement, type Transaction } from "@/lib/models/transaction";
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
+
+/** The principal part of a collected loan repayment, with the total of the schedule payments it was derived from. */
+export interface LoanCollectionSplit {
+  principal: number;
+  /** Sum of the schedule payments the principal was derived from; must equal the transaction amount for the split to be trusted. */
+  total: number;
+}
 
 /** Everything a period needs, built once from the live records (see `use-financial-report-data.ts`). */
 export interface PeriodReportSources {
   /** Real live transactions (balances, cash, cards, People). */
   transactions: readonly Transaction[];
-  /** `useSpendTransactions(transactions)` — real rows plus billed lender charges, for My Spend only. */
+  /** `useSpendTransactions(transactions)` â€” real rows plus billed lender charges, for My Spend only. */
   spendTransactions: readonly Transaction[];
   mySpendCtx: MySpendContext;
-  /** `monthCycleFinancialInputs(...)` — Month Cycle meaning. */
+  /** `monthCycleFinancialInputs(...)` â€” Month Cycle meaning. */
   financialInputs: FinancialViewInputs;
-  /** `cashFlowTransactions(transactions, cardAccountIds, cardLinkedEmiIds)` — cash basis rows. */
+  /** `cashFlowTransactions(transactions, cardAccountIds, cardLinkedEmiIds)` â€” cash basis rows. */
   cashRows: CashFlowTransaction[];
   emiPayments: readonly FinancialViewEmiPayment[];
   /** Schedules of card-linked EMIs: their cash leaves through the card bill, never as an EMI cash-out line. */
   cardLinkedEmiScheduleIds: ReadonlySet<string>;
+  /** Ids of those card-linked EMIs â€” their bank-side expense legs (interest / fees, or a whole bank-funded installment) are direct cash. */
+  cardLinkedEmiIds: ReadonlySet<string>;
   loanPayments: LoanScheduledPayment[];
   moneyReceived: {
     expenses: MoneyReceivedExpense[];
@@ -57,10 +66,14 @@ export interface PeriodReportSources {
   };
   cardAccountIds: ReadonlySet<string>;
   accounts: readonly { id: string; currentBalance: number }[];
+  /** Income-type rows that are repayments COLLECTED on money I lent (a loan-linked income row that is not a disbursement). */
+  loanCollectionIds: ReadonlySet<string>;
+  /** Principal part of each collection by its transaction id. A collection with NO entry (or whose recorded payments do not add up to the transaction) cannot be split: it is reported as unclassified, never guessed. */
+  loanCollectionPrincipal: ReadonlyMap<string, LoanCollectionSplit>;
 }
 
 /**
- * Assembles `PeriodReportSources` from the raw live records — the same mappings the Month Cycle (`monthCycleFinancialInputs`)
+ * Assembles `PeriodReportSources` from the raw live records â€” the same mappings the Month Cycle (`monthCycleFinancialInputs`)
  * and the Dashboard cash flow (`cashFlowTransactions`, `moneyReceivedForRange` inputs) build, so a period resolves to
  * exactly what those screens show for the same window.
  */
@@ -75,6 +88,7 @@ export function buildPeriodReportSources(raw: {
   loanPayments: LoanScheduledPayment[];
   installmentsByScheduleId: Record<string, { amountPaid: number }[]>;
   accounts: readonly { id: string; currentBalance: number }[];
+  loanCollectionPrincipal?: ReadonlyMap<string, LoanCollectionSplit>;
 }): PeriodReportSources {
   const cardAccountIds = new Set(raw.creditCards.map((c) => c.accountId));
   return {
@@ -92,6 +106,7 @@ export function buildPeriodReportSources(raw: {
     cashRows: cashFlowTransactions(raw.transactions, cardAccountIds, cardLinkedEmiIds(raw.emis)),
     emiPayments: raw.emiPayments,
     cardLinkedEmiScheduleIds: new Set(raw.emis.filter((e) => e.linkedCreditCardId != null).map((e) => e.scheduleId)),
+    cardLinkedEmiIds: new Set(raw.emis.filter((e) => e.linkedCreditCardId != null).map((e) => e.id)),
     loanPayments: raw.loanPayments,
     moneyReceived: {
       expenses: raw.expenses.map((e) => ({ isSplit: isSplit(e), scheduleId: e.scheduleId, transactionId: e.transactionId })),
@@ -102,6 +117,8 @@ export function buildPeriodReportSources(raw: {
     },
     cardAccountIds,
     accounts: raw.accounts,
+    loanCollectionIds: new Set(raw.transactions.filter((t) => t.loanId != null && t.type === "income" && t.transferId == null && !isLoanPrincipalDisbursement(t)).map((t) => t.id)),
+    loanCollectionPrincipal: raw.loanCollectionPrincipal ?? new Map<string, LoanCollectionSplit>(),
   };
 }
 
@@ -109,7 +126,7 @@ export interface PeriodAccountLine {
   accountId: string;
   opening: number;
   closing: number;
-  /** Every credit (income + incoming transfer legs + People money received …). */
+  /** Every credit (income + incoming transfer legs + People money received â€¦). */
   moneyIn: number;
   /** Every debit. */
   moneyOut: number;
@@ -131,6 +148,17 @@ export interface PeriodFigures {
   period: ReportPeriod;
   /** Month Cycle meaning. */
   income: number;
+  /**
+   * Part of `income` that is principal recovered on money I lent (a repayment I collected is an income-type row, so the
+   * shared Month Cycle rule counts it). Not earned: it only moves a receivable into cash.
+   */
+  principalRecovered: number;
+  /** Interest / charges collected on loans I lent (collection minus principal), only where the split is known. */
+  loanInterestEarned: number;
+  /** Collections inside `income` whose principal / interest split cannot be established from the records: reported, never guessed. */
+  loanCollectionUnclassified: number;
+  /** `income - principalRecovered - loanCollectionUnclassified`: salary, other income and interest that IS known to be interest. */
+  earnedIncome: number;
   outflow: number;
   outflowBreakdown: Record<string, number>;
   net: number;
@@ -142,7 +170,22 @@ export interface PeriodFigures {
   spendByCategory: Map<string, { amount: number; count: number }>;
   /** Cash basis. */
   cash: CashFlowRangeSummary;
-  debt: { emiPaid: number; loanRepaid: number; loanCollected: number; cardBillPayments: number };
+  debt: {
+    emiPaid: number;
+    loanRepaid: number;
+    loanCollected: number;
+    /** Part of `loanCollected` with no linked account Transaction (older schedule-only records): in cash-basis Money In only, never in Month Cycle income. */
+    loanCollectedLegacy: number;
+    cardBillPayments: number;
+    /** Part of `emiPaid` that belongs to card-linked EMIs â€” their cash leaves through the card bill, already in `cardBillPayments`. */
+    emiPaidOnCard: number;
+    /** EMI cash paid straight from a bank account: non-card EMIs by payment date + card-EMI bank legs by their own date. */
+    emiPaidDirect: number;
+    /** Part of `loanRepaid` charged to a card â€” settled by the card bill, already in `cardBillPayments`. */
+    loanRepaidOnCard: number;
+    /** Cash that went towards debts, each rupee once: direct EMI + direct loan repayments + card bills. */
+    paidTowardsDebts: number;
+  };
   people: { receivedFromPeople: number; paidToPeople: number };
 }
 
@@ -166,19 +209,31 @@ function inRange(date: Date, period: { start: Date; end: Date }): boolean {
 
 const counts = (t: Transaction) => t.deletedAt == null && !t.excludeFromCalculations;
 
-/** Loan payments inside the period (by payment date), each money movement once — see module doc. */
-function loanPaymentsIn(sources: PeriodReportSources, period: ReportPeriod): { repaid: number; collected: number } {
-  const liveCounted = new Set(sources.transactions.filter(counts).map((t) => t.id));
+/** Loan payments inside the period (by payment date), each money movement once â€” see module doc. */
+function loanPaymentsIn(sources: PeriodReportSources, period: ReportPeriod): { repaid: number; repaidOnCard: number; collected: number; collectedLegacy: number } {
+  const liveCounted = new Map(sources.transactions.filter(counts).map((t) => [t.id, t]));
   let repaid = 0;
+  let repaidOnCard = 0;
   let collected = 0;
+  let collectedLegacy = 0;
   for (const p of sources.loanPayments) {
-    if (p.deletedAt != null || !inRange(p.date, period)) continue;
-    // Linked: counts only while its Transaction is live and counted (a recorded-earlier payment's row is excluded).
-    if (p.transactionId != null && !liveCounted.has(p.transactionId)) continue;
-    if (p.direction === "given") collected += p.amount;
-    else repaid += p.amount;
+    if (p.deletedAt != null) continue;
+    // Linked: counts only while its Transaction is live and counted (a recorded-earlier payment's row is excluded), and on
+    // the day the money actually moved (the Transaction's date): a backdated schedule date never moves cash between periods.
+    const linkedTx = p.transactionId != null ? liveCounted.get(p.transactionId) : undefined;
+    if (p.transactionId != null && !linkedTx) continue;
+    if (!inRange(linkedTx ? linkedTx.dateTime : p.date, period)) continue;
+    if (p.direction === "given") {
+      collected += p.amount;
+      // Schedule-only (older) collection: no account Transaction exists, so it is NOT in Month Cycle income or any balance.
+      if (!linkedTx) collectedLegacy += p.amount;
+    }
+    else {
+      repaid += p.amount;
+      if (linkedTx && sources.cardAccountIds.has(linkedTx.accountId)) repaidOnCard += p.amount;
+    }
   }
-  return { repaid: round2(repaid), collected: round2(collected) };
+  return { repaid: round2(repaid), repaidOnCard: round2(repaidOnCard), collected: round2(collected), collectedLegacy: round2(collectedLegacy) };
 }
 
 export function periodFigures(sources: PeriodReportSources, period: ReportPeriod): PeriodFigures {
@@ -207,7 +262,7 @@ export function periodFigures(sources: PeriodReportSources, period: ReportPeriod
     spendByCategory.set(r.transaction.categoryId, entry);
   }
 
-  // 2. Cash basis — the Dashboard's inputs for this window.
+  // 2. Cash basis â€” the Dashboard's inputs for this window.
   const emiCashOut = sources.emiPayments
     .filter((p) => !p.recordedEarlier && !sources.cardLinkedEmiScheduleIds.has(p.scheduleId) && inRange(p.date, period))
     .reduce((s, p) => s + p.amount, 0);
@@ -222,9 +277,42 @@ export function periodFigures(sources: PeriodReportSources, period: ReportPeriod
     moneyReceived: moneyReceivedForRange({ ...sources.moneyReceived, start: period.start, end: period.end }),
   });
 
-  // Debt payments (scheduled-obligation payments that happened in the window — informational, not added to totals).
-  const emiPaid = round2(sources.emiPayments.filter((p) => !p.recordedEarlier && inRange(p.date, period)).reduce((s, p) => s + p.amount, 0));
+  // Debt payments (scheduled-obligation payments that happened in the window â€” informational, not added to totals).
+  const emiRows = sources.emiPayments.filter((p) => !p.recordedEarlier && inRange(p.date, period));
+  const emiPaid = round2(emiRows.reduce((s, p) => s + p.amount, 0));
+  // A card-linked EMI installment is settled by the card bill (charged to the card, or its principal moved bank â†’ card as a
+  // transfer already inside `cardBillPayments`) EXCEPT the part paid straight from a bank account â€” interest / fees, or a
+  // whole bank-funded installment. That direct part is real cash towards the debt and stays out of "on card".
+  const cardEmiInstallments = emiRows.filter((p) => sources.cardLinkedEmiScheduleIds.has(p.scheduleId)).reduce((s, p) => s + p.amount, 0);
+  const cardEmiDirect = sources.transactions
+    .filter((t) => counts(t) && t.emiId != null && sources.cardLinkedEmiIds.has(t.emiId) && t.type === "expense" && t.transferId == null && !sources.cardAccountIds.has(t.accountId) && inRange(t.dateTime, period))
+    .reduce((s, t) => s + t.amount, 0);
+  const emiPaidOnCard = round2(Math.max(0, cardEmiInstallments - cardEmiDirect));
+  // Direct cash is dated by when the cash moved: a non-card EMI by its payment date, a card-EMI bank leg by ITS OWN date —
+  // so an installment paid 31 Oct whose interest posts on 1 Nov counts the interest in November, once, never lost or doubled.
+  const emiPaidDirect = round2(emiPaid - cardEmiInstallments + cardEmiDirect);
   const loans = loanPaymentsIn(sources, period);
+
+  // Principal recovered on money I lent — a subset of the Month Cycle income rows, bucketed exactly as `amountFor` does.
+  let principalRecovered = 0;
+  let loanInterestEarned = 0;
+  let loanCollectionUnclassified = 0;
+  for (const t of sources.financialInputs.transactions) {
+    if (t.type !== "income" || t.isTransfer || !sources.loanCollectionIds.has(t.id)) continue;
+    if (!inRange(period.monthGranular ? t.effectiveMonth : t.dateTime, period)) continue;
+    const split = sources.loanCollectionPrincipal.get(t.id);
+    // Trusted only when the schedule payments it was derived from add up to the money that actually moved.
+    if (!split || Math.abs(split.total - t.amount) > 0.01) {
+      loanCollectionUnclassified += t.amount;
+      continue;
+    }
+    const principal = Math.min(t.amount, Math.max(0, split.principal));
+    principalRecovered += principal;
+    loanInterestEarned += t.amount - principal;
+  }
+  principalRecovered = round2(principalRecovered);
+  loanInterestEarned = round2(loanInterestEarned);
+  loanCollectionUnclassified = round2(loanCollectionUnclassified);
 
   // People cash legs.
   let receivedFromPeople = 0;
@@ -238,6 +326,10 @@ export function periodFigures(sources: PeriodReportSources, period: ReportPeriod
   return {
     period,
     income,
+    principalRecovered,
+    loanInterestEarned,
+    loanCollectionUnclassified,
+    earnedIncome: round2(income - principalRecovered - loanCollectionUnclassified),
     outflow,
     outflowBreakdown,
     net: round2(income - outflow),
@@ -247,7 +339,17 @@ export function periodFigures(sources: PeriodReportSources, period: ReportPeriod
     othersShare: summary.othersShare,
     spendByCategory,
     cash: { ...cash, moneyIn: round2(cash.moneyIn), moneyOut: round2(cash.moneyOut), net: round2(cash.net), income: round2(cash.income), expenses: round2(cash.expenses), creditCardPayments: round2(cash.creditCardPayments) },
-    debt: { emiPaid, loanRepaid: loans.repaid, loanCollected: loans.collected, cardBillPayments: round2(cash.creditCardPayments) },
+    debt: {
+      emiPaid,
+      loanRepaid: loans.repaid,
+      loanCollected: loans.collected,
+      loanCollectedLegacy: loans.collectedLegacy,
+      cardBillPayments: round2(cash.creditCardPayments),
+      emiPaidOnCard,
+      loanRepaidOnCard: loans.repaidOnCard,
+      emiPaidDirect,
+      paidTowardsDebts: round2(emiPaidDirect + (loans.repaid - loans.repaidOnCard) + cash.creditCardPayments),
+    },
     people: { receivedFromPeople: round2(receivedFromPeople), paidToPeople: round2(paidToPeople) },
   };
 }
@@ -316,7 +418,7 @@ export function periodDetail(sources: PeriodReportSources, period: ReportPeriod)
     range: period,
   }).sort((a, b) => b.myAmount - a.myAmount);
 
-  // Daily distribution — the same rows as the totals, placed on their real day (clamped into the window when an
+  // Daily distribution â€” the same rows as the totals, placed on their real day (clamped into the window when an
   // accounting-month override counted them here), so the days always add back to the period figures.
   const daily = new Map<string, { mySpend: number; income: number }>();
   const bump = (d: Date, key: "mySpend" | "income", v: number) => {

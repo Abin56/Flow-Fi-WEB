@@ -39,6 +39,9 @@ import { usePeople } from "@/hooks/use-people";
 import { useSmsSyncConfig } from "@/hooks/use-sms-sync-config";
 import { useSmsTransactionCandidates } from "@/hooks/use-sms-transaction-candidates";
 import { useTransactions } from "@/hooks/use-transactions";
+import { buildDescriptionHistory } from "@/lib/services/description-analyzer";
+import { buildCategoryHistory } from "@/lib/services/category-intelligence";
+import { autoFillDescription } from "../lib/description-suggestion";
 import {
   createAccountRepository,
   createExpenseRepository,
@@ -123,6 +126,8 @@ export function TransactionCandidatesWorkspace() {
   const { data: creditCards = [] } = useCreditCards();
   const { data: categories = [] } = useCategories();
   const { data: transactions = [] } = useTransactions();
+  const descriptionHistory = useMemo(() => buildDescriptionHistory(transactions), [transactions]);
+  const categoryHistory = useMemo(() => buildCategoryHistory(transactions), [transactions]);
   const { data: people = [] } = usePeople();
 
   const repositories = useMemo(() => {
@@ -502,6 +507,7 @@ export function TransactionCandidatesWorkspace() {
         force,
         { accountId: selection.accountId, matchedCard: selection.matchedCard },
         selection.personAssignment,
+        (c) => autoFillDescription(c, descriptionHistory),
       );
       const summary = summarizeBulkImport(results);
       const duplicateRows = results.filter(
@@ -932,6 +938,8 @@ export function TransactionCandidatesWorkspace() {
           matchedTransaction={detailMatchedTransaction}
           similarMatch={detailBestMatch && detailSimilarTransaction ? { transaction: detailSimilarTransaction, kind: detailBestMatch.kind } : null}
           existingTransactions={existingTransactionsForDuplicateCheck}
+          descriptionHistory={descriptionHistory}
+          categoryHistory={categoryHistory}
           accounts={accounts}
           creditCards={creditCards}
           categories={categories}

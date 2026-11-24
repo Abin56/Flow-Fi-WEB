@@ -93,10 +93,12 @@ async function approveAgainst(serverData: ReconciliationData) {
   decideThroughDock();
   fireEvent.click(screen.getByTestId("open-approval"));
   const dialog = screen.getByTestId("approval-dialog");
-  fireEvent.click(within(dialog).getByTestId("approval-confirm"));
-  const repeats = within(dialog).queryByTestId("approval-repeats");
-  if (repeats) fireEvent.click(within(repeats).getByRole("checkbox"));
-  fireEvent.click(within(dialog).getByTestId("approval-submit"));
+  // Identical rows in this import need the user's own acknowledgement first — shown compactly, then Import.
+  const repeats = await waitFor(() => within(dialog).queryByTestId("approval-repeats") ?? undefined, { timeout: 500 }).catch(() => undefined);
+  if (repeats) {
+    fireEvent.click(within(repeats).getByRole("checkbox"));
+    fireEvent.click(within(dialog).getByTestId("approval-submit"));
+  }
   await waitFor(() => expect(readData).toHaveBeenCalled());
   return { repo, readData };
 }

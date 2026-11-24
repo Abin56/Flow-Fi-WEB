@@ -175,13 +175,14 @@ function MirrorChart({ weeks }: { weeks: Week[] }) {
   const { w, h } = size;
   const padX = 8;
   const top = 30; // room for the legend row and the value labels above the bars
-  const bottom = 30; // x labels
+  const bottom = 34; // x labels
   const plotH = Math.max(h - top - bottom, 40);
   // Split the height between up and down by magnitude, but keep at least 26% for "out" so it always reads.
   const downShare = Math.min(Math.max(maxDown / (maxUp + maxDown || 1), 0.26), 0.5);
   const base = top + plotH * (1 - downShare);
   const upPx = (v: number) => (Math.max(v, 0) / maxUp) * (base - top);
-  const downPx = (v: number) => (maxDown > 0 ? (Math.max(v, 0) / maxDown) * (top + plotH - base) : 0);
+  // Leave 18px under the deepest "out" bar for its value label so it never runs into the x labels.
+  const downPx = (v: number) => (maxDown > 0 ? (Math.max(v, 0) / maxDown) * Math.max(top + plotH - base - 18, 8) : 0);
   const yOf = (v: number) => (v >= 0 ? base - upPx(v) : base + downPx(-v));
 
   const colW = (w - padX * 2) / Math.max(weeks.length, 1);
@@ -194,7 +195,7 @@ function MirrorChart({ weeks }: { weeks: Week[] }) {
   const hw = hover != null ? weeks[hover] : null;
 
   return (
-    <div className="relative min-h-[150px] flex-1">
+    <div className="relative min-h-[200px] flex-1">
       <div className="absolute top-0 right-0 z-10 flex items-center gap-3 text-[10px] text-muted-foreground" aria-hidden>
         <Legend swatch={<span className="size-2 rounded-[2px] bg-success" />} label="In" />
         <Legend swatch={<span className="size-2 rounded-[2px] bg-expense" />} label="Out" />
