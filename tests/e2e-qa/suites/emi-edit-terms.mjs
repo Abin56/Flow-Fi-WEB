@@ -40,7 +40,7 @@ async function payFirst(page, name, label) {
   await page.getByText(name).first().click();
   await page.getByRole("button", { name: "Record Payment" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay EMI|Pay installment/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   if (label === "bank") {
     await dlg.getByText("Choose paying account").click();
     await page.getByRole("option", { name: /QA Bank/ }).click();
@@ -282,7 +282,7 @@ scenario("lterms-stale-two-tabs", "EMI Edit terms: a payment recorded in another
   await b.getByText("QA Phone EMI").first().click();
   await b.getByRole("button", { name: "Record Payment" }).click();
   const payDlg = b.getByRole("dialog", { name: /Pay EMI|Pay installment/ });
-  await payDlg.getByText("TO PAY LENDER").waitFor();
+  await payDlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   await payDlg.getByText("Choose paying account").click();
   await b.getByRole("option", { name: /QA Bank/ }).click();
 

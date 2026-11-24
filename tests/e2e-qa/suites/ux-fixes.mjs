@@ -112,7 +112,7 @@ scenario("ux-d03-exact-amount", "D-03: Loan payment confirmation shows ₹5,330.
   await page.getByText("QA Loan 12").first().click();
   await page.getByRole("button", { name: "Record Payment" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay installment/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   await dlg.getByText("Choose paying account").click();
   await page.getByRole("option", { name: /QA Bank/ }).click();
   await page.waitForTimeout(500);

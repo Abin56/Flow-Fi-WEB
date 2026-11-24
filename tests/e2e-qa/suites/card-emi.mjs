@@ -23,7 +23,7 @@ async function openPay(page) {
   await page.getByText(EMI).first().click();
   await page.getByRole("button", { name: "Record Payment" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay EMI/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   return dlg;
 }
 const paidList = async () => (await f.scheduleState("emi", EMI)).map((i) => i.amountPaid);
@@ -71,7 +71,7 @@ scenario("card-emi-stale-two-tabs", "Card EMI: A pays #1, B's stale dialog is re
   await tabB.getByText(EMI).first().click();
   await tabB.getByRole("button", { name: "Record Payment" }).click();
   const dlgB = tabB.getByRole("dialog", { name: /Pay EMI/ });
-  await dlgB.getByText("TO PAY LENDER").waitFor();
+  await dlgB.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
 
   await page.bringToFront();
   const dlgA = await openPay(page);
@@ -97,7 +97,7 @@ scenario("card-emi-stale-two-tabs", "Card EMI: A pays #1, B's stale dialog is re
   await tabB.getByText(EMI).first().click();
   await tabB.getByRole("button", { name: "Record Payment" }).click();
   const dlgB2 = tabB.getByRole("dialog", { name: /Pay EMI/ });
-  await dlgB2.getByText("TO PAY LENDER").waitFor();
+  await dlgB2.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   const shown = await f.flat(dlgB2);
   await dlgB2.getByRole("button", { name: PAY3000 }).click();
   await dlgB2.waitFor({ state: "hidden", timeout: 25000 });
@@ -159,7 +159,7 @@ async function openAPay(page, name) {
   await page.getByText(name).first().click();
   await page.getByRole("button", { name: "Record Payment" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay EMI/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   return dlg;
 }
 async function openDetails(page) {

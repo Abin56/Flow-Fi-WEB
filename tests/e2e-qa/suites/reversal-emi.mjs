@@ -25,7 +25,7 @@ async function openPay(page, name = EMI) {
   await page.getByText(name).first().click();
   await page.getByRole("button", { name: "Record Payment" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay EMI/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   return dlg;
 }
 async function chooseBank(page, dlg) {
@@ -158,7 +158,7 @@ scenario("rev-emi-two-tabs-pay", "EMI: two tabs open Pay for installment #1; A p
   await tabB.getByText(EMI).first().click();
   await tabB.getByRole("button", { name: "Record Payment" }).click();
   const dlgB = tabB.getByRole("dialog", { name: /Pay EMI/ });
-  await dlgB.getByText("TO PAY LENDER").waitFor();
+  await dlgB.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   await chooseBank(tabB, dlgB);
   const shownB = await f.flat(dlgB);
 
@@ -205,7 +205,7 @@ scenario("rev-emi-two-tabs-pay", "EMI: two tabs open Pay for installment #1; A p
   await tabB.getByText(EMI).first().click();
   await tabB.getByRole("button", { name: "Record Payment" }).click();
   const dlgB2 = tabB.getByRole("dialog", { name: /Pay EMI/ });
-  await dlgB2.getByText("TO PAY LENDER").waitFor();
+  await dlgB2.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   const nextShown = await f.flat(dlgB2);
   await chooseBank(tabB, dlgB2);
   await dlgB2.getByRole("button", { name: PAY4000 }).click();
@@ -226,7 +226,7 @@ scenario("rev-emi-two-tabs-partial", "EMI: A pays ₹1,000 of #1; B's stale dial
   await tabB.getByText(EMI).first().click();
   await tabB.getByRole("button", { name: "Record Payment" }).click();
   const dlgB = tabB.getByRole("dialog", { name: /Pay EMI/ });
-  await dlgB.getByText("TO PAY LENDER").waitFor();
+  await dlgB.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   await chooseBank(tabB, dlgB);
 
   await page.bringToFront();

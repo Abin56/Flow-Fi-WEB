@@ -124,7 +124,7 @@ describe("general payment on the shared statements", () => {
   it("both PDFs draw the one closing balance, never a per-item breakdown", async () => {
     const { statement, options } = setup();
     const monthly = await pdfText(await renderMonthlySettlementPdf(statement, options));
-    expect(monthly).toContain("Remaining balance");
+    expect(monthly).toContain("Balance to pay");
     expect(monthly.join(" ")).not.toContain(pdfSafe("not tied to one item"));
     const full = await pdfText(await renderPersonStatementPdf(statement, options));
     expect(full).toContain("BALANCE DUE");

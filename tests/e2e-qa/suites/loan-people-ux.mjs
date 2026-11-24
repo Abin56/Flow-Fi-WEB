@@ -103,7 +103,7 @@ scenario("uxp-pay-choices-extra-mobile-dark", "Pay drawer at 390×844 dark: ever
   await openDetails(page, "QA Loan 12");
   await page.getByRole("button", { name: "Record Payment" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay installment/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   await dlg.getByTestId("other-ways-toggle").click();
   const group = await f.flat(dlg.getByRole("radiogroup", { name: "How much are you paying?" }));
   await h.shot(page, "uxp-pay-choices-mobile-dark");
@@ -154,7 +154,7 @@ scenario("uxp-backdate-hint", "Pay now with a past date is flagged as a real deb
   await openDetails(page, "QA Phone EMI");
   await page.getByRole("button", { name: "Record Payment" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay EMI/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   await chooseBank(page, dlg);
   const commits0 = await f.commits(page);
   await dlg.getByLabel("Payment date").fill("01/01/2025");
@@ -209,7 +209,7 @@ scenario("uxp-collect-return-to-payment", "Received → record Priya right in th
   await openDetails(page, "QA Shared EMI");
   await page.getByRole("button", { name: "Record Payment" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay EMI/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   const shareActions = await f.flat(dlg.getByRole("region", { name: "Who pays this installment" }));
   chk("each person offers 'Record received' and 'Postpone' separately", /Record received/.test(shareActions) && /Postpone/.test(shareActions) && !/Record \/ postpone/.test(shareActions), shareActions);
   const fromPath = await page.evaluate(() => location.pathname);

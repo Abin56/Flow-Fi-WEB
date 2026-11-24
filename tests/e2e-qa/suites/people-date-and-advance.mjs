@@ -110,7 +110,7 @@ async function openSharedPay(page) {
   await page.getByText(SHARED).first().click();
   await page.getByRole("button", { name: "Record Payment" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay EMI/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   return dlg;
 }
 

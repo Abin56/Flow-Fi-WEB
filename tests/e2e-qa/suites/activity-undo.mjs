@@ -29,7 +29,7 @@ async function payLoanInstallment(page) {
   await page.getByText("QA Loan 12").first().click();
   await page.getByRole("button", { name: "Record Payment" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay installment|Pay EMI/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   await dlg.getByText("Choose paying account").click();
   await page.getByRole("option", { name: /QA Bank/ }).click();
   await dlg.getByRole("button", { name: /^Pay ₹/ }).last().click();

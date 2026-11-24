@@ -22,9 +22,9 @@ async function loanState(name = "QA Loan 12") {
 const txCount = async () => (await h.list("transactions")).filter((t) => !t.deletedAt).length;
 
 async function openLoan(page, name = "QA Loan 12") {
-  await h.go(page, "/loans-installments");
-  await page.getByText(name).first().click();
-  await page.getByRole("button", { name: "Edit", exact: true }).waitFor();
+  await h.go(page, "/loans");
+  await page.locator('[role="button"]', { hasText: name }).first().click();
+  await page.getByRole("button", { name: "Edit", exact: true }).waitFor({ timeout: 60000 });
 }
 async function bcFlowfi(page, productRe) {
   await h.go(page, "/balance-control");
@@ -48,7 +48,7 @@ scenario("lcor-edit-terms", "Loan Edit: interest-rate and tenure change re-plan 
 
   await openLoan(page);
   await page.getByRole("button", { name: "Edit", exact: true }).click();
-  const dlg = page.getByRole("dialog").last();
+  const dlg = page.locator("main");
   await dlg.getByLabel("Custom number of installments").fill("10");
   await dlg.getByLabel(/Interest rate/).fill("9");
   await h.shot(page, "lcor-edit-form");
@@ -95,7 +95,7 @@ scenario("lcor-disbursement", "Receive More Money (additional disbursement): cas
   const txBefore = await txCount();
   await openLoan(page);
   await page.getByRole("button", { name: "Receive More Money" }).click();
-  const dlg = page.getByRole("dialog", { name: /Receive More Money/ });
+  const dlg = page.locator("main");
   await dlg.getByLabel("Additional amount").fill("10000");
   await dlg.getByLabel("Payment account").selectOption({ label: /QA Bank/ }).catch(async () => {
     const opt = await dlg.getByLabel("Payment account").locator("option").allInnerTexts();
@@ -106,7 +106,7 @@ scenario("lcor-disbursement", "Receive More Money (additional disbursement): cas
   chk("dialog previews remaining principal before → after", new RegExp(`Remaining principal.*${Math.round(before.outstanding).toLocaleString("en-IN")}`).test(previewText), previewText.slice(0, 300));
   await h.shot(page, "lcor-disbursement-form");
   await dlg.getByRole("button", { name: /^Receive ₹/ }).last().click();
-  await dlg.waitFor({ state: "hidden", timeout: 40000 });
+  await page.getByRole("button", { name: /^Receive ₹/ }).waitFor({ state: "hidden", timeout: 40000 });
   await page.waitForTimeout(2500);
 
   const after = await loanState();

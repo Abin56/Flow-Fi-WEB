@@ -119,7 +119,7 @@ async function openPayEmi(page) {
   }
   await record.click();
   const dlg = page.getByRole("dialog", { name: /Pay EMI/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   return dlg;
 }
 const schedule = async () => {

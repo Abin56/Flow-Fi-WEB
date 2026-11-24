@@ -146,7 +146,7 @@ scenario("ps-pay-dialog-strip", "Pay EMI: lender status strip → 'Already paid 
   const s0 = await snapshot();
   await record.click();
   const dlg = page.getByRole("dialog", { name: /Pay EMI/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   const dlgAny = page.getByRole("dialog").last();
   const strip = await dlg.getByTestId("lender-status-strip").innerText();
   await h.shot(page, "ps-pay-strip");

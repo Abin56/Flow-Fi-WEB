@@ -118,7 +118,7 @@ scenario("dash-stale", "Dashboard: no stale balance after a Loan payment (client
   await page.getByText("QA Loan 12").first().click();
   await page.getByRole("button", { name: "Record Payment" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay installment/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   await dlg.getByText("Choose paying account").click();
   await page.getByRole("option", { name: /QA Bank/ }).click();
   await dlg.getByRole("button", { name: /Pay ₹5,330\.93 to lender/ }).click();

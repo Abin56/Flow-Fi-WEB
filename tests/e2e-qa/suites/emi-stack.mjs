@@ -73,7 +73,7 @@ scenario("stk-pay-and-history", "EMI popup: pay from the layer (writes once), th
   const before = (await h.accountBalance("QA Bank")).currentBalance;
   await page.getByRole("button", { name: "Record Payment" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay EMI|Pay installment/ });
-  await dlg.getByText("TO PAY LENDER").waitFor({ timeout: 30000 });
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor({ timeout: 30000 });
   await dlg.getByText("Choose paying account").click();
   const names = (await page.getByRole("option").allInnerTexts()).map((t) => t.replace(/\s+/g, " ").trim());
   const accts = (await h.list("accounts")).filter((a) => !a.deletedAt).map((a) => a.name);

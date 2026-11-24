@@ -17,7 +17,7 @@ describe("lenderChipOf", () => {
     expect(lenderChipOf(inst(0, new Date(2026, 10, 5)), today)).toMatchObject({ label: "Bank due 5 Nov", tone: "due" });
     expect(lenderChipOf(inst(0, new Date(2026, 9, 18, 9)), today).label).toBe("Bank due 18 Oct");
   });
-  it("every title says the person's share is separate", () => {
-    for (const p of [4000, 1000, 0]) expect(lenderChipOf(inst(p, new Date(2026, 9, 5)), today).title).toContain("Their share to you is separate.");
+  it("every title says the person's share is separate (paid / part paid point to People)", () => {
+    for (const p of [4000, 1000, 0]) expect(lenderChipOf(inst(p, new Date(2026, 9, 5)), today).title).toMatch(/Their share to you is separate\.|Track the person's reimbursement in People\./);
   });
 });

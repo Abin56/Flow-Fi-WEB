@@ -339,7 +339,7 @@ scenario("lrec-execute-loan-partial", "Partial payment executed via the dialog, 
   await page.getByText("QA Loan 12").first().click();
   await page.getByRole("button", { name: "Record Payment" }).click();
   let dlg = page.getByRole("dialog", { name: /Pay installment|Pay EMI/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   await dlg.getByText("Choose paying account").click();
   await page.getByRole("option", { name: /QA Bank/ }).click();
   await dlg.getByTestId("other-ways-toggle").click();
@@ -406,7 +406,7 @@ scenario("lrec-emi-card-bank-mode", "Card-linked EMI paid from the bank via the 
   chk("D1: bank-mode preview names the bank debit of the installment", /bank is debited ₹3,000\.00/.test(bankText), bankText);
   await sheet(page).locator('[data-testid="loan-handoff-link"]').click();
   const dlg = page.getByRole("dialog", { name: /Pay installment|Pay EMI/ });
-  await dlg.getByText("TO PAY LENDER").waitFor({ timeout: 30000 }).catch(() => {});
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor({ timeout: 30000 }).catch(() => {});
   chk("both funding modes offered, card is the default", (await dlg.getByRole("radio", { name: "Pay from a bank account" }).count()) === 1);
   await dlg.getByRole("radio", { name: "Pay from a bank account" }).click();
   await dlg.getByText("Choose paying account").click();

@@ -165,7 +165,7 @@ const ownBody = async ({ page }, chk) => {
   const tx0 = new Set((await h.list("transactions")).map((t) => t.id));
   await record.click();
   const dlg = page.getByRole("dialog", { name: /Pay EMI/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   await dlg.getByRole("radio", { name: /pay the lender from my own money/i }).click();
   const pending = await dlg.getByTestId("own-money-pending").innerText();
   await h.shot(page, `own-money-pending${sfx(page)}`);

@@ -15,7 +15,7 @@ async function openPay(page) {
   await page.getByText(LOAN).first().click();
   await page.getByRole("button", { name: "Record Payment" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay installment|Pay EMI/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   return dlg;
 }
 const grocery = async () => (await h.list("transactions")).find((t) => t.description === "QA groceries" && !t.deletedAt);

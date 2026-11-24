@@ -33,7 +33,7 @@ for (const [vpName, vp] of Object.entries(VPS)) {
       await page.getByText("QA Loan 12").first().click();
       await page.getByRole("button", { name: "Record Payment" }).click();
       const dlg = page.getByRole("dialog", { name: /Pay installment/ });
-      await dlg.getByText("TO PAY LENDER").waitFor();
+      await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
       await page.waitForTimeout(500);
       const box = await dlg.boundingBox();
       chk("dialog fits inside the viewport", box && box.x >= -1 && box.y >= -1 && box.x + box.width <= vp.width + 1 && box.y + box.height <= vp.height + 1, JSON.stringify(box && { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) }));
@@ -52,7 +52,7 @@ for (const [vpName, vp] of Object.entries(VPS)) {
       const c1 = await colors(page, pay);
       const r1 = ratio(c1.fg, c1.bg);
       chk("primary button text contrast ≥ 4.5:1", r1 >= 4.5, `${r1.toFixed(2)}:1 fg ${c1.fg} on ${c1.bg}`);
-      const lbl = dlg.getByText("TO PAY LENDER").first();
+      const lbl = dlg.getByText(/TO PAY LENDER|Lender installment balance/i).first();
       const c2 = await colors(page, lbl);
       const r2 = ratio(c2.fg, c2.bg);
       chk("label text ('TO PAY LENDER') contrast ≥ 4.5:1", r2 >= 4.5, `${r2.toFixed(2)}:1 fg ${c2.fg} on ${c2.bg}`);
@@ -94,7 +94,7 @@ scenario("resp-esc-idle", "Keyboard: Escape closes an idle payment dialog withou
   await page.getByText("QA Loan 12").first().click();
   await page.getByRole("button", { name: "Record Payment" }).click();
   const dlg = page.getByRole("dialog", { name: /Pay installment/ });
-  await dlg.getByText("TO PAY LENDER").waitFor();
+  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
   await page.evaluate(() => window.__reset());
   await page.keyboard.press("Escape");
   await page.waitForTimeout(900);
