@@ -124,7 +124,9 @@ function seedDraft(rows = ROWS, accountId: string | null = "acc-card") {
 }
 
 const rowEl = (id: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === id)!;
-const existingIds = () => screen.queryAllByTestId("existing-row").map((r) => r.dataset.recordId);
+const existingIds = () => screen.queryAllByTestId("inline-candidate").map((r) => r.dataset.recordId);
+/** The match chip opens the row's inline review under it. */
+const compare = (n: number) => fireEvent.click(screen.getByRole("button", { name: `Compare row ${n}` }));
 const grid = () => screen.getByRole("grid", { name: "Statement rows" });
 const select = (id: string) => fireEvent.click(rowEl(id));
 const resolve = (id: string) => menuItem(id);
@@ -140,18 +142,19 @@ describe("Reconciliation workspace — desktop", () => {
     // band says "Possible duplicate" (a suggestion) and never "confirmed / exact duplicate".
     select("r1");
     expect(grid().textContent).not.toMatch(/duplicate/i);
-    expect(screen.getByTestId("existing-sheet").textContent).not.toMatch(/(confirmed|exact|definite|is a) duplicate/i);
+    compare(1);
+    expect(screen.getByTestId("inline-review").textContent).not.toMatch(/(confirmed|exact|definite|is a) duplicate/i);
     expect(screen.getByTestId("privacy-notice").textContent).toMatch(/never saved/);
   });
 
-  it("other-account look-alike is a note in the full comparison, never a row in the Existing FlowFi sheet", () => {
+  it("other-account look-alike is a note in the full comparison, never a candidate in the inline review", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     select("r7");
+    compare(7);
     expect(existingIds()).toEqual([]);
-    fireEvent.click(screen.getByTestId("existing-mode-ledger"));
-    expect(existingIds()).not.toContain("t-bank");
-    fireEvent.keyDown(grid(), { key: "o" }); // the full comparison lists the notes
+    expect(screen.getByTestId("inline-no-candidate")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("inline-full-details")); // the full comparison lists the notes
     expect(document.body.textContent).toMatch(/SBI Savings •••• 9981 — a different account/);
   });
 
@@ -182,9 +185,9 @@ describe("Reconciliation workspace — desktop", () => {
     fireEvent.click(resolve("keep_existing"));
     expect(rowEl("r4").dataset.state).toBe("conflict");
     select("r4");
-    const zomato = screen.getAllByTestId("existing-row").find((r) => r.dataset.recordId === "t-zomato")!;
-    expect(zomato.dataset.viewOnly).toBe("claimed");
-    expect(zomato.textContent).toMatch(/Kept by row 3/);
+    compare(4);
+    expect(screen.getByTestId("inline-view-only").textContent).toMatch(/Already kept by row 3/);
+    expect((screen.getByTestId("inline-keep-existing") as HTMLButtonElement).disabled).toBe(true);
     expect(resolve("keep_existing").disabled).toBe(true);
     expect(resolve("keep_existing").title).toMatch(/Already kept by row 3/);
   });
@@ -230,7 +233,8 @@ describe("Reconciliation workspace — desktop", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     select("r5");
-    expect(screen.getAllByTestId("existing-row").map((r) => r.dataset.role)).toEqual(["sms"]);
+    compare(5);
+    expect(screen.getByTestId("inline-compare").textContent).toMatch(/SMS · waiting in Inbox/);
     fireEvent.click(resolve("inbox"));
     expect(within(rowEl("r5")).getByTestId("decision-chip").textContent).toBe("Handle in Inbox");
   });
@@ -293,25 +297,24 @@ describe("Reconciliation workspace — desktop", () => {
     expect(screen.getByTestId("choose-account")).toBeTruthy();
     // Nothing is compared: every row is "Account missing", with cross-account evidence only.
     expect(screen.getAllByTestId("recon-row").every((r) => r.dataset.state === "pending" && r.dataset.accountMissing === "true")).toBe(true);
-    expect(screen.getByTestId("existing-hints-note").textContent).toMatch(/Account not verified/);
-    expect(screen.getAllByTestId("existing-hint-row").map((r) => r.dataset.accountId)).toEqual(["acc-card"]);
-    expect(screen.queryAllByTestId("existing-row")).toHaveLength(0);
+    expect(screen.getAllByTestId("match-account-missing").length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("inline-review")).toBeNull();
     expect(screen.queryByTestId("resolution-dock")).toBeNull();
-    // A row with nothing similar anywhere still says to choose the account.
-    fireEvent.click(screen.getAllByTestId("recon-row")[1]);
-    expect(screen.getAllByTestId("existing-hint-row").map((r) => r.dataset.accountId)).toEqual(["acc-bank"]);
+    // Cross-account evidence is only a hint in the Match cell — and the toolbar offers the likely account.
+    expect(screen.getAllByTestId("match-account-missing")[0]!.textContent).toMatch(/similar on|Nothing similar/);
     const saved = sessionStorage.getItem(`${DRAFT_KEY_PREFIX}u1`)!;
     expect(saved).toContain("SWIGGY BANGALORE");
     expect(saved).not.toContain("24/10/2026  SWIGGY"); // the raw pasted line itself is never kept
-    // "Use account" is the user's explicit choice — then the real (single-account) matcher runs.
-    fireEvent.click(screen.getAllByTestId("recon-row")[0]);
-    fireEvent.click(screen.getByTestId("use-hint-account"));
+    // "Use" is the user's explicit choice — then the real (single-account) matcher runs.
+    fireEvent.click(screen.getByRole("button", { name: "Choose statement account" }));
+    fireEvent.click(screen.getAllByTestId("account-option").find((o) => o.textContent?.includes("HDFC Millennia"))!);
     expect(screen.getByTestId("selected-account").textContent).toMatch(/HDFC Millennia/);
     expect(screen.getAllByTestId("recon-row").map((r) => r.dataset.state)).toEqual(["exact_candidate", "no_match"]);
-    // A similar transaction on ANOTHER account is listed as "not compared" — never a candidate.
+    // A similar transaction on ANOTHER account is never a candidate in the inline review.
     fireEvent.click(screen.getAllByTestId("recon-row")[1]);
-    expect(screen.getByTestId("existing-other-accounts").textContent).toMatch(/Other accounts — not compared \(1\)/);
-    expect(screen.getAllByTestId("existing-hint-row").map((r) => r.dataset.recordId)).toEqual(["t-bank"]);
+    compare(2);
+    expect(existingIds()).toEqual([]);
+    expect(screen.getByTestId("inline-no-candidate")).toBeTruthy();
   });
 
   it("Discard removes the draft from this tab", () => {
@@ -345,7 +348,7 @@ describe("Reconciliation workspace — mobile", () => {
 describe("Reconciliation workspace — row bottom sheet", () => {
   const sheet = () => screen.queryByTestId("row-editor-panel");
 
-  it("opens over the viewport (never inside either sheet), follows the selection, and opening/moving/closing changes no decision", () => {
+  it("opens over the viewport (never inside the sheet), follows the selection, and opening/moving/closing changes no decision", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     const savedBefore = sessionStorage.getItem(`${DRAFT_KEY_PREFIX}u1`);
@@ -353,7 +356,7 @@ describe("Reconciliation workspace — row bottom sheet", () => {
     const panel = sheet()!;
     expect(panel.getAttribute("role")).toBe("dialog");
     expect(screen.getByTestId("statement-sheet").contains(panel)).toBe(false);
-    expect(screen.getByTestId("existing-sheet").contains(panel)).toBe(false);
+    expect(screen.getByTestId("review-sheet").contains(panel)).toBe(false);
     expect(within(panel).getByRole("heading", { name: "AMAZON PAY INDIA" })).toBeTruthy();
     expect(rowEl("r2").getAttribute("aria-selected")).toBe("true");
 

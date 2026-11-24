@@ -47,11 +47,9 @@ import {
   existingEntries,
   hasPossibleMatch,
   linkedRowsByRecord,
-  rowsCandidateFor,
-  type ExistingSheetMode,
 } from "../lib/merge-studio";
 import { buildExistingRecords } from "../lib/existing-records";
-import { accountHintsByRow, accountHintsForRow, suggestStatementAccounts, type AccountHint } from "../lib/account-hints";
+import { accountHintsByRow, suggestStatementAccounts, type AccountHint } from "../lib/account-hints";
 import { ownedAccountIdentities } from "../lib/internal-payment-guard";
 import { computeMatches, siblingAccountIdsFor, type ReconciliationData } from "../lib/analyze";
 import type { ApprovalDeps } from "../lib/approval-commit";
@@ -59,10 +57,9 @@ import { buildApprovalPlan } from "../lib/approval-plan";
 import { readinessCounts, type ReadinessCounts } from "../lib/readiness";
 import type { MatchState, ReconRow, RowDecision, RowMatch } from "../lib/types";
 import { ApprovalDialog } from "./approval-dialog";
-import { ExistingSheet } from "./existing-sheet";
+import { InlineMatchReview } from "./inline-match-review";
 import { MobileExistingList, MobileSheetSwitch, type MobileTab } from "./recon-mobile-compare";
 import { ImportConfirm, type ImportPatch } from "./import-confirm";
-import { SheetDivider, useSheetSplit } from "./sheet-divider";
 import { MatchPanel } from "./match-panel";
 import type { QuickAction } from "./recon-decision-menu";
 import { ReconAccountBar, type AccountOption, type AccountSuggestionView } from "./recon-header";
@@ -122,13 +119,10 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   const [pendingAccount, setPendingAccount] = useState<string | null>(null);
   const [discardOpen, setDiscardOpen] = useState(false);
   const gridRef = useRef<HTMLDivElement>(null);
-  const existingGridRef = useRef<HTMLDivElement>(null);
-  const dualRef = useRef<HTMLDivElement>(null);
-  const { split, setSplit, bounds: splitRange } = useSheetSplit(dualRef);
-  // ---- dual-sheet state (view-only, never saved) ----
-  const [sheetMode, setSheetMode] = useState<ExistingSheetMode>("matches");
-  const [existingQuery, setExistingQuery] = useState("");
-  /** The FlowFi transaction picked in the right sheet — for one statement row; another row starts on its own default. */
+  /** The row whose inline match review is open under it (desktop). Always the selected row — see `inlineOpenId`. */
+  const [inlineId, setInlineId] = useState<string | null>(null);
+  // ---- inline review state (view-only, never saved) ----
+  /** The FlowFi transaction picked in the inline comparison — for one statement row; another row starts on its own default. */
   const [recordPick, setRecordPick] = useState<{ rowId: string; recordId: string } | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [undoNotice, setUndoNotice] = useState<string | null>(null);
@@ -364,18 +358,12 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     return visible[0]?.id ?? null;
   }, [selectedId, visible, rows]);
   const activeRow = rows.find((r) => r.id === activeId) ?? null;
+  // The inline review belongs to the selected row: moving the selection closes it (set during render, like openedFor).
+  if (inlineId && inlineId !== activeId) setInlineId(null);
+  const inlineOpenId = inlineId && inlineId === activeId ? inlineId : null;
   const activeMatch = activeId ? matches.get(activeId) : undefined;
   const activeDecision = activeId ? decisionFor(decisions, activeId) : null;
   const bulkPairs = useMemo(() => bulkLinkEligible(rows, matches, decisions), [rows, matches, decisions]);
-  /** Rows (other than the selected one) that still have an undecided possible match — the FlowFi sheet's "jump" list. */
-  const otherMatchRows = useMemo(() => foundMatches.filter((m) => m.rowId !== activeId).slice(0, 8), [foundMatches, activeId]);
-  /** The selected row's similar transactions on OTHER accounts (or on any account while none is chosen). */
-  const activeHints = useMemo(() => {
-    if (!activeRow || !recordsReady) return [] as AccountHint[];
-    if (!accountId) return (hintsByRow.get(activeRow.id) ?? []).slice(0, 12);
-    return matchStatus === "ready" ? accountHintsForRow(activeRow, records, { excludeAccountId: accountId, limit: 5 }) : [];
-  }, [activeRow, recordsReady, accountId, hintsByRow, matchStatus, records]);
-
   // ---- the Existing FlowFi sheet and the comparison dock (read-only views over the matcher's evidence) ----
   const linkedRows = useMemo(() => linkedRowsByRecord(rows, decisions), [rows, decisions]);
   const periodDays = useMemo(() => (period ? { fromDay: calendarDayIndex(period.from), toDay: calendarDayIndex(period.to) } : null), [period]);
@@ -384,9 +372,9 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   const entries = useMemo(
     () =>
       activeRow && accountId && sheetReady
-        ? existingEntries({ row: activeRow, match: activeMatch, records, accountId, period: periodDays, linkedRows, rejectedRecordIds: rejectedIds, rowNumberOf: numberOf, mode: sheetMode, query: existingQuery })
+        ? existingEntries({ row: activeRow, match: activeMatch, records, accountId, period: periodDays, linkedRows, rejectedRecordIds: rejectedIds, rowNumberOf: numberOf, mode: "matches" })
         : [],
-    [activeRow, activeMatch, records, accountId, sheetReady, periodDays, linkedRows, rejectedIds, numberOf, sheetMode, existingQuery],
+    [activeRow, activeMatch, records, accountId, sheetReady, periodDays, linkedRows, rejectedIds, numberOf],
   );
   // Every record the row could be compared with (unfiltered), so a search never loses the picked transaction.
   const allEntries = useMemo(
@@ -396,11 +384,6 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   const matchEntriesCount = activeMatch ? new Set([activeMatch.alreadyImportedId, ...activeMatch.candidates.map((c) => c.recordId), ...activeMatch.pendingSms.map((c) => c.recordId)].filter(Boolean)).size : 0;
   const targetId = recordPick && recordPick.rowId === activeId ? recordPick.recordId : defaultTargetId(activeMatch, activeDecision ?? undefined);
   const target = (targetId && allEntries.find((e) => e.record.id === targetId)) || null;
-  const highlightIds = useMemo(() => {
-    const ids = rowsCandidateFor(target?.record.id ?? null, matches);
-    if (activeId) ids.delete(activeId);
-    return ids;
-  }, [target, matches, activeId]);
 
   // Remember the row in focus for this tab — but only once the opening selection above has been settled, so a not-yet-ready
   // review never overwrites what it is about to restore.
@@ -432,10 +415,24 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     const timers = [window.setTimeout(settle, 240), window.setTimeout(settle, 520)];
     return () => timers.forEach((t) => window.clearTimeout(t));
   }, [inspectorOpen, activeId]);
-  const targetRecordId = target?.record.id ?? null;
+  // When the inline review opens (or its candidate / decision list changes height), keep the row and the panel's decision
+  // buttons inside the table's own scroll body — scrolling only that body, never the page, and never past the row's top.
   useEffect(() => {
-    if (targetRecordId) document.getElementById(`existing-row-${targetRecordId}`)?.scrollIntoView?.({ block: "nearest" });
-  }, [targetRecordId]);
+    if (!inlineOpenId) return;
+    const settle = () => {
+      const rowEl = document.getElementById(`recon-row-${inlineOpenId}`);
+      const panel = document.querySelector<HTMLElement>('[data-testid="inline-review"]');
+      const body = rowEl?.closest<HTMLElement>('[data-testid="recon-grid-body"]');
+      if (!rowEl || !panel || !body) return;
+      const b = body.getBoundingClientRect();
+      const r = rowEl.getBoundingClientRect();
+      const pn = panel.getBoundingClientRect();
+      if (pn.bottom > b.bottom) body.scrollTop += Math.min(pn.bottom - b.bottom + 4, Math.max(r.top - b.top, 0));
+      else if (r.top < b.top) body.scrollTop -= b.top - r.top;
+    };
+    const t = window.setTimeout(settle, 30);
+    return () => window.clearTimeout(t);
+  }, [inlineOpenId]);
 
   // ---- draft decisions, with Undo ----
   const remember = (label: string, next: Record<string, RowDecision>, rowIds: string[]) => {
@@ -447,6 +444,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   const decide = (rowId: string, patch: Partial<RowDecision>, label?: string) => {
     remember(label ?? `${patch.kind ? DECISION_META[patch.kind].short : "Change"} · row ${numberOf(rowId)}`, setDecision(decisions, rowId, patch), [rowId]);
     s.decide(rowId, patch);
+    if (patch.kind !== undefined) setInlineId((id) => (id === rowId ? null : id));
     if (patch.kind && autoNext && isDesktop && rowId === activeId && !inspectorOpen && !label?.startsWith("Details")) advanceAfter(rowId, patch.kind);
   };
   /** The next row still waiting for a decision after `rowId`, in statement order — wrapping round to the start. */
@@ -505,6 +503,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   });
   const resetView = () => {
     setSelectedId(null);
+    setInlineId(null);
     setInspectorOpen(false);
     setLastBulk(null);
     setFilter("all");
@@ -544,8 +543,11 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   /** Compare a row with FlowFi: desktop focuses the Existing FlowFi sheet; phones open the row's sheet. */
   const compare = (rowId: string) => {
     setSelectedId(rowId);
-    if (isDesktop) requestAnimationFrame(() => existingGridRef.current?.focus());
-    else setCompareOpen(true);
+    if (isDesktop) {
+      // One workspace at a time: the editor sheet closes, the row's inline review opens (or closes on a second click).
+      setInspectorOpen(false);
+      setInlineId((id) => (id === rowId ? null : rowId));
+    } else setCompareOpen(true);
   };
   /** "Compare with FlowFi" from the row's sheet: one bottom workspace at a time — the sheet closes, the dock takes over. */
   const compareFromSheet = (rowId: string) => {
@@ -746,60 +748,19 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
           e.preventDefault();
           move(-1);
           return;
-        case "ArrowRight":
-          // Across the spine into the Existing FlowFi sheet.
-          if (isDesktop) {
-            e.preventDefault();
-            existingGridRef.current?.focus();
-          }
-          return;
         case "Enter":
           if (activeRow) {
             e.preventDefault();
+            setInlineId(null);
             setInspectorOpen((open) => !open);
           }
           return;
         case "Escape":
           setInspectorOpen(false);
+          setInlineId(null);
           return;
         case "o":
-          if (activeRow && activeMatch) {
-            if (isDesktop) setCompareOpen(true);
-            else compare(activeRow.id);
-          }
-          return;
-      }
-    }
-    resolutionKey(e);
-  }
-
-  function onExistingKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
-    if (isTypingTarget(e.target)) return;
-    const idx = entries.findIndex((en) => en.record.id === targetRecordId);
-    const move = (delta: number) => {
-      const next = entries[Math.min(Math.max(idx + delta, 0), entries.length - 1)];
-      if (next && activeId) setRecordPick({ rowId: activeId, recordId: next.record.id });
-    };
-    if (!e.metaKey && !e.ctrlKey && !e.altKey) {
-      switch (e.key) {
-        case "ArrowDown":
-        case "j":
-          e.preventDefault();
-          move(idx < 0 ? 0 : 1);
-          return;
-        case "ArrowUp":
-        case "k":
-          e.preventDefault();
-          move(-1);
-          return;
-        case "ArrowLeft":
-        case "Escape":
-          e.preventDefault();
-          gridRef.current?.focus();
-          return;
-        case "Enter":
-          e.preventDefault();
-          if (activeRow && activeMatch) quickDecide(activeRow, activeMatch, "link");
+          if (activeRow && activeMatch) compare(activeRow.id);
           return;
       }
     }
@@ -811,6 +772,39 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     return <div className="h-40 animate-pulse rounded-3xl bg-muted/60" aria-label="Loading" />;
   }
 
+  /** The inline match review under a row (desktop): the matcher's candidates for THIS row, one comparison, four decisions. */
+  const inlineFor = (row: ReconRow) => {
+    const match = matches.get(row.id);
+    if (!match || !accountId || row.id !== activeId) return null;
+    const keepBoth = (patch: ImportPatch) => importRow(row, match, patch);
+    return (
+      <InlineMatchReview
+        row={row}
+        rowNumber={numberOf(row.id)}
+        match={match}
+        decision={decisionFor(decisions, row.id)}
+        gate={gate(row)}
+        entries={entries}
+        targetId={targetId}
+        onPick={(recordId) => setRecordPick({ rowId: row.id, recordId })}
+        accountName={accountName}
+        statementAccount={statementAccount}
+        captureSource={session?.source ?? "text"}
+        categories={data.categories}
+        onKeepExisting={(recordId) => keepExisting(row, recordId)}
+        onKeepBoth={keepBoth}
+        onImportNew={keepBoth}
+        onReviewLater={() => quickDecide(row, match, "investigate")}
+        onNotThisOne={(recordId) => {
+          reject(row.id, recordId);
+          setRecordPick(null);
+        }}
+        onClearDecision={() => quickDecide(row, match, "clear")}
+        onClose={() => setInlineId(null)}
+        onFullDetails={() => setCompareOpen(true)}
+      />
+    );
+  };
   const panelFor = (row: ReconRow, match: RowMatch) => {
     const at = visible.findIndex((r) => r.id === row.id);
     const go = (delta: number) => {
@@ -1124,8 +1118,9 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
 
           {isDesktop ? (
             <>
-              <div ref={dualRef} className="flex min-h-[12rem] min-w-0 flex-1" data-testid="dual-sheet">
-                <div className="min-h-0 min-w-0 shrink-0" style={{ flexBasis: `${split}%` }}>
+              {accountId && matchStatus === "ready" && <ReviewFilterStrip filter={filter} onFilter={setFilter} captured={rows.length} counts={counts} />}
+              <div className="flex min-h-[12rem] min-w-0 flex-1" data-testid="review-sheet">
+                <div className="min-h-0 min-w-0 flex-1">
                   <ReconTable
                     ref={gridRef}
                     rows={visible}
@@ -1138,6 +1133,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
                     onToggleExpand={(id) => {
                       const closing = inspectorOpen && id === activeId;
                       setSelectedId(id);
+                      setInlineId(null);
                       setInspectorOpen(!closing);
                     }}
                     onFixRow={fixRow}
@@ -1145,44 +1141,16 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
                     pendingLabel={pendingLabel}
                     onKeyDown={onGridKeyDown}
                     quickActions={quickActionsFor}
-                    highlightIds={highlightIds}
                     accountMissing={accountMissing && recordsReady}
                     accountHintOf={accountHintOf}
+                    inlineId={inlineOpenId}
+                    renderInline={inlineFor}
                     header={
                       <SheetTitleBar
-                        title="New statement"
+                        title="Statement review"
                         subtitle={`${session.source === "ocr" ? "Smart Capture screenshot" : "Pasted statement"} · ${rows.length} row${rows.length === 1 ? "" : "s"}${visible.length !== rows.length ? ` · ${visible.length} shown` : ""}`}
                       />
                     }
-                  />
-                </div>
-                <SheetDivider split={split} onSplit={setSplit} bounds={splitRange} containerRef={dualRef} linkCount={activeMatch && sheetReady ? matchEntriesCount : null} />
-                <div className="min-h-0 min-w-0 flex-1">
-                  <ExistingSheet
-                    ref={existingGridRef}
-                    entries={entries}
-                    mode={sheetMode}
-                    onMode={setSheetMode}
-                    query={existingQuery}
-                    onQuery={setExistingQuery}
-                    row={activeRow}
-                    rowNumber={activeRow ? numberOf(activeRow.id) : null}
-                    selectedRecordId={targetRecordId}
-                    onSelect={(recordId) => activeId && setRecordPick({ rowId: activeId, recordId })}
-                    accountLabel={statementAccount || "No account chosen"}
-                    numberOf={numberOf}
-                    onKeyDown={onExistingKeyDown}
-                    pendingLabel={sheetPending}
-                    matchCount={matchEntriesCount}
-                    hints={activeHints}
-                    accountMissing={accountMissing && recordsReady}
-                    accountName={accountName}
-                    onUseAccount={chooseAccount}
-                    otherMatches={otherMatchRows}
-                    onJumpToRow={(rowId) => {
-                      if (!visible.some((r) => r.id === rowId)) setFilter("all");
-                      setSelectedId(rowId);
-                    }}
                   />
                 </div>
               </div>
@@ -1648,4 +1616,45 @@ function handoffNoticeText(rows: ReconRow[]): string {
   const included = rows.filter((r) => r.include);
   const toCheck = included.filter((r) => !isComplete(r) || openIssues(r).length > 0).length;
   return `${included.length} row${included.length === 1 ? "" : "s"} arrived from Smart Capture${toCheck > 0 ? ` — ${toCheck} need${toCheck === 1 ? "s" : ""} a check before import` : ", all read clearly"}.`;
+}
+
+/**
+ * One compact line above the statement table: the review summary AND the focus filters in a single control, so the
+ * counts and the filter can never disagree (both come from the same `filterOf`). Captured is every captured row;
+ * the rest are the live match / decision states.
+ */
+function ReviewFilterStrip({ filter, onFilter, captured, counts }: { filter: ReconFilter; onFilter: (f: ReconFilter) => void; captured: number; counts: Record<ReconFilter, number> }) {
+  const items: { key: ReconFilter; label: string; value: number; testId: string }[] = [
+    { key: "all", label: "All", value: captured, testId: "rf-all" },
+    { key: "possible", label: "Possible matches", value: counts.possible, testId: "rf-possible" },
+    { key: "exact", label: "Exact matches", value: counts.exact, testId: "rf-exact" },
+    { key: "open", label: "Needs review", value: counts.open, testId: "rf-open" },
+    { key: "decided", label: "Ready to import", value: counts.decided, testId: "rf-ready" },
+    { key: "excluded", label: "Skipped", value: counts.excluded, testId: "rf-skipped" },
+  ];
+  return (
+    <div role="group" aria-label="Review summary and filter" data-testid="review-filter-strip" className="flex shrink-0 flex-wrap items-center gap-1 px-0.5 text-xs">
+      <span className="mr-1 text-[11px] text-muted-foreground">
+        Captured <span className="font-semibold text-foreground tabular-nums" data-testid="rf-captured">{captured}</span>
+      </span>
+      {items.map((i) => (
+        <button
+          key={i.key}
+          type="button"
+          aria-pressed={filter === i.key}
+          onClick={() => onFilter(filter === i.key && i.key !== "all" ? "all" : i.key)}
+          data-testid={i.testId}
+          className={cn(
+            "inline-flex h-6 items-center gap-1.5 rounded-md border px-2 font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+            filter === i.key ? "border-foreground bg-foreground text-background" : "border-border-strong/60 bg-card text-foreground/80 hover:bg-muted",
+          )}
+        >
+          {i.label}
+          <span className={cn("tabular-nums", filter === i.key ? "text-background/80" : "text-muted-foreground")} data-testid={`${i.testId}-count`}>
+            {i.value}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
 }

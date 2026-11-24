@@ -4,13 +4,16 @@
  */
 import { fireEvent, screen, within } from "@testing-library/react";
 
-/** The statement row the Existing FlowFi sheet is currently describing. */
-export const activeRowId = () => screen.getByTestId("existing-comparing").dataset.rowId!;
+/** The statement row in focus: the selected row of the single review sheet. */
+export const activeRowId = () => screen.getAllByTestId("recon-row").find((r) => r.getAttribute("aria-selected") === "true")!.dataset.rowId!;
 
 export const statementRow = (rowId: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === rowId)!;
 
-/** The FlowFi transaction picked in the Existing FlowFi sheet (what Keep existing would keep). */
-export const pickedRecordId = () => screen.getByTestId("existing-grid").getAttribute("aria-activedescendant")?.replace("existing-row-", "") ?? null;
+/** The FlowFi transaction shown in the open inline review's comparison (what Keep existing would keep). */
+export const pickedRecordId = () => {
+  const checked = screen.queryAllByTestId("inline-candidate").find((c) => c.getAttribute("aria-checked") === "true");
+  return checked?.dataset.recordId ?? screen.queryByTestId("inline-compare")?.dataset.recordId ?? null;
+};
 
 export function openRowMenu(rowId: string = activeRowId()) {
   fireEvent.click(within(statementRow(rowId)).getByTestId("quick-decide"));

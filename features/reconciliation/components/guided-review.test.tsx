@@ -63,7 +63,8 @@ function seed(decisions: Record<string, Partial<RowDecision>> = {}) {
 
 const rowEl = (id: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === id)!;
 /** Desktop: the full comparison (MatchPanel) opens in a drawer (key O); phones show it in the row's sheet. */
-const panel = () => screen.queryByTestId("match-panel") ?? (fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "o" }), screen.getByTestId("match-panel"));
+// "o" opens the row's inline review; its "Full details" opens the full comparison sheet.
+const panel = () => screen.queryByTestId("match-panel") ?? (fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "o" }), fireEvent.click(screen.getByTestId("inline-full-details")), screen.getByTestId("match-panel"));
 const menuOf = (id: string) => within(rowEl(id)).getByTestId("quick-decide");
 
 describe("quick-decide menu", () => {

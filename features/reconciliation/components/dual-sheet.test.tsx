@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 /**
- * The dual-sheet merge studio: New Statement (left) ⇄ Existing FlowFi (right), the comparison dock and its Git-style
- * resolutions. Synthetic data only. Every interaction here is draft-only — the tripwire deps prove nothing is read from
+ * The single-sheet review (2026-11-24): ONE statement table; a row's match chip opens an inline review directly under
+ * it (candidates · one side-by-side comparison · the four decisions). The old second "Existing FlowFi" sheet and its
+ * divider are gone from the desktop view (their components remain, unrouted). Synthetic data only. Every interaction here is draft-only — the tripwire deps prove nothing is read from
  * the server or written while comparing and deciding.
  */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -18,7 +19,7 @@ import { commitRepositoriesFor, type ApprovalDeps } from "../lib/approval-commit
 import { DRAFT_KEY_PREFIX, buildReconciliationDraft, saveReconciliationDraft } from "../lib/reconciliation-draft";
 import { APPROVAL_NOW, reconData, reconRow, reconSession, txn } from "../lib/test-fixtures";
 import type { ReconRow, RowDecision } from "../lib/types";
-import { menuItem, openImportConfirm, pickedRecordId } from "./menu-test-utils";
+import { activeRowId, menuItem, openImportConfirm, pickedRecordId } from "./menu-test-utils";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
 
 function setViewport(width: number) {
@@ -87,11 +88,21 @@ function tripwire() {
 }
 
 const rowEl = (id: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === id)!;
-const existingEl = (id: string) => screen.getAllByTestId("existing-row").find((r) => r.dataset.recordId === id)!;
-const existingIds = () => screen.queryAllByTestId("existing-row").map((r) => r.dataset.recordId);
+/** A candidate in the open inline review. */
+const candidateEl = (id: string) => screen.getAllByTestId("inline-candidate").find((r) => r.dataset.recordId === id)!;
+/** The FlowFi transactions the open inline review shows (the candidate list, or the single compared one). */
+const existingIds = () => {
+  const list = screen.queryAllByTestId("inline-candidate").map((r) => r.dataset.recordId);
+  if (list.length > 0) return list;
+  const one = screen.queryByTestId("inline-compare")?.dataset.recordId;
+  return one ? [one] : [];
+};
+/** The match chip opens the row's inline review under it. */
+const compare = (n: number) => fireEvent.click(screen.getByRole("button", { name: `Compare row ${n}` }));
+const field = (name: string) => screen.getByTestId("inline-compare").querySelector(`[data-field="${name}"]`) as HTMLElement;
 const resolve = (id: string) => menuItem(id);
 const statementRowIds = () => screen.getAllByTestId("recon-row").map((r) => r.dataset.rowId);
-const comparingRow = () => screen.getByTestId("existing-comparing").dataset.rowId;
+const comparingRow = () => activeRowId();
 const select = (id: string) => fireEvent.click(rowEl(id));
 const draft = () => sessionStorage.getItem(`${DRAFT_KEY_PREFIX}u1`)!;
 
@@ -101,54 +112,70 @@ function renderStudio() {
   return t;
 }
 
-describe("dual-sheet selection and candidate highlighting", () => {
-  it("shows both sheets side by side; selecting a statement row drives the Existing FlowFi sheet and the dock", () => {
+describe("single-sheet selection and the inline review", () => {
+  it("shows ONE statement sheet; a match chip opens the row's review directly under it, with no second table", () => {
     seed();
     renderStudio();
     expect(screen.getByTestId("statement-sheet")).toBeTruthy();
-    expect(screen.getByTestId("existing-sheet")).toBeTruthy();
-    expect(screen.getByRole("grid", { name: "Existing FlowFi transactions" })).toBeTruthy();
+    expect(screen.queryByTestId("existing-sheet")).toBeNull();
+    expect(screen.queryByRole("grid", { name: "Existing FlowFi transactions" })).toBeNull();
+    expect(screen.queryByRole("separator", { name: "Resize the sheets" })).toBeNull();
+    expect(screen.queryByTestId("inline-review")).toBeNull(); // nothing is expanded until a chip is clicked
 
     select("r1");
+    compare(1);
     expect(existingIds()).toEqual(["t-sw"]);
-    expect(existingEl("t-sw").dataset.role).toBe("suggested");
-    expect(existingEl("t-sw").getAttribute("aria-selected")).toBe("true");
-    expect(comparingRow()).toBe("r1");
     expect(pickedRecordId()).toBe("t-sw");
-    expect(screen.queryByTestId("resolution-dock")).toBeNull(); // no bottom action bar — actions live in each row's ⋯ menu
-    expect(screen.getByTestId("sheet-link-count").textContent).toBe("1");
+    expect(comparingRow()).toBe("r1");
+    expect(rowEl("r1").nextElementSibling).toBe(screen.getByTestId("inline-review")); // directly under its row, same scroll body
+    expect(screen.getByTestId("recon-grid-body").contains(screen.getByTestId("inline-review"))).toBe(true);
+    expect(screen.queryByTestId("resolution-dock")).toBeNull(); // no bottom action bar — actions live in the row and the panel
 
-    select("r6"); // nothing similar on the card
+    select("r6"); // nothing similar on the card — the panel closes with the selection
+    expect(screen.queryByTestId("inline-review")).toBeNull();
+    compare(6);
     expect(existingIds()).toEqual([]);
-    expect(screen.getByTestId("existing-empty").textContent).toMatch(/No match for Row 6/);
+    expect(screen.getByTestId("inline-no-candidate").textContent).toMatch(/Nothing on this account looks like this row/);
   });
 
-  it("selecting an existing transaction highlights every statement row it could be (same-day genuine repeats)", () => {
+  it("clicking the chip again, the close button or Escape collapses it; only one review is ever open", () => {
+    seed();
+    renderStudio();
+    compare(1);
+    expect(screen.getAllByTestId("inline-review")).toHaveLength(1);
+    compare(1);
+    expect(screen.queryByTestId("inline-review")).toBeNull();
+    compare(2);
+    compare(3);
+    expect(screen.getAllByTestId("inline-review")).toHaveLength(1);
+    expect(screen.getByTestId("inline-review").dataset.rowId).toBe("r3");
+    fireEvent.click(screen.getByTestId("inline-review-close"));
+    expect(screen.queryByTestId("inline-review")).toBeNull();
+    compare(1);
+    fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "Escape" });
+    expect(screen.queryByTestId("inline-review")).toBeNull();
+  });
+
+  it("the inline review lists only the matcher's candidates — never another account's record or one outside the window", () => {
+    seed();
+    renderStudio();
+    select("r6"); // Bookstore ₹250 exists only on the BANK
+    compare(6);
+    expect(existingIds()).not.toContain("t-bank");
+    select("r1"); // Swiggy: the ₹380 one from 22 days earlier is not a candidate
+    compare(1);
+    expect(existingIds()).toEqual(["t-sw"]);
+  });
+
+  it("two same-day statement rows can each open the same FlowFi transaction as a candidate (genuine repeats stay separate decisions)", () => {
     seed();
     renderStudio();
     select("r4");
+    compare(4);
     expect(existingIds()).toEqual(["t-cafe"]);
-    expect(rowEl("r5").dataset.related).toBe("true"); // the twin row could be the same FlowFi transaction
-    expect(rowEl("r1").dataset.related).toBeUndefined();
-  });
-
-  it("account ledger: everything on the account in the statement period, with the reason a record can't be this row", () => {
-    seed();
-    renderStudio();
-    select("r1");
-    fireEvent.click(screen.getByTestId("existing-mode-ledger"));
-    expect(screen.getByTestId("existing-sheet").dataset.mode).toBe("ledger");
-    expect(existingIds()).toEqual(expect.arrayContaining(["t-rent", "t-z1", "t-z2", "t-am", "t-cafe", "t-sw"]));
-    expect(existingIds()).not.toContain("t-bank"); // another account — never shown
-    expect(existingIds()).not.toContain("t-sw-old"); // outside the statement period
-    fireEvent.click(existingEl("t-rent"));
-    expect(existingEl("t-rent").dataset.viewOnly).toBe("amount");
-    expect(resolve("keep_existing").disabled).toBe(true);
-    expect(resolve("keep_existing").title).toMatch(/too far apart/);
-    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
-    // Search the account.
-    fireEvent.change(screen.getByLabelText("Search existing transactions"), { target: { value: "zomato" } });
-    expect(existingIds()).toEqual(["t-z1", "t-z2"]);
+    select("r5");
+    compare(5);
+    expect(existingIds()).toEqual(["t-cafe"]);
   });
 });
 
@@ -160,32 +187,42 @@ describe("live match comparison", () => {
     seed();
     renderStudio();
     select("r1");
-    expect(existingEl("t-sw").textContent).toMatch(/Possible match/);
+    compare(1);
+    expect(field("amount").dataset.verdict).toBe("same");
+    expect(field("date").dataset.verdict).toBe("same");
+    expect(field("account").dataset.verdict).toBe("same");
+    expect(screen.getByTestId("inline-review").textContent).not.toMatch(/(confirmed|exact|definite|is a) duplicate/i);
     expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
   });
 
-  it("a near amount is a possible match whose difference is named beside the description", () => {
+  it("a near amount is a possible match whose differences are highlighted (₹1,299 vs ₹1,299.50, a day apart)", () => {
     seed();
     renderStudio();
     select("r3");
-    expect(existingEl("t-am").textContent).toMatch(/Possible match/);
-    expect(existingEl("t-am").textContent).toMatch(/₹0\.50 more/);
-    expect(within(existingEl("t-am")).getByTestId("existing-difference").textContent).toMatch(/1 day later/);
+    compare(3);
+    expect(rowEl("r3").dataset.state).toBe("near_amount");
+    expect(field("amount").dataset.verdict).toBe("diff");
+    expect(field("amount").textContent).toMatch(/₹0\.50 more/);
+    expect(field("date").dataset.verdict).toBe("diff");
+    expect(field("date").textContent).toMatch(/1 day later/);
+    expect(within(rowEl("r3")).getByTestId("decision-chip").dataset.pending).toBe("true");
   });
 
   it("multiple possible matches: both listed, nothing pre-decided; picking one compares and keeps exactly that one", () => {
     seed();
     renderStudio();
     select("r2");
+    compare(2);
     expect(rowEl("r2").dataset.state).toBe("multiple");
     expect(existingIds()).toEqual(["t-z1", "t-z2"]);
-    expect(screen.getAllByTestId("existing-row").every((r) => r.dataset.role === "candidate")).toBe(true);
-    fireEvent.click(existingEl("t-z2"));
+    expect(rowEl("r2").dataset.decision).toBe("");
+    fireEvent.click(candidateEl("t-z2"));
     expect(pickedRecordId()).toBe("t-z2");
-    fireEvent.click(resolve("keep_existing"));
+    expect(screen.getAllByTestId("inline-compare")).toHaveLength(1); // one detailed comparison at a time
+    fireEvent.click(screen.getByTestId("inline-keep-existing"));
     expect(within(rowEl("r2")).getByTestId("decision-chip").textContent).toBe("Keep existing");
-    expect(existingEl("t-z2").textContent).toMatch(/Kept by row 2/);
     expect(JSON.parse(draft()).decisions.r2.linkedRecordId).toBe("t-z2");
+    expect(screen.queryByTestId("inline-review")).toBeNull(); // deciding collapses the panel
   });
 });
 
@@ -320,25 +357,24 @@ describe("undo draft decisions", () => {
 });
 
 describe("keyboard navigation", () => {
-  it("→ crosses into FlowFi, J/K pick a transaction, Enter keeps it, ← comes back", () => {
+  it("O opens the inline review; J/K move the selection and close it; L keeps the picked transaction", () => {
     seed();
     renderStudio();
     const grid = screen.getByRole("grid", { name: "Statement rows" });
     grid.focus();
+    fireEvent.keyDown(grid, { key: "o" });
+    expect(screen.getByTestId("inline-review").dataset.rowId).toBe("r1");
     fireEvent.keyDown(grid, { key: "j" }); // r2 — two Zomatos
     expect(rowEl("r2").getAttribute("aria-selected")).toBe("true");
-    fireEvent.keyDown(grid, { key: "ArrowRight" });
-    const existing = screen.getByRole("grid", { name: "Existing FlowFi transactions" });
-    expect(document.activeElement).toBe(existing);
-    fireEvent.keyDown(existing, { key: "j" });
-    expect(existingEl("t-z2").getAttribute("aria-selected")).toBe("true");
-    fireEvent.keyDown(existing, { key: "Enter" });
+    expect(screen.queryByTestId("inline-review")).toBeNull();
+    fireEvent.keyDown(grid, { key: "o" });
+    expect(existingIds()).toEqual(["t-z1", "t-z2"]);
+    fireEvent.click(candidateEl("t-z2"));
+    fireEvent.keyDown(grid, { key: "l" });
     expect(JSON.parse(draft()).decisions.r2.linkedRecordId).toBe("t-z2");
-    fireEvent.keyDown(existing, { key: "ArrowLeft" });
-    expect(document.activeElement).toBe(grid);
   });
 
-  it("N opens the row's editor to import (nothing is decided by the key); the divider resizes with the arrow keys and is remembered", () => {
+  it("N opens the row's editor to import (nothing is decided by the key)", () => {
     seed();
     renderStudio();
     const grid = screen.getByRole("grid", { name: "Statement rows" });
@@ -346,26 +382,28 @@ describe("keyboard navigation", () => {
     expect(screen.getByTestId("import-as-transaction")).toBeTruthy();
     expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
-
-    const divider = screen.getByRole("separator", { name: "Resize the sheets" });
-    const start = Number(divider.getAttribute("aria-valuenow"));
-    fireEvent.keyDown(divider, { key: "ArrowLeft" });
-    expect(Number(divider.getAttribute("aria-valuenow"))).toBe(start - 4);
-    fireEvent.keyDown(divider, { key: "Home" });
-    expect(divider.getAttribute("aria-valuenow")).toBe("40");
-    expect(localStorage.getItem("flowfi.recon.split")).toBe("40");
   });
 });
 
 describe("layout and scrolling", () => {
-  it("desktop: each sheet scrolls on its own under a sticky header; selection is synchronised, scrolling is not", () => {
+  it("desktop: the one sheet scrolls on its own under a sticky header; the inline review lives INSIDE that scroll body (no nested scroller)", () => {
     seed();
     renderStudio();
     expect(screen.getByTestId("recon-grid-body").className).toMatch(/overflow-y-auto/);
-    expect(screen.getByTestId("existing-grid-body").className).toMatch(/overflow-y-auto/);
     expect(screen.getByTestId("statement-sheet").className).toMatch(/@container/);
-    expect(screen.getByTestId("existing-sheet").className).toMatch(/@container/);
-    expect(screen.getByTestId("dual-sheet").className).toMatch(/flex-1/);
+    expect(screen.getByTestId("review-sheet").className).toMatch(/flex-1/);
+    compare(2);
+    const panel = screen.getByTestId("inline-review");
+    expect(screen.getByTestId("recon-grid-body").contains(panel)).toBe(true);
+    // The panel is in normal flow: no own overflow / max-height that would create a second scroller, and it is not sticky.
+    expect(panel.className).not.toMatch(/overflow-(y-)?(auto|scroll)|max-h-|sticky|fixed|absolute/);
+    // The column header is outside the scroll body, so nothing can overlap an expanded panel.
+    expect(screen.getByTestId("recon-grid-body").contains(screen.getByRole("columnheader", { name: "Description" }))).toBe(false);
+    // Expanding and collapsing never changes the scroll position of the body.
+    const body = screen.getByTestId("recon-grid-body");
+    body.scrollTop = 0;
+    fireEvent.click(screen.getByTestId("inline-review-close"));
+    expect(body.scrollTop).toBe(0);
   });
 
   it("phone: the sheets become tabs; the selected row stays pinned and can be kept from the FlowFi tab", async () => {
@@ -396,10 +434,10 @@ describe("approval regression and zero writes", () => {
     select("r1");
     fireEvent.click(resolve("keep_existing"));
     select("r2");
-    fireEvent.click(existingEl("t-z1"));
-    fireEvent.click(resolve("keep_existing"));
+    compare(2);
+    fireEvent.click(candidateEl("t-z1"));
+    fireEvent.click(screen.getByTestId("inline-keep-existing"));
     select("r3");
-    fireEvent.click(screen.getByTestId("existing-mode-ledger"));
     fireEvent.click(resolve("keep_existing"));
     select("r4");
     fireEvent.click(resolve("keep_existing"));
@@ -460,35 +498,23 @@ describe("approval regression and zero writes", () => {
 });
 
 describe("select → find possible matches → compare → decide (2026-11-18)", () => {
-  const comparing = () => screen.getByTestId("existing-comparing").dataset.rowId;
+  const comparing = () => activeRowId();
 
-  it("the FlowFi side always describes the selected row; a row hidden by a filter hands focus to the next shown row", () => {
+  it("the open review always describes the selected row; a row hidden by a filter hands focus to the next shown row", () => {
     seed();
     renderStudio();
     select("r3");
     expect(comparing()).toBe("r3");
     select("r1");
+    compare(1);
     expect(comparing()).toBe("r1");
     expect(existingIds()).toEqual(["t-sw"]);
-    // Decide r1, then show only Pending rows: r1 is hidden, so neither side may keep describing it.
+    // Decide r1, then show only Pending rows: r1 is hidden, so the selection moves on to the next shown row.
     fireEvent.click(resolve("keep_existing"));
     fireEvent.click(screen.getByTestId("status-pending"));
     expect(screen.getAllByTestId("recon-row").some((r) => r.dataset.rowId === "r1")).toBe(false);
     expect(comparing()).toBe("r2");
-  });
-
-  it("a row with no match says so and lists the rows that do have one — one click compares them", () => {
-    seed();
-    renderStudio();
-    select("r6"); // Bookstore: only the BANK has one, so nothing on the card
-    expect(rowEl("r6").dataset.state).toBe("no_match");
-    const others = within(screen.getByTestId("existing-other-rows")).getAllByTestId("existing-other-row").map((b) => b.getAttribute("aria-label"));
-    expect(others).toEqual(expect.arrayContaining(["Compare row 1", "Compare row 2", "Compare row 3"]));
-    expect(others).not.toContain("Compare row 6");
-    fireEvent.click(within(screen.getByTestId("existing-other-rows")).getByRole("button", { name: "Compare row 1" }));
-    expect(comparing()).toBe("r1");
-    expect(existingIds()).toEqual(["t-sw"]);
-    expect(rowEl("r1").getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByTestId("inline-review")).toBeNull();
   });
 
   it("Keep existing · Import as transaction · Not a match — ignoring only drops that suggestion, writes nothing, and Undo brings it back", () => {

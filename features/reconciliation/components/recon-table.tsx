@@ -16,7 +16,7 @@
  * which the workspace renders over the viewport — the table stays a list and the row stays highlighted.
  */
 
-import { forwardRef } from "react";
+import { Fragment, forwardRef } from "react";
 import { PencilLine, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { describeAmountDelta, describeDayGap } from "../lib/amounts-and-days";
@@ -27,10 +27,11 @@ import { ACCOUNT_MISSING_META, DecisionChip, Mark, Money, SHEET_CELLS, SHEET_FRA
 
 /** Narrow pane: # · description (date folded in) · amount · decision · ✎. ≥30rem adds Date; ≥38rem adds Match. */
 const COLS =
-  "grid-cols-[1.75rem_minmax(0,1fr)_6.75rem_8rem_1.75rem] @min-[30rem]:grid-cols-[2rem_4rem_minmax(0,1fr)_7.5rem_8rem_2rem] @min-[38rem]:grid-cols-[2rem_4rem_minmax(0,1fr)_7.25rem_7.75rem_8rem_1.75rem] @min-[56rem]:grid-cols-[2.25rem_4.25rem_minmax(0,1fr)_7.75rem_8.5rem_8.5rem_2rem]";
+  "grid-cols-[1.75rem_minmax(0,1fr)_6.75rem_8rem_1.75rem] @min-[30rem]:grid-cols-[2rem_4rem_minmax(0,1fr)_7.5rem_8rem_2rem] @min-[38rem]:grid-cols-[2rem_4rem_minmax(0,1fr)_7.25rem_7.75rem_8rem_1.75rem] @min-[56rem]:grid-cols-[2.25rem_4.25rem_minmax(0,1fr)_7.75rem_5rem_9rem_9rem_2rem]";
 const DATE_COL = "hidden @min-[30rem]:block";
 const WIDE_ONLY = "hidden @min-[38rem]:block";
 const NARROW_ONLY = "@min-[38rem]:hidden";
+const TYPE_COL = "hidden @min-[56rem]:block";
 
 /** One short line of evidence for the row's best possible match. */
 export function evidenceLine(match: RowMatch | undefined, pendingLabel = "Choose the statement account"): string {
@@ -85,10 +86,13 @@ export interface ReconTableProps {
   /** No statement account chosen: the Match column shows "Account missing" plus cross-account evidence. */
   accountMissing?: boolean;
   accountHintOf?: (rowId: string) => RowAccountHint | null;
+  /** The row whose inline match review is open, and what to render under it (inside the same scroll body — no nested scroller). */
+  inlineId?: string | null;
+  renderInline?: (row: ReconRow) => React.ReactNode;
 }
 
 export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function ReconTable(
-  { rows, numberOf, matches, decisions, selectedId, expandedId, onSelect, onToggleExpand, onFixRow, onCompare, onKeyDown, pendingLabel, quickActions, contained = true, highlightIds, header, accountMissing = false, accountHintOf },
+  { rows, numberOf, matches, decisions, selectedId, expandedId, onSelect, onToggleExpand, onFixRow, onCompare, onKeyDown, pendingLabel, quickActions, contained = true, highlightIds, header, accountMissing = false, accountHintOf, inlineId = null, renderInline },
   ref,
 ) {
   return (
@@ -115,6 +119,9 @@ export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function R
           <span role="columnheader">Description</span>
           <span role="columnheader" className="text-right">
             Amount
+          </span>
+          <span role="columnheader" className={TYPE_COL}>
+            Type
           </span>
           <span role="columnheader" className={WIDE_ONLY}>
             Match
@@ -169,8 +176,8 @@ export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function R
               </span>
             );
             return (
+              <Fragment key={row.id}>
               <div
-                key={row.id}
                 id={`recon-row-${row.id}`}
                 role="row"
                 aria-selected={selected}
@@ -249,6 +256,9 @@ export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function R
                 <span role="gridcell" className="text-right whitespace-nowrap">
                   <Money amount={row.amount} direction={row.direction} className="text-[13px]" />
                 </span>
+                <span role="gridcell" className={cn("truncate text-xs text-muted-foreground", TYPE_COL)} data-testid="row-type">
+                  {row.direction === "credit" ? "Credit" : row.direction === "debit" ? "Debit" : "—"}
+                </span>
                 <span role="gridcell" className={cn("min-w-0 px-0!", WIDE_ONLY)}>
                   <span className="flex h-full min-w-0 items-center px-2">{matchCell}</span>
                 </span>
@@ -284,6 +294,8 @@ export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function R
                   </button>
                 </span>
               </div>
+              {inlineId === row.id && renderInline?.(row)}
+              </Fragment>
             );
           })}
           {/* The sheet ends where the statement ends — no filler rows; the rest of the pane stays quiet. */}
