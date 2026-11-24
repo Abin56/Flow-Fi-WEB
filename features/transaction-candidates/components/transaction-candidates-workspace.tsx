@@ -62,6 +62,7 @@ import {
   resolveCandidateDestinationKey,
 } from "../lib/candidate-account-matching";
 import { buildDestinationOptions, categoryOptionsForDirection } from "../lib/candidate-details-view";
+import { collapseDuplicateCandidates } from "../lib/collapse-duplicate-candidates";
 import { evaluateCandidateDuplicate, type CandidateDuplicateResult } from "../lib/candidate-duplicate";
 import { buildRowMatches, type RowMatch } from "../lib/match-display";
 import { findPossibleMatches, mergeGateMatch } from "../lib/possible-matches";
@@ -224,7 +225,7 @@ export function TransactionCandidatesWorkspace() {
       return next;
     });
 
-  const pendingCandidates = useMemo(() => liveCandidates.filter((c) => !pendingDismissIds.has(c.id)), [liveCandidates, pendingDismissIds]);
+  const pendingCandidates = useMemo(() => collapseDuplicateCandidates(liveCandidates.filter((c) => !pendingDismissIds.has(c.id))), [liveCandidates, pendingDismissIds]);
 
   // Android matches a candidate to an account only once, when it builds it — so a later correction to a saved account's last-4
   // (or a newly added account) never reaches rows that are already synced. Re-run the same last-4 rule against the CURRENT

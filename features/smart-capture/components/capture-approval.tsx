@@ -82,7 +82,15 @@ export function CaptureApproval({
   const staged = useMemo(() => toStagedRecords(rows), [rows]);
   const blockers = useMemo(() => getPreflightBlockers(staged, categories), [staged, categories]);
   const blockedIds = new Set(blockers.map((b) => b.recordId));
-  const duplicateIds = new Set((warnings ?? []).map((w) => w.recordId));
+  // Live view of what already looks recorded — recomputed as rows, account or saved transactions change, so possible
+  // duplicates are visible BEFORE approving (display only; the approve-time check and dialog below still run).
+  const sessionIdForCheck = accountId ? captureSessionId(sourceText, accountId) : null;
+  const liveWarnings = useMemo(
+    () => (accountId && sessionIdForCheck ? detectFreshDuplicatesForCommit(staged, transactions, accountId, sessionIdForCheck) : []),
+    [staged, transactions, accountId, sessionIdForCheck],
+  );
+  const duplicateById = useMemo(() => new Map([...(warnings ?? []), ...liveWarnings].map((w) => [w.recordId, w])), [warnings, liveWarnings]);
+  const duplicateIds = new Set(duplicateById.keys());
   const pending = staged.filter((s) => !s.committedTransactionId && s.flowType !== "ignore");
   const sessionId = accountId ? captureSessionId(sourceText, accountId) : null;
 
@@ -142,6 +150,64 @@ export function CaptureApproval({
     if (allDone) onComplete();
   }, [allDone, onComplete]);
 
+  const isDupRow = (r: ReviewRow) => duplicateIds.has(r.id) && !r.committedTransactionId && r.action !== "ignore";
+  const dupRows = included.filter(isDupRow);
+  const cleanRows = included.filter((r) => !isDupRow(r));
+
+  function renderRow(row: ReviewRow) {
+      const actions = row.direction ? CAPTURE_ACTIONS_BY_DIRECTION[row.direction] : [];
+      const options = categoriesFor(row.action, categories);
+      const done = row.committedTransactionId != null;
+      return (
+        <div key={row.id} className={cn("grid items-center gap-2 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_9rem_11rem_12rem]", done && "bg-success/5")}>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-foreground">{row.description}</p>
+            <p className="text-xs text-muted-foreground">
+              {(row.date ? formatDisplayDate(row.date) : undefined)}
+              {duplicateIds.has(row.id) && !done && <span className="ml-2 inline-flex items-center rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-bold tracking-wide text-warning uppercase">Possible duplicate</span>}
+              {blockedIds.has(row.id) && !done && <span className="ml-2 text-warning">· {blockers.find((b) => b.recordId === row.id)?.blockingReasons[0]?.message}</span>}
+            </p>
+          </div>
+          <p className={cn("text-right text-sm font-semibold tabular-nums", row.direction === "credit" ? "text-success" : "text-expense")}>
+            {row.direction === "credit" ? "+" : "−"}
+            {formatCurrencyPrecise(row.amount ?? 0)}
+          </p>
+          {done ? (
+            <span className="col-span-2 inline-flex items-center gap-1.5 text-xs font-medium text-success sm:justify-self-end">
+              <CheckCircle2 className="size-4" /> Imported
+            </span>
+          ) : (
+            <>
+              <Select value={row.action ?? undefined} onValueChange={(v) => patch(row.id, { action: v as CaptureAction, category: null })} disabled={committing}>
+                <SelectTrigger className="h-8 rounded-xl text-xs" aria-label="Action">
+                  <SelectValue placeholder="Action" />
+                </SelectTrigger>
+                <SelectContent>
+                  {actions.map((a) => (
+                    <SelectItem key={a} value={a}>
+                      {ACTION_META[a].label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={row.category ?? undefined} onValueChange={(v) => patch(row.id, { category: v })} disabled={committing || row.action === "ignore"}>
+                <SelectTrigger className="h-8 rounded-xl text-xs" aria-label="Category">
+                  <SelectValue placeholder={row.action === "ignore" ? "Not needed" : "Category"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {options.map((c) => (
+                    <SelectItem key={c.id} value={c.name}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </>
+          )}
+        </div>
+      );
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <section className="surface-primary flex flex-col gap-3 rounded-3xl p-4 sm:flex-row sm:items-center">
@@ -177,62 +243,35 @@ export function CaptureApproval({
 
       <BulkCategoryBar rows={rows} categories={categories} onApply={applyCategoryToAll} />
 
-      <section className="surface-primary overflow-hidden rounded-3xl">
-        <ul className="divide-y divide-border">
-          {included.map((row) => {
-            const actions = row.direction ? CAPTURE_ACTIONS_BY_DIRECTION[row.direction] : [];
-            const options = categoriesFor(row.action, categories);
-            const done = row.committedTransactionId != null;
-            return (
-              <li key={row.id} className={cn("grid items-center gap-2 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_9rem_11rem_12rem]", done && "bg-success/5")}>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-foreground">{row.description}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {(row.date ? formatDisplayDate(row.date) : undefined)}
-                    {duplicateIds.has(row.id) && <span className="ml-2 text-warning">· Possible duplicate</span>}
-                    {blockedIds.has(row.id) && !done && <span className="ml-2 text-warning">· {blockers.find((b) => b.recordId === row.id)?.blockingReasons[0]?.message}</span>}
-                  </p>
+      {dupRows.length > 0 && (
+        <section data-testid="possible-duplicates" className="overflow-hidden rounded-3xl border border-warning/40 bg-warning/5">
+          <div className="flex items-start gap-2 px-4 pt-3 pb-2">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+            <div>
+              <p className="text-sm font-semibold text-foreground">
+                {dupRows.length} possible duplicate{dupRows.length === 1 ? "" : "s"} — already recorded?
+              </p>
+              <p className="text-xs text-muted-foreground">These look like transactions you already have. Skip each one you don&apos;t want recorded twice; the rest are imported as usual.</p>
+            </div>
+          </div>
+          <ul className="divide-y divide-border">
+            {dupRows.map((row) => (
+              <li key={row.id} data-testid="possible-duplicate-row">
+                {renderRow(row)}
+                <div className="flex flex-wrap items-center gap-2 px-4 pb-3 text-xs text-muted-foreground">
+                  <span className="min-w-0 flex-1">{duplicateById.get(row.id)?.result.bestMatch?.reason}</span>
+                  <ClayButton size="sm" variant="ghost" disabled={committing} onClick={() => patch(row.id, { action: "ignore", category: null })}>
+                    Skip — don&apos;t import
+                  </ClayButton>
                 </div>
-                <p className={cn("text-right text-sm font-semibold tabular-nums", row.direction === "credit" ? "text-success" : "text-expense")}>
-                  {row.direction === "credit" ? "+" : "−"}
-                  {formatCurrencyPrecise(row.amount ?? 0)}
-                </p>
-                {done ? (
-                  <span className="col-span-2 inline-flex items-center gap-1.5 text-xs font-medium text-success sm:justify-self-end">
-                    <CheckCircle2 className="size-4" /> Imported
-                  </span>
-                ) : (
-                  <>
-                    <Select value={row.action ?? undefined} onValueChange={(v) => patch(row.id, { action: v as CaptureAction, category: null })} disabled={committing}>
-                      <SelectTrigger className="h-8 rounded-xl text-xs" aria-label="Action">
-                        <SelectValue placeholder="Action" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {actions.map((a) => (
-                          <SelectItem key={a} value={a}>
-                            {ACTION_META[a].label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={row.category ?? undefined} onValueChange={(v) => patch(row.id, { category: v })} disabled={committing || row.action === "ignore"}>
-                      <SelectTrigger className="h-8 rounded-xl text-xs" aria-label="Category">
-                        <SelectValue placeholder={row.action === "ignore" ? "Not needed" : "Category"} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {options.map((c) => (
-                          <SelectItem key={c.id} value={c.name}>
-                            {c.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </>
-                )}
               </li>
-            );
-          })}
-        </ul>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <section className="surface-primary overflow-hidden rounded-3xl">
+        <div className="divide-y divide-border">{cleanRows.map((row) => renderRow(row))}</div>
       </section>
 
       <div className="flex items-start gap-2 rounded-2xl bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
