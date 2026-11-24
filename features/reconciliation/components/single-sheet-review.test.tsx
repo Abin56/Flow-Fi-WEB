@@ -201,27 +201,46 @@ describe("editing a row invalidates a stale decision", () => {
 });
 
 describe("summary and filters", () => {
-  it("one strip shows Captured / Possible / Exact / Needs review / Ready / Skipped, and its counts follow decisions", () => {
+  it("one strip shows Captured / Possible duplicates / Fix required / Ready / Skipped; every count equals what its filter shows and follows decisions", () => {
     seed({ g3: { kind: "ignore" } });
     renderStudio();
     const strip = screen.getByTestId("review-filter-strip");
     const n = (id: string) => Number(within(strip).getByTestId(`${id}-count`).textContent);
     expect(Number(within(strip).getByTestId("rf-captured").textContent)).toBe(4);
     expect(n("rf-all")).toBe(4);
-    const possible = n("rf-possible");
-    expect(possible).toBeGreaterThanOrEqual(1);
-    // Every count equals the rows the filter actually shows.
-    fireEvent.click(within(strip).getByTestId("rf-possible"));
-    expect(screen.getAllByTestId("recon-row")).toHaveLength(possible);
-    fireEvent.click(within(strip).getByTestId("rf-possible")); // pressing it again clears the filter
-    expect(screen.getAllByTestId("recon-row")).toHaveLength(4);
-    // Deciding a row moves it from Needs review to Ready.
-    const openBefore = n("rf-open");
-    const readyBefore = n("rf-ready");
+    expect(n("rf-skipped")).toBe(1); // g3
+    expect(n("rf-duplicate")).toBeGreaterThanOrEqual(1); // g1 vs the ₹300 grocery
+    // Every row has exactly one status, so the counts add up to the captured rows.
+    expect(n("rf-duplicate") + n("rf-fix") + n("rf-ready") + n("rf-skipped")).toBe(4);
+    for (const id of ["rf-duplicate", "rf-fix", "rf-ready", "rf-skipped"]) {
+      const expected = n(id);
+      if (expected === 0) continue;
+      fireEvent.click(within(strip).getByTestId(id));
+      expect(screen.getAllByTestId("recon-row")).toHaveLength(expected);
+      fireEvent.click(within(strip).getByTestId(id)); // pressing it again clears the filter
+      expect(screen.getAllByTestId("recon-row")).toHaveLength(4);
+    }
+    // Deciding a duplicate row moves it out of "Possible duplicates".
+    const dupBefore = n("rf-duplicate");
     fireEvent.click(rowEl("g1"));
     fireEvent.click(within(rowEl("g1")).getByRole("button", { name: `Compare row ${rowNo("g1")}` }));
     fireEvent.click(screen.getByTestId("inline-keep-existing"));
-    expect(n("rf-open")).toBe(openBefore - 1);
-    expect(n("rf-ready")).toBe(readyBefore + 1);
+    expect(n("rf-duplicate")).toBe(dupBefore - 1);
+    expect(n("rf-skipped")).toBe(2); // Keep existing is a skip of the import
+  });
+});
+
+describe("delete a captured row", () => {
+  it("the trash button on a row removes it from this review (counts follow, nothing written, Undo restores it)", () => {
+    seed();
+    const { creates, readData } = renderStudio();
+    fireEvent.click(within(rowEl("g3")).getByTestId("row-delete"));
+    expect(screen.getAllByTestId("recon-row").some((r) => r.dataset.rowId === "g3")).toBe(false);
+    expect(screen.getAllByTestId("recon-row")).toHaveLength(3);
+    expect(draft().rows.find((r: { id: string }) => r.id === "g3").include).toBe(false);
+    expect(creates).not.toHaveBeenCalled();
+    expect(readData).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("undo-decision"));
+    expect(screen.getAllByTestId("recon-row")).toHaveLength(4);
   });
 });

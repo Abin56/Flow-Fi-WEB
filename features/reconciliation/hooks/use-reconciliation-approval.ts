@@ -37,7 +37,9 @@ export interface ApprovalInputs {
 export function useReconciliationApproval({ uid, session, plan, account, liveData, dataReady, deps }: ApprovalInputs) {
   const [stage, setStage] = useState<ApprovalStage>("closed");
   const [snapshot, setSnapshot] = useState<ApprovalSnapshot | null>(null);
-  const [confirmed, setConfirmed] = useState(false);
+  const [confirmed, setConfirmed] = useState(true);
+  /** The approval was started straight from the Import button (no summary step) — the dialog stays compact. */
+  const [direct, setDirect] = useState(false);
   const [repeatsAck, setRepeatsAck] = useState(false);
   const [result, setResult] = useState<Extract<ApprovalRunResult, { status: "complete" | "partial" }> | null>(null);
   /** The rows as they were when approval was pressed — the result lists them even after the live data moves on (imported rows become "already imported"). */
@@ -58,7 +60,8 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
     const next = take();
     if (!next) return;
     setSnapshot(next);
-    setConfirmed(false);
+    setConfirmed(true);
+    setDirect(false);
     setRepeatsAck(false);
     setResult(null);
     setStaleReasons([]);
@@ -70,7 +73,7 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
   const close = useCallback(() => {
     if (busyRef.current) return;
     setStage("closed");
-    setConfirmed(false);
+    setDirect(false);
   }, []);
 
   /** Re-take what the user is shown (live data moved while the review was open, or after a partial run). */
@@ -79,7 +82,7 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
     const next = take();
     if (!next) return;
     setSnapshot(next);
-    setConfirmed(false);
+    setConfirmed(true);
     setRepeatsAck(false);
     setResult(null);
     setStaleReasons([]);
@@ -98,43 +101,81 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
     return classifyDuplicateWarnings(staged, liveData, session.accountId, snapshot.sessionId, snapshot, session, rowNumber).repeatRowIds;
   }, [stage, snapshot, session, plan, liveData]);
 
-  const canApprove = stage === "review" && !!plan && plan.complete && plan.counts.newImports > 0 && !liveChanged && confirmed && (repeatRowIds.length === 0 || repeatsAck);
+  // The Import button is the user's explicit confirmation (2026-11-24) — there is no separate "I confirm" tick any more.
+  // What stays: the repeated-rows acknowledgement, and the server re-check inside `runApproval`.
+  const canApprove = stage === "review" && !!plan && plan.complete && plan.counts.newImports > 0 && !liveChanged && (repeatRowIds.length === 0 || repeatsAck);
+
+  /** Runs the approval for `reviewed` (the snapshot the user is importing). Ignored while one is already running. */
+  const run = useCallback(
+    async (reviewed: ApprovalSnapshot, acknowledged: boolean) => {
+      if (busyRef.current || !session || !uid) return;
+      busyRef.current = true;
+      setRowsAtApproval(plan?.rows ?? []);
+      setStage("checking");
+      try {
+        const approvalDeps = deps ?? (await import("../lib/approval-app-deps")).createApprovalDeps(uid);
+        const outcome = await runApproval({ session, reviewed, repeatsAcknowledged: acknowledged, deps: approvalDeps, onStage: setStage });
+        switch (outcome.status) {
+          case "complete":
+          case "partial":
+            setResult(outcome);
+            setStage("result");
+            break;
+          case "stale":
+            setStaleReasons(outcome.reasons);
+            setStage("stale");
+            break;
+          case "unavailable":
+            setMessage(outcome.message);
+            setStage("unavailable");
+            break;
+          case "busy":
+            setStage("review");
+            break;
+        }
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "The approval couldn't start.");
+        setStage("unavailable");
+      } finally {
+        busyRef.current = false;
+      }
+    },
+    [session, uid, deps, plan],
+  );
+
+  /**
+   * "Import N transactions": one click. Takes the snapshot of what is on screen and imports it straight away (the server
+   * re-read, evidence diff, duplicate checks and keyed writes all still run inside `runApproval`). The summary dialog only
+   * appears when the user's own acknowledgement is genuinely needed (identical rows in this import) or FlowFi moved.
+   */
+  const importNow = useCallback(async () => {
+    if (!canOpen || busyRef.current || !session || !plan || plan.counts.newImports === 0) return;
+    const next = take();
+    if (!next) return;
+    setSnapshot(next);
+    setConfirmed(true);
+    setRepeatsAck(false);
+    setResult(null);
+    setStaleReasons([]);
+    setMessage(null);
+    setDirect(true);
+    const importIds = new Set(plan.rows.filter((r) => r.status === "import").map((r) => r.rowId));
+    const staged = stagedRecordsForImport(session.rows, session.decisions, importIds);
+    const rowNumber = (rowId: string) => session.rows.findIndex((r) => r.id === rowId) + 1;
+    const repeats = session.accountId ? classifyDuplicateWarnings(staged, liveData, session.accountId, next.sessionId, next, session, rowNumber).repeatRowIds : [];
+    if (repeats.length > 0) {
+      setStage("review"); // the user's own "these are separate purchases" is needed — shown compactly, then Import
+      return;
+    }
+    await run(next, false);
+  }, [canOpen, session, plan, take, liveData, run]);
 
   const approve = useCallback(async () => {
-    if (busyRef.current || !canApprove || !session || !snapshot || !uid) return;
-    busyRef.current = true;
-    setRowsAtApproval(plan?.rows ?? []);
-    setStage("checking");
-    try {
-      const approvalDeps = deps ?? (await import("../lib/approval-app-deps")).createApprovalDeps(uid);
-      const outcome = await runApproval({ session, reviewed: snapshot, repeatsAcknowledged: repeatsAck, deps: approvalDeps, onStage: setStage });
-      switch (outcome.status) {
-        case "complete":
-        case "partial":
-          setResult(outcome);
-          setStage("result");
-          break;
-        case "stale":
-          setStaleReasons(outcome.reasons);
-          setStage("stale");
-          break;
-        case "unavailable":
-          setMessage(outcome.message);
-          setStage("unavailable");
-          break;
-        case "busy":
-          setStage("review");
-          break;
-      }
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "The approval couldn't start.");
-      setStage("unavailable");
-    } finally {
-      busyRef.current = false;
-    }
-  }, [canApprove, session, snapshot, uid, deps, repeatsAck, plan]);
+    if (!canApprove || !snapshot) return;
+    await run(snapshot, repeatsAck);
+  }, [canApprove, snapshot, repeatsAck, run]);
 
-  return { stage, open, close, refresh, approve, canOpen, canApprove, confirmed, setConfirmed, repeatsAck, setRepeatsAck, repeatRowIds, liveChanged, result, rowsAtApproval, staleReasons, message, isBusy: stage === "checking" || stage === "importing" };
+  return { stage, open, close, refresh, approve, importNow, direct, canOpen, canApprove, confirmed, setConfirmed, repeatsAck, setRepeatsAck, repeatRowIds, liveChanged, result, rowsAtApproval, staleReasons, message, isBusy: stage === "checking" || stage === "importing" };
 }
 
 export type ReconciliationApproval = ReturnType<typeof useReconciliationApproval>;

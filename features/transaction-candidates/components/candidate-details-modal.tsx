@@ -44,6 +44,7 @@ import {
   Wallet,
   X,
   type LucideIcon,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -66,6 +67,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import type { DescriptionHistory } from "@/lib/services/description-analyzer";
+import type { CategoryHistory } from "@/lib/services/category-intelligence";
+import { autoFillCategory, autoFillDescription, suggestCandidateDescription } from "../lib/description-suggestion";
 import { TxnFieldRow, type TxnFormKind } from "@/features/transactions/components/transaction-form-ui";
 import { focusInvalidField, type TxnFormField } from "@/features/transactions/lib/focus-invalid-field";
 import { BankLogo } from "@/components/finance/bank-logo";
@@ -276,6 +280,8 @@ export function CandidateDetailsModal({
   matchedTransaction,
   similarMatch = null,
   existingTransactions,
+  descriptionHistory,
+  categoryHistory,
   accounts,
   creditCards,
   categories,
@@ -304,6 +310,10 @@ export function CandidateDetailsModal({
   similarMatch?: { transaction: Transaction; kind: "exact" | "possible" } | null;
   /** Every already-loaded existing transaction (manual entry, PDF import, and prior SMS imports alike — source-agnostic) — passed straight through to `importCandidate`'s own duplicate gate. */
   existingTransactions: ExistingTransactionForDuplicateCheck[];
+  /** The user's own manually recorded wording per payee — lets a suggestion reuse it. */
+  descriptionHistory?: DescriptionHistory | null;
+  /** Which category the user chose per payee — lets the form pre-select one when it is certain. */
+  categoryHistory?: CategoryHistory | null;
   accounts: Account[];
   creditCards: CreditCardProfile[];
   categories: Category[];
@@ -358,6 +368,7 @@ export function CandidateDetailsModal({
   const [draft, setDraft] = useState<CandidateImportDraft>({
     categoryId: null,
     destinationKey: null,
+    description: "",
     notes: "",
     personId: null,
     owesPersonToggle: false,
@@ -411,6 +422,12 @@ export function CandidateDetailsModal({
   if (open && candidate && draftSessionCandidateId !== candidate.id) {
     setDraftSessionCandidateId(candidate.id);
     const seeded = initialImportDraft(candidate, accounts, creditCards);
+    // Fresh (untouched) description: start from the analyzer's reliable result. Runs once per candidate, so later edits are never overwritten.
+    const autoDescription = autoFillDescription(candidate, descriptionHistory);
+    if (autoDescription) seeded.description = autoDescription;
+    // Same for the category — only when the shared intelligence is confident; otherwise it stays empty for the reviewer.
+    const autoCategoryId = autoFillCategory(candidate, categoryOptionsForDirection(categories, candidate.direction), categoryHistory, descriptionHistory);
+    if (autoCategoryId) seeded.categoryId = autoCategoryId;
     // A choice made earlier this session wins over Android's match — but only while it still points at a real account/card.
     if (chosenDestinationKey && resolveCandidateDestinationKey(destinationKeyRefs(chosenDestinationKey), accounts, creditCards) === chosenDestinationKey) seeded.destinationKey = chosenDestinationKey;
     setDraft(seeded);
@@ -445,6 +462,8 @@ export function CandidateDetailsModal({
   const destinationState = candidateDestinationState(currentCandidate, accounts, creditCards);
   const matchedDestinationKey = resolveCandidateDestinationKey(currentCandidate, accounts, creditCards);
   const unresolvedHint = formatUnresolvedAccountHint(currentCandidate, destinationState);
+  // Wording suggestion — local, from the parsed merchant and the original message (see `suggestCandidateDescription`).
+  const descriptionSuggestion = suggestCandidateDescription(currentCandidate, descriptionHistory);
   const categoryOptions = categoryOptionsForDirection(categories, currentCandidate.direction);
   const isDuplicate = duplicate?.duplicateOfTransactionId != null;
   const ready = isImportReady(currentDraft);
@@ -503,6 +522,7 @@ export function CandidateDetailsModal({
         accountId,
         matchedCard,
         categoryId: currentDraft.categoryId,
+        description: currentDraft.description,
         notes: currentDraft.notes,
         personAssignment,
         existingTransactions,
@@ -1088,6 +1108,31 @@ export function CandidateDetailsModal({
                 </div>
               )}
             </div>
+
+            <TxnFieldRow label="Description" field="description">
+              <Input
+                value={currentDraft.description}
+                placeholder="What was this for? (defaults to the detected name)"
+                aria-label="Description"
+                data-testid="candidate-description"
+                maxLength={120}
+                className={SHEET_FIELD}
+                onChange={(e) => setDraft({ ...currentDraft, description: e.target.value })}
+              />
+              {descriptionSuggestion && descriptionSuggestion.text.trim().toLowerCase() !== currentDraft.description.trim().toLowerCase() && (
+                <button
+                  type="button"
+                  data-testid="candidate-description-suggestion"
+                  data-confidence={descriptionSuggestion.confidence}
+                  onClick={() => setDraft({ ...currentDraft, description: descriptionSuggestion.text })}
+                  title="Use this as the description. It only changes the wording — never the amount, account or category."
+                  className="mt-1 inline-flex max-w-full items-center gap-1 self-start rounded-md border border-border-strong bg-secondary px-2 py-0.5 text-[12px] font-semibold text-foreground outline-none transition-colors hover:bg-secondary/70 focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <Sparkles className="size-3.5 shrink-0 text-foreground/70" aria-hidden />
+                  <span className="truncate">Suggested: {descriptionSuggestion.text}</span>
+                </button>
+              )}
+            </TxnFieldRow>
 
             <div className={cn("grid items-start gap-x-3 gap-y-2.5", isExpense ? "md:grid-cols-2 lg:grid-cols-3" : "md:grid-cols-2")}>
               <div className="flex min-w-0 flex-col gap-1.5">

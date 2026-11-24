@@ -160,7 +160,7 @@ describe("Add Expense — every field and function retained", () => {
     await user.type(screen.getByPlaceholderText("e.g. Blue Tokai Coffee"), "Lunch");
     await user.keyboard("{Control>}{Enter}{/Control}");
     await waitFor(() => expect(actions.createTransaction).toHaveBeenCalledTimes(1));
-    expect(actions.createTransaction.mock.calls[0][0]).toMatchObject({ type: "expense", amount: 450, accountId: "sbi", categoryId: "", description: "Lunch" });
+    expect(actions.createTransaction.mock.calls[0][0]).toMatchObject({ type: "expense", amount: 450, accountId: "sbi", description: "Lunch" });
   });
 
   it("Case D — neither description nor category: nothing is saved and the user is told what to enter", async () => {

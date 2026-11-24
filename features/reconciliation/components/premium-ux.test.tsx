@@ -184,7 +184,7 @@ describe("readiness summary", () => {
     expect(within(panel()).getByTestId("import-blocked").textContent).toMatch(/Can't import/);
     fireEvent.click(within(panel()).getByRole("button", { name: "Skip this transaction" }));
     const hint = screen.getByTestId("approval-hint").textContent!;
-    expect(hint).toMatch(/Final approval would add 1 new transaction;/);
+    expect(hint).toMatch(/Import adds 1 new transaction;/);
     expect(hint).toMatch(/kept-existing, skipped and Inbox rows are never written/);
     expect(hint).not.toMatch(/\ball\b/i);
     expect(count("blocked")).toBe("0");
@@ -212,7 +212,7 @@ describe("draft-only editor and zero writes", () => {
     openImportConfirm();
     fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: "Food" } });
     fireEvent.click(screen.getByTestId("import-confirm-submit"));
-    expect(within(rowEl("r3")).getByTestId("decision-chip").textContent).toBe("Import new");
+    expect(within(rowEl("r3")).getByTestId("decision-chip").textContent).toBe("Ready");
     pick("SBI Savings");
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Change account" }));
     expect(readData).not.toHaveBeenCalled();

@@ -213,7 +213,7 @@ describe("never silently replacing a review", () => {
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
     pickAccount();
     act(() => void handOff());
-    expect(screen.getByTestId("handoff-notice").textContent).toMatch(/nothing changed, your decisions are kept/);
+    expect(screen.queryByTestId("handoff-notice")).toBeNull(); // "nothing changed" is not worth a banner — decisions are simply kept
   });
 });
 

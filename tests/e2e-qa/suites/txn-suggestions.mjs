@@ -47,22 +47,13 @@ scenario("txn-suggest-ui", "Suggestion chips: position, apply/dismiss, never ove
   chk("no category is pre-selected on a new transaction", /Optional/.test(await categoryTrigger(page).innerText()), flat(await categoryTrigger(page).innerText()));
   chk("no chip before anything is typed", (await catChip(page).count()) === 0 && (await descChip(page).count()) === 0);
 
-  // 1 + position / compactness
+  // 1 · the category is now selected automatically (no chip, no click) for an unambiguous description
   await descInput(page).fill("Coffee");
-  await catChip(page).waitFor({ timeout: 5000 });
-  const chipText = flat(await catChip(page).innerText());
-  chk("“Coffee” suggests Food", /Food/.test(chipText) && /Apply/.test(chipText), chipText);
-  const [bc, bd, bt, bcat] = [await box(catChip(page)), await box(descInput(page)), await box(page.getByRole("dialog").first()), await box(categoryTrigger(page))];
-  chk("chip sits directly under the Description field", bc.y >= bd.y + bd.height - 2 && bc.y - (bd.y + bd.height) < 40, `gap ${Math.round(bc.y - (bd.y + bd.height))}px`);
-  chk("chip is compact (one line, ≤ 28px tall) and inside the form", bc.height <= 28 && bc.x >= bt.x && bc.x + bc.width <= bt.x + bt.width, `${Math.round(bc.width)}×${Math.round(bc.height)}`);
-  chk("chip does not overlap the Category field", !intersects(bc, bcat), `chip bottom ${Math.round(bc.y + bc.height)} vs category top ${Math.round(bcat.y)}`);
-  await h.shot(page, "txn-suggest-category-chip");
-
-  // 3 apply
-  await catChip(page).getByRole("button", { name: /use food as the category/i }).click();
-  chk("Apply fills the category selector with Food", /Food/.test(await categoryTrigger(page).innerText()), flat(await categoryTrigger(page).innerText()));
-  chk("the chip disappears once applied", (await catChip(page).count()) === 0);
-  chk("the typed description is untouched by Apply", (await descInput(page).inputValue()) === "Coffee");
+  await page.waitForTimeout(400);
+  chk("“Coffee” auto-selects Food without any click", /Food/.test(await categoryTrigger(page).innerText()), flat(await categoryTrigger(page).innerText()));
+  chk("no category chip is needed any more", (await catChip(page).count()) === 0);
+  chk("the typed description is untouched by the auto-selection", (await descInput(page).inputValue()) === "Coffee");
+  await h.shot(page, "txn-suggest-category-auto");
 
   // chip never overlaps an open dropdown: open the category list while a chip is showing elsewhere is impossible (chip hides
   // once a category exists) — so check the opposite direction: open the dropdown with the DESCRIPTION chip showing.
@@ -83,8 +74,10 @@ scenario("txn-suggest-ui", "Suggestion chips: position, apply/dismiss, never ove
   // 5 apply the description suggestion → editable
   await descChip(page).getByRole("button", { name: /use food as the description/i }).click();
   chk("Apply fills Description with “Food”", (await descInput(page).inputValue()) === "Food");
-  await descInput(page).pressSequentially(" court");
-  chk("the applied description is editable", (await descInput(page).inputValue()) === "Food court");
+  await descInput(page).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" court");
+  chk("the applied description is editable", (await descInput(page).inputValue()) === "Food court", JSON.stringify(await descInput(page).inputValue()));
   chk("the category is unchanged by editing the description", /Food/.test(await categoryTrigger(page).innerText()));
 
   // 6 custom description never overwritten
@@ -99,35 +92,29 @@ scenario("txn-suggest-ui", "Suggestion chips: position, apply/dismiss, never ove
   chk("a manually chosen category (Transport) is not second-guessed by “Coffee”", (await catChip(page).count()) === 0 && /Transport/.test(await categoryTrigger(page).innerText()));
   await closeForm(page);
 
-  // 2 + 4 Mandi, dismiss, stays dismissed
+  // 2 + 4 Mandi auto-selects Food; a manual pick afterwards is final
   await openAdd(page);
   await descInput(page).fill("Mandi");
-  await catChip(page).waitFor({ timeout: 5000 });
-  chk("“Mandi” suggests Food", /Food/.test(await catChip(page).innerText()));
-  await catChip(page).getByRole("button", { name: /dismiss suggested category/i }).click();
-  chk("Dismiss removes the chip; the description and category field are unchanged", (await catChip(page).count()) === 0 && (await descInput(page).inputValue()) === "Mandi" && /Optional/.test(await categoryTrigger(page).innerText()));
-  await descInput(page).pressSequentially(" biryani");
-  await page.waitForTimeout(300);
-  chk("a dismissed suggestion does not come back as you keep typing", (await catChip(page).count()) === 0);
+  await page.waitForTimeout(400);
+  chk("“Mandi” auto-selects Food", /Food/.test(await categoryTrigger(page).innerText()), flat(await categoryTrigger(page).innerText()));
   await pickCategory(page, "Shopping");
-  chk("manual category entry still works after dismissing", /Shopping/.test(await categoryTrigger(page).innerText()));
+  await page.waitForTimeout(500);
+  await descInput(page).click();
+  await descInput(page).fill("Mandi biryani");
+  await page.waitForTimeout(300);
+  chk("manual category entry is kept while the description keeps changing", /Shopping/.test(await categoryTrigger(page).innerText()), flat(await categoryTrigger(page).innerText()));
   await closeForm(page);
 
   // 8 income vs expense
   await openAdd(page);
-  await descInput(page).fill("Coffee");
-  await catChip(page).waitFor({ timeout: 5000 });
   await kindButton(page, /income/i).click();
   await page.waitForTimeout(400);
-  chk("switching Expense→Income: the Food suggestion is gone (never an expense category on income)", (await catChip(page).count()) === 0);
+  await descInput(page).fill("Coffee");
+  await page.waitForTimeout(300);
+  chk("Income “Coffee”: never an expense category", !/Food/.test(await categoryTrigger(page).innerText()), flat(await categoryTrigger(page).innerText()));
   await descInput(page).fill("Salary");
-  await catChip(page).waitFor({ timeout: 5000 });
-  const incText = flat(await catChip(page).innerText());
-  chk("Income “Salary” suggests Salary", /Salary/.test(incText) && !/Food/.test(incText), incText);
-  await h.shot(page, "txn-suggest-income-chip");
-  await kindButton(page, /expense/i).click();
   await page.waitForTimeout(400);
-  chk("switching Income→Expense: the Salary suggestion is gone", (await catChip(page).count()) === 0);
+  chk("Income “Salary” auto-selects Salary", /Salary/.test(await categoryTrigger(page).innerText()), flat(await categoryTrigger(page).innerText()));
   await closeForm(page);
 
   // edit mode

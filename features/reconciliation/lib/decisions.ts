@@ -212,13 +212,18 @@ export function rejectCandidate(decisions: Record<string, RowDecision>, rowId: s
 }
 
 /**
- * D6 — editing a captured value goes through Smart Capture's own `applyRowPatch` (an edit withdraws that field's
- * confirmation) and additionally requires an explicit re-confirmation here. A non-value patch (include) doesn't.
+ * Editing a captured value goes through Smart Capture's own `applyRowPatch`. What the user types or picks IS their
+ * confirmation of that value, so it is accepted on the spot (2026-11-24) — the review never asks "is this amount
+ * correct?" about a number the user just entered. An edit changes only the field edited: it neither withdraws the
+ * confirmation of other fields nor re-opens the row's other checks, and a description edit never touches the amount.
+ * A value that is still unusable (empty, zero, no date) keeps its own inline warning — that is validation, not a prompt.
  */
 export function editRow(row: ReconRow, patch: RowPatch): ReconRow {
-  const valueEdit = "date" in patch || "description" in patch || "amount" in patch || "direction" in patch;
   const next = applyRowPatch(row, patch) as ReconRow;
-  return valueEdit ? { ...next, confirmed: false, bulkConfirmed: false, needsReconfirm: true } : next;
+  const typed = (["amount", "date", "direction"] as const).filter((f) => f in patch);
+  if (typed.length === 0) return next;
+  const accepted = typed.reduce((r, f) => confirmField(r, f) as ReconRow, next);
+  return { ...accepted, needsReconfirm: false };
 }
 
 /**

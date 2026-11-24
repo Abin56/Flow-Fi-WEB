@@ -30,10 +30,17 @@ import type { ReconciliationData } from "../components/reconciliation-workspace"
 export type SourceName = "accounts" | "cards" | "statements" | "transactions" | "deleted" | "sms";
 
 export interface RecordsSync {
-  /** Sources that haven't delivered their first real snapshot yet. */
+  /** Sources MATCHING needs (accounts, cards, transactions, deleted, Inbox) that haven't delivered their first real snapshot yet. */
   loading: SourceName[];
-  /** Sources whose live query failed. */
+  /** Matching sources whose live query failed. */
   failed: SourceName[];
+  /**
+   * Card bills only decide whether a row falls in an already-closed bill (an import rule) — they play no part in finding
+   * matches, so they no longer hold the matches back. Until they are "ready" the table shows matches but no row status and
+   * no import (a row's closed-bill status would otherwise be a guess). Absent = ready (callers that don't track it).
+   */
+  bills?: "loading" | "ready" | "failed";
+  /** Retries every source that failed — and re-opens any that is still loading (a stuck first snapshot). */
   retry: () => void;
 }
 
@@ -112,11 +119,12 @@ export function useReconciliationData(): ReconciliationData & { sync: RecordsSyn
     if (s.failed) failed.push(name);
     else if (!s.synced) loading.push(name);
   }
-  // Card bills only exist (and the statements listener only runs) once there are cards.
+  // Card bills only exist (and the statements listener only runs) once there are cards. Tracked apart from the sources
+  // matching needs, so a slow or failed bills listener never blocks the matches themselves.
+  let bills: NonNullable<RecordsSync["bills"]> = "ready";
   if (cardList.length > 0) {
     const s = status(keys.statements);
-    if (s.failed) failed.push("statements");
-    else if (!s.synced) loading.push("statements");
+    bills = s.failed ? "failed" : s.synced ? "ready" : "loading";
   }
   if (sms.isError) failed.push("sms");
   else if (!sms.hasSnapshot) loading.push("sms");
@@ -135,11 +143,13 @@ export function useReconciliationData(): ReconciliationData & { sync: RecordsSyn
     sync: {
       loading,
       failed,
+      bills,
       retry: () => {
-        for (const name of failed) {
+        for (const name of [...failed, ...loading]) {
           if (name === "sms") sms.retry();
           else retryFirestoreWatch(keys[name]);
         }
+        if (bills !== "ready") retryFirestoreWatch(keys.statements);
       },
     },
   };

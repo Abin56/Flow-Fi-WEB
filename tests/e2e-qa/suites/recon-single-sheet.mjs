@@ -61,12 +61,16 @@ async function seedGrocery(page, d) {
   return expense;
 }
 
+/** "Import N transactions" is one click: no summary screen, no confirmation tick. Identical rows in the batch are the one exception. */
 async function approve(page) {
   await page.getByTestId("open-approval").click();
   const dlg = page.getByTestId("approval-dialog");
-  await dlg.getByTestId("approval-confirm").click();
-  if (await dlg.getByTestId("approval-repeats").count()) await dlg.getByTestId("approval-repeats").getByRole("checkbox").click().catch(() => undefined);
-  await dlg.getByTestId("approval-submit").click();
+  const repeats = dlg.getByTestId("approval-repeats");
+  await Promise.race([dlg.getByTestId("approval-result").waitFor({ timeout: 90000 }), repeats.waitFor({ timeout: 90000 })]).catch(() => undefined);
+  if ((await repeats.count()) > 0) {
+    await repeats.getByRole("checkbox").click();
+    await dlg.getByTestId("approval-submit").click();
+  }
   await dlg.getByTestId("approval-result").waitFor({ timeout: 90000 });
   return dlg;
 }
@@ -93,11 +97,14 @@ scenario("rss-layout", "Single sheet: one table, inline review under the row ins
   chk("no second Existing FlowFi sheet, no divider", (await page.getByTestId("existing-sheet").count()) === 0 && (await page.getByRole("separator", { name: "Resize the sheets" }).count()) === 0);
   chk("exactly one transaction grid", (await page.getByRole("grid").count()) === 1);
   const heads = (await page.getByRole("grid", { name: "Statement rows" }).getByRole("columnheader").allInnerTexts()).map((t) => t.trim().toLowerCase()).filter((t) => t && t !== "details");
-  chk("columns: # · Date · Description · Amount · Type · Match · Decision", JSON.stringify(heads) === JSON.stringify(["#", "date", "description", "amount", "type", "match", "decision"]), JSON.stringify(heads));
+  chk("columns: # · Date · Description · Amount · Type · Match · Status", JSON.stringify(heads) === JSON.stringify(["#", "date", "description", "amount", "type", "match", "status"]), JSON.stringify(heads));
 
   const strip = page.getByTestId("review-filter-strip");
   const count = async (id) => Number((await strip.getByTestId(`${id}-count`).innerText()).trim());
-  chk("summary strip: Captured 30, Possible ≥ 1, Needs review = rows still undecided", Number(await strip.getByTestId("rf-captured").innerText()) === 30 && (await count("rf-possible")) >= 1 && (await count("rf-open")) === 30, `${await count("rf-possible")} possible / ${await count("rf-open")} open`);
+  const hasOther = (await h.list("categories")).some((c) => /^other$/i.test(c.name ?? "") && c.type !== "income");
+  const sum = (await count("rf-duplicate")) + (await count("rf-fix")) + (await count("rf-ready")) + (await count("rf-skipped"));
+  chk("summary strip: Captured 30; every row has exactly one status (Possible duplicates + Fix required + Ready + Skipped = 30)", Number(await strip.getByTestId("rf-captured").innerText()) === 30 && sum === 30, `dup ${await count("rf-duplicate")} / fix ${await count("rf-fix")} / ready ${await count("rf-ready")} / skipped ${await count("rf-skipped")}`);
+  chk("the ₹299 row is the one Possible duplicate; the 29 clean rows are simply Ready (no per-row decision needed)", (await count("rf-duplicate")) === 1 && (hasOther ? (await count("rf-ready")) === 29 : true), `ready ${await count("rf-ready")}, other category ${hasOther}`);
   await h.shot(page, "rss-layout-collapsed");
 
   // Open the inline review for the ₹299 row.
@@ -165,9 +172,9 @@ scenario("rss-layout", "Single sheet: one table, inline review under the row ins
   await page.getByTestId("inline-review-close").click();
 
   // Filters focus the unresolved rows.
-  await strip.getByTestId("rf-possible").click();
+  await strip.getByTestId("rf-duplicate").click();
   const shown = await page.getByTestId("recon-row").count();
-  chk("Possible matches filter shows exactly the counted rows", shown === (await count("rf-possible")) && shown >= 1, String(shown));
+  chk("Possible duplicates filter shows exactly the counted rows", shown === (await count("rf-duplicate")) && shown >= 1, String(shown));
   await strip.getByTestId("rf-all").click();
   chk("All restores every row", (await page.getByTestId("recon-row").count()) === 30);
 
@@ -175,7 +182,7 @@ scenario("rss-layout", "Single sheet: one table, inline review under the row ins
   await chipOf(page, "r3").click();
   await page.getByTestId("inline-keep-existing").click();
   await page.waitForTimeout(250);
-  chk("Keep existing: row reads Keep existing, Needs review drops by one, Ready rises by one", /Keep existing/.test(await rowLoc(page, "r3").getByTestId("decision-chip").innerText()) && (await count("rf-open")) === 29 && (await count("rf-ready")) === 1);
+  chk("Keep existing: the row reads Keep existing, leaves Possible duplicates and counts as Skipped", /Keep existing/.test(await rowLoc(page, "r3").getByTestId("decision-chip").innerText()) && (await count("rf-duplicate")) === 0 && (await count("rf-skipped")) === 1);
   chk("the panel collapsed after deciding", (await page.getByTestId("inline-review").count()) === 0);
 
   const after = await h.list("transactions");
@@ -206,12 +213,9 @@ scenario("rss-import", "₹299 vs ₹300: Possible match → Keep both (acknowle
   await form.getByTestId("import-confirm-submit").click();
   chk("row 1 reads Keep both", /Keep both/.test(await rowLoc(page, "r1").getByTestId("decision-chip").innerText()));
 
-  // Row 2 has no match: import it with just a category.
-  await chipOf(page, "r2").click();
-  await page.getByTestId("inline-import").click();
-  await page.getByTestId("inline-import-form").getByLabel("Category for import").selectOption(category);
-  await page.getByTestId("inline-import-form").getByTestId("import-confirm-submit").click();
-  chk("row 2 reads Import new", /Import new/.test(await rowLoc(page, "r2").getByTestId("decision-chip").innerText()));
+  // Row 2 has nothing similar in FlowFi: it is simply Ready — no decision, no category pick.
+  chk("row 2 (nothing similar) is Ready without any decision", (await rowLoc(page, "r2").getByTestId("decision-chip").getAttribute("data-status")) === "ready");
+  chk("the Import button names the count", (await page.getByTestId("open-approval").innerText()).trim() === "Import 2 transactions", await page.getByTestId("open-approval").innerText());
   chk("nothing written before final approval", (await h.list("transactions")).length === before.length);
 
   const dlg = await approve(page);
@@ -230,8 +234,65 @@ scenario("rss-import", "₹299 vs ₹300: Possible match → Keep both (acknowle
   await chooseCard(page);
   const states = await page.getByTestId("recon-row").evaluateAll((els) => els.map((e) => e.getAttribute("data-state")));
   chk("re-uploading the same statement marks every row Imported", states.length === 2 && states.every((s) => s === "already_imported"), states.join(","));
-  chk("…and the Import action is not offered for them", (await page.getByTestId("inline-import").count()) === 0);
+  chk("…and there is nothing left to import (the Import button is disabled)", await page.getByTestId("open-approval").isDisabled());
   const final = await h.list("transactions");
   chk("no duplicate financial movement after the second upload", final.length === mid.length, `${mid.length} → ${final.length}`);
+  await discard(page);
+});
+
+scenario("rss-direct", "Capture → Review → Import: 5 normal rows import with one click (no confirmation, no Finish review); an amount edit asks nothing; 400 rows stay responsive", async ({ page }, chk) => {
+  const d = ddmmyyyy(-4);
+  const before = await h.list("transactions");
+  const five = [1, 2, 3, 4, 5].map((n) => `${d}\tSTORE NUMBER ${n}\t${(40 + n * 11).toFixed(2)} Dr`).join("\n");
+  await paste(page, five);
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await chooseCard(page);
+  const statuses = await page.getByTestId("recon-row").evaluateAll((els) => els.map((e) => e.querySelector('[data-testid="decision-chip"]').getAttribute("data-status")));
+  const hasOther = (await h.list("categories")).some((c) => /^other$/i.test(c.name ?? "") && c.type !== "income");
+  chk("every clean row is Ready with no decision from the user", !hasOther || statuses.every((x) => x === "ready"), statuses.join(","));
+  const button = page.getByTestId("open-approval");
+  chk("the one primary action names the count", !hasOther || (await button.innerText()).trim() === "Import 5 transactions", (await button.innerText()).trim());
+  chk("no 'Finish review' / 'Needs review' / 'Confirm amount' wording anywhere", !/Finish review|Needs review|Confirm amount/.test(await page.locator("body").innerText()));
+
+  // Edit an amount: no confirmation of the number just typed, row stays Ready.
+  await page.getByRole("button", { name: "Expand row 2" }).click();
+  await page.getByLabel("Amount").fill("77.50");
+  await page.getByLabel("Amount").blur();
+  await page.getByRole("button", { name: "Done" }).click();
+  chk("editing an amount raises no 'Edited — confirm values' and the row stays Ready", !/Edited — confirm values/.test(await page.locator("body").innerText()) && (!hasOther || (await rowLoc(page, "r2").getByTestId("decision-chip").getAttribute("data-status")) === "ready"));
+  chk("nothing written yet", (await h.list("transactions")).length === before.length);
+
+  if (hasOther) {
+    const dlg = await approve(page);
+    chk("one click imported them: compact result, no confirmation step existed", /Imported 5 transactions/.test(await dlg.getByTestId("approval-result").innerText()) && (await dlg.getByTestId("approval-confirm").count()) === 0);
+    const after = await h.list("transactions");
+    chk("exactly five new transactions; the edited amount (₹77.50) is what was stored", after.length === before.length + 5 && after.some((t) => Number(t.amount) === 77.5), `${before.length} -> ${after.length}`);
+    await closeApproval(page, dlg);
+    await discard(page);
+    // The same statement again (with the edit repeated): nothing more can be written.
+    await paste(page, five);
+    await chooseCard(page);
+    const again = await page.getByTestId("recon-row").evaluateAll((els) => els.map((e) => e.getAttribute("data-state")));
+    chk("the same statement again: every row is recognised as already imported", again.every((x) => x === "already_imported"), again.join(","));
+    chk("...so there is nothing to import (button disabled) and no duplicate movement", (await page.getByTestId("open-approval").isDisabled()) && (await h.list("transactions")).length === before.length + 5);
+    await discard(page);
+  } else {
+    await discard(page);
+  }
+
+  // Many rows: the table appears at once and stays responsive.
+  const big = [];
+  for (let n = 1; n <= 400; n++) big.push(`${d}\tBULK SHOP ${n % 53} ${n}\t${(10 + n).toFixed(2)} Dr`);
+  const t0 = Date.now();
+  await paste(page, big.join("\n"));
+  const tRows = Date.now() - t0;
+  await chooseCard(page);
+  const tMatched = Date.now() - t0;
+  await page.getByRole("grid", { name: "Statement rows" }).focus();
+  const t1 = Date.now();
+  await page.getByRole("grid", { name: "Statement rows" }).press("i");
+  await page.waitForFunction(() => document.querySelector('[data-testid="recon-row"] [data-status="skipped"]'), null, { timeout: 15000 });
+  const tDecision = Date.now() - t1;
+  chk("400 rows: the list renders, matching completes and a decision applies promptly", tRows < 20000 && tDecision < 3000, `rows ${tRows}ms / matched ${tMatched}ms / decision ${tDecision}ms`);
   await discard(page);
 });

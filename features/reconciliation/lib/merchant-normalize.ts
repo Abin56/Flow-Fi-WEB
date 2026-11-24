@@ -45,10 +45,15 @@ const ALIASES: Record<string, string> = {
   NETFLIXCOM: "NETFLIX",
 };
 
-function isReferenceLike(token: string): boolean {
+export function isReferenceLike(token: string): boolean {
   if (/^\d+$/.test(token)) return token.length >= 3; // order/terminal/reference numbers
   // Mixed letters+digits codes of 6+ characters (e.g. "X7K2P9Q1", "UPI12345") — reference ids, not names.
   return token.length >= 6 && /\d/.test(token) && /[A-Z]/.test(token);
+}
+
+/** True for rails, bank prefixes, legal suffixes and filler — never part of a merchant's name. */
+export function isNoiseWord(token: string): boolean {
+  return NOISE.has(token);
 }
 
 /** The merchant words that identify a description, in order, deduplicated. Empty when nothing meaningful remains. */

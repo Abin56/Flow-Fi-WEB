@@ -141,7 +141,7 @@ describe("Reconciliation workspace — desktop", () => {
     // A possible match is never labelled a duplicate — the statement sheet and the dock never use the word; the comparison
     // band says "Possible duplicate" (a suggestion) and never "confirmed / exact duplicate".
     select("r1");
-    expect(grid().textContent).not.toMatch(/duplicate/i);
+    expect(grid().textContent).not.toMatch(/(confirmed|exact|definite|is a) duplicate/i); // "Possible duplicate" is the status; a match is never called a confirmed duplicate
     compare(1);
     expect(screen.getByTestId("inline-review").textContent).not.toMatch(/(confirmed|exact|definite|is a) duplicate/i);
     expect(screen.getByTestId("privacy-notice").textContent).toMatch(/never saved/);
@@ -236,7 +236,7 @@ describe("Reconciliation workspace — desktop", () => {
     compare(5);
     expect(screen.getByTestId("inline-compare").textContent).toMatch(/SMS · waiting in Inbox/);
     fireEvent.click(resolve("inbox"));
-    expect(within(rowEl("r5")).getByTestId("decision-chip").textContent).toBe("Handle in Inbox");
+    expect(within(rowEl("r5")).getByTestId("decision-chip").textContent).toBe("In Inbox");
   });
 
   it("D5: bulk Keep existing covers only unique exact candidates, asks first, and can be undone", () => {
@@ -250,7 +250,7 @@ describe("Reconciliation workspace — desktop", () => {
     expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
   });
 
-  it("D6: editing an amount withdraws the decision and requires re-confirmation", () => {
+  it("editing an amount withdraws the decision made against the old value — and asks for NO confirmation of the number just typed", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     fireEvent.keyDown(grid(), { key: "l" });
@@ -258,13 +258,12 @@ describe("Reconciliation workspace — desktop", () => {
     const amount = screen.getByLabelText("Amount") as HTMLInputElement;
     fireEvent.change(amount, { target: { value: "452.50" } });
     fireEvent.blur(amount);
+    // The Keep existing was made against ₹452 — withdrawn, so the row is a Possible duplicate again…
     expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
-    expect(within(rowEl("r1")).getByText("Edited — confirm values")).toBeTruthy();
-    expect((screen.getByTestId("import-as-transaction") as HTMLButtonElement).disabled).toBe(true); // the editor's import waits for the confirmation
-    expect(screen.getByTestId("import-as-transaction").getAttribute("title")).toMatch(/confirm the values/);
-    fireEvent.click(screen.getByRole("button", { name: /Values are correct/ }));
-    expect((screen.getByTestId("import-as-transaction") as HTMLButtonElement).disabled).toBe(false);
+    // …but the typed amount is accepted on the spot: no "Edited — confirm values", no "Values are correct" step.
     expect(within(rowEl("r1")).queryByText("Edited — confirm values")).toBeNull();
+    expect(screen.queryByTestId("row-check-label")).toBeNull();
+    expect((screen.getByTestId("import-as-transaction") as HTMLButtonElement).disabled).toBe(false);
     // Undo can't bring back the Keep existing the edit withdrew — it was made against the old amount.
     fireEvent.click(screen.getByTestId("undo-decision"));
     expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
@@ -278,14 +277,14 @@ describe("Reconciliation workspace — desktop", () => {
   it("filters and search narrow the statement sheet", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
-    // Filters live in one compact menu; the toolbar's status chips are quick filters.
+    // One summary strip is the quick filter; the toolbar's Filter menu offers the same statuses.
     fireEvent.click(screen.getByTestId("filter-menu"));
-    fireEvent.click(screen.getByRole("radio", { name: /^Multiple candidates/ }));
-    expect(screen.getAllByTestId("recon-row").map((r) => r.dataset.rowId)).toEqual(["r3", "r4"]);
-    fireEvent.click(screen.getByRole("button", { name: "Show all rows" }));
-    fireEvent.click(screen.getByTestId("status-possible"));
+    fireEvent.click(screen.getByRole("radio", { name: /^Possible duplicates/ }));
     expect(screen.getAllByTestId("recon-row").map((r) => r.dataset.rowId)).toEqual(["r1", "r2", "r3", "r4", "r5"]);
-    fireEvent.click(screen.getByTestId("status-possible"));
+    fireEvent.click(screen.getByRole("button", { name: "Show all rows" }));
+    fireEvent.click(screen.getByTestId("rf-duplicate"));
+    expect(screen.getAllByTestId("recon-row").map((r) => r.dataset.rowId)).toEqual(["r1", "r2", "r3", "r4", "r5"]);
+    fireEvent.click(screen.getByTestId("rf-duplicate"));
     fireEvent.change(screen.getByLabelText("Search rows"), { target: { value: "1,299" } });
     expect(screen.getAllByTestId("recon-row").map((r) => r.dataset.rowId)).toEqual(["r2"]);
   });

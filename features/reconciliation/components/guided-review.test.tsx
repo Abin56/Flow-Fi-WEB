@@ -125,7 +125,7 @@ describe("next undecided", () => {
     fireEvent.click(screen.getByTestId("next-open"));
     expect(rowEl("r3").getAttribute("aria-selected")).toBe("true");
     select("r3");
-    fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "i" }); // skip
+    fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "i" }); // skip (this user has no "Other" category, so r3 isn't Ready by default)
 
     // r5 is the last one; once it's decided the review is complete.
     fireEvent.click(screen.getByTestId("next-open"));
@@ -133,7 +133,8 @@ describe("next undecided", () => {
     select("r5");
     fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "i" }); // skip
     expect(screen.queryByTestId("next-open")).toBeNull();
-    expect((screen.getByTestId("open-approval") as HTMLButtonElement).disabled).toBe(false);
+    // Everything is resolved; with nothing left to import there is simply nothing to press.
+    expect(screen.getByTestId("open-approval").textContent).toBe("Import 0 transactions");
     expect(screen.getByRole("progressbar", { name: "Review progress" }).getAttribute("aria-valuenow")).toBe("100");
   });
 

@@ -4,9 +4,10 @@ import {
   EMPTY_DECISION,
   applyBulkLink,
   bulkLinkEligible,
-  confirmRowValues,
   decisionErrors,
   editRow,
+  rowCheckLabel,
+  valueIssues,
   importBlockReasons,
   invalidateAfterEdit,
   rejectCandidate,
@@ -65,15 +66,29 @@ describe("Import as new — eligibility gates", () => {
   });
 });
 
-describe("D6 — editing captured values requires re-confirmation", () => {
-  it("an edit marks the row and withdraws that field's confirmation; 'Values are correct' clears it", () => {
-    const row = reconRow({ id: "r1", confirmedFields: ["amount"], confirmed: true });
+describe("editing captured values (no repeated confirmation)", () => {
+  it("a typed value is accepted on the spot — no 'Edited — confirm values' step, nothing else is re-opened", () => {
+    const row = reconRow({ id: "r1", confirmedFields: ["date"], confirmed: true });
     const edited = editRow(row, { amount: 501 });
-    expect(edited).toMatchObject({ amount: 501, needsReconfirm: true, confirmed: false, edited: true });
-    expect(edited.confirmedFields).not.toContain("amount");
+    expect(edited).toMatchObject({ amount: 501, needsReconfirm: false, confirmed: true, edited: true });
+    expect(edited.confirmedFields).toEqual(expect.arrayContaining(["date", "amount"])); // the typed amount IS the confirmation
     const m = matches([edited], []).get("r1")!;
-    expect(importBlockReasons(edited, m, OPEN)).toContain("You changed this row — confirm the values are correct.");
-    expect(confirmRowValues(edited).needsReconfirm).toBe(false);
+    expect(importBlockReasons(edited, m, OPEN)).not.toContain("You changed this row — confirm the values are correct.");
+    expect(rowCheckLabel(edited)).toBeNull();
+  });
+
+  it("editing an unrelated field (description) never touches the amount's acceptance", () => {
+    const row = reconRow({ id: "r1", amount: 452, confirmedFields: ["amount"] });
+    const edited = editRow(row, { description: "SWIGGY BLR" });
+    expect(edited.amount).toBe(452);
+    expect(edited.confirmedFields).toEqual(["amount"]);
+    expect(edited.needsReconfirm).toBe(false);
+  });
+
+  it("an unusable value still gets its inline warning: an emptied amount is 'Fix amount', not accepted", () => {
+    const edited = editRow(reconRow({ id: "r1" }), { amount: null });
+    expect(valueIssues(edited).length).toBeGreaterThan(0);
+    expect(rowCheckLabel(edited)).toBe("Fix amount");
   });
 
   it("toggling include isn't a value edit", () => {

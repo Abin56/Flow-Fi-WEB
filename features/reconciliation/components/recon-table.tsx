@@ -17,17 +17,18 @@
  */
 
 import { Fragment, forwardRef } from "react";
-import { PencilLine, TriangleAlert } from "lucide-react";
+import { PencilLine, Trash2, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { describeAmountDelta, describeDayGap } from "../lib/amounts-and-days";
 import { rowCheckLabel } from "../lib/decisions";
+import type { RowStatus } from "../lib/row-status";
 import type { ReconRow, RowDecision, RowMatch } from "../lib/types";
 import { QuickDecideMenu, type QuickAction } from "./recon-decision-menu";
-import { ACCOUNT_MISSING_META, DecisionChip, Mark, Money, SHEET_CELLS, SHEET_FRAME, SHEET_HEAD, SHEET_ROW, STATE_META, formatRowDate } from "./recon-ui";
+import { ACCOUNT_MISSING_META, Mark, StatusChip, Money, SHEET_CELLS, SHEET_FRAME, SHEET_HEAD, SHEET_ROW, STATE_META, formatRowDate } from "./recon-ui";
 
 /** Narrow pane: # · description (date folded in) · amount · decision · ✎. ≥30rem adds Date; ≥38rem adds Match. */
 const COLS =
-  "grid-cols-[1.75rem_minmax(0,1fr)_6.75rem_8rem_1.75rem] @min-[30rem]:grid-cols-[2rem_4rem_minmax(0,1fr)_7.5rem_8rem_2rem] @min-[38rem]:grid-cols-[2rem_4rem_minmax(0,1fr)_7.25rem_7.75rem_8rem_1.75rem] @min-[56rem]:grid-cols-[2.25rem_4.25rem_minmax(0,1fr)_7.75rem_5rem_9rem_9rem_2rem]";
+  "grid-cols-[1.75rem_minmax(0,1fr)_6.75rem_8rem_3.5rem] @min-[30rem]:grid-cols-[2rem_4rem_minmax(0,1fr)_7.5rem_8rem_3.5rem] @min-[38rem]:grid-cols-[2rem_4rem_minmax(0,1fr)_7.25rem_7.75rem_8rem_3.5rem] @min-[56rem]:grid-cols-[2.25rem_4.25rem_minmax(0,1fr)_7.75rem_5rem_9rem_9rem_3.5rem]";
 const DATE_COL = "hidden @min-[30rem]:block";
 const WIDE_ONLY = "hidden @min-[38rem]:block";
 const NARROW_ONLY = "@min-[38rem]:hidden";
@@ -87,12 +88,16 @@ export interface ReconTableProps {
   accountMissing?: boolean;
   accountHintOf?: (rowId: string) => RowAccountHint | null;
   /** The row whose inline match review is open, and what to render under it (inside the same scroll body — no nested scroller). */
+  /** Delete from this review (the row is removed from the list; undoable; nothing in FlowFi changes). */
+  onRemove?: (rowId: string) => void;
+  /** The row's single status (Ready · Possible duplicate · Fix required · Skipped); null = matching not finished. */
+  statusOf?: (row: ReconRow) => RowStatus | null;
   inlineId?: string | null;
   renderInline?: (row: ReconRow) => React.ReactNode;
 }
 
 export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function ReconTable(
-  { rows, numberOf, matches, decisions, selectedId, expandedId, onSelect, onToggleExpand, onFixRow, onCompare, onKeyDown, pendingLabel, quickActions, contained = true, highlightIds, header, accountMissing = false, accountHintOf, inlineId = null, renderInline },
+  { rows, numberOf, matches, decisions, selectedId, expandedId, onSelect, onToggleExpand, onFixRow, onCompare, onKeyDown, pendingLabel, quickActions, contained = true, highlightIds, header, accountMissing = false, accountHintOf, inlineId = null, renderInline, onRemove, statusOf },
   ref,
 ) {
   return (
@@ -126,7 +131,7 @@ export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function R
           <span role="columnheader" className={WIDE_ONLY}>
             Match
           </span>
-          <span role="columnheader">Decision</span>
+          <span role="columnheader">Status</span>
           <span role="columnheader" className="sr-only">
             Details
           </span>
@@ -140,9 +145,9 @@ export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function R
             const expanded = row.id === expandedId;
             const related = !selected && (highlightIds?.has(row.id) ?? false);
             const checkLabel = rowCheckLabel(row);
-            const keepBoth = !!match && (match.candidates.length > 0 || match.pendingSms.length > 0);
+            const status = statusOf ? statusOf(row) : null;
             // A left stripe marks the rows already decided (green); rows still waiting stay plain, so nothing is orange by default.
-            const stripe = !match || match.state === "excluded" || !row.include ? null : decision?.kind && decision.kind !== "investigate" ? "bg-success/70" : null;
+            const stripe = status?.kind === "ready" ? "bg-success/70" : null;
             const actions = quickActions?.(row) ?? null;
             const hint = accountMissing && row.include && !row.captureExcluded ? (accountHintOf?.(row.id) ?? null) : null;
             const meta = match ? STATE_META[match.state] : null;
@@ -270,12 +275,27 @@ export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function R
                     </span>
                   ) : (
                     <span className="flex min-w-0 items-center justify-between gap-1 px-1">
-                      <DecisionChip kind={decision?.kind ?? null} keepBoth={keepBoth} />
+                      <StatusChip status={status} />
                       {actions && <QuickDecideMenu rowNumber={numberOf(row.id)} kind={decision?.kind ?? null} actions={actions} onOpen={() => onSelect(row.id)} />}
                     </span>
                   )}
                 </span>
-                <span role="gridcell" className="flex items-center justify-center px-0!">
+                <span role="gridcell" className="flex items-center justify-center gap-0.5 px-0!">
+                  {onRemove && (
+                    <button
+                      type="button"
+                      aria-label={`Delete row ${numberOf(row.id)} from this review`}
+                      title="Delete from this review — nothing in FlowFi changes (Undo available)"
+                      data-testid="row-delete"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemove(row.id);
+                      }}
+                      className="grid size-6 place-items-center rounded-md text-muted-foreground hover:bg-danger/10 hover:text-danger focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  )}
                   <button
                     type="button"
                     aria-expanded={expanded}

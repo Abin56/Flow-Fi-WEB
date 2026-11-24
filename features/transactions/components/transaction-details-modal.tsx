@@ -97,6 +97,7 @@ import { formatMonthYear, isSameMonth, transactionFlagFor } from "@/features/tra
 import { useDuplicateGuardedCreate } from "@/lib/services/duplicate-detection/use-duplicate-guarded-create";
 import { suggestCategoryForDescription } from "@/features/transactions/lib/category-suggestion";
 import { buildDescriptionHistory, suggestDescriptionCompletions } from "@/features/transactions/lib/description-autocomplete";
+import { buildCategoryHistory, suggestCategoryIntel } from "@/lib/services/category-intelligence";
 import { resolveDescriptionAndCategory } from "@/features/transactions/lib/description-category";
 import { toast } from "@/store/toast-store";
 import { resolveMixedSplit } from "@/lib/split/mixed-split";
@@ -710,6 +711,12 @@ export function TransactionDetailsModal({
   // Previous descriptions for the typing autocomplete — built from data this form already receives, per kind.
   const autocompleteKind = kind === "income" ? "income" : "expense";
   const descriptionHistory = useMemo(() => buildDescriptionHistory(existingTransactions, autocompleteKind), [existingTransactions, autocompleteKind]);
+  // Which category the user chose per payee — built once per snapshot; typing only does map lookups.
+  const categoryHistory = useMemo(() => buildCategoryHistory(existingTransactions), [existingTransactions]);
+  // Auto-selected categories never beat the user: `categoryManualRef` flips on any manual pick/clear (and for an existing
+  // categorised transaction), `autoCategoryRef` is the id WE selected so a later, better auto-pick may replace only that.
+  const categoryManualRef = useRef(false);
+  const autoCategoryRef = useRef<string | null>(null);
 
   const amountRef = useRef<HTMLInputElement>(null);
   const descriptionRef = useRef<HTMLInputElement>(null);
@@ -766,6 +773,8 @@ export function TransactionDetailsModal({
       setAccountId(transaction.accountId);
       setDestinationAccountId("");
       setCategoryId(transaction.categoryId);
+      categoryManualRef.current = transaction.categoryId !== "";
+      autoCategoryRef.current = null;
       setExclude(transaction.excludeFromCalculations);
       setReassign(transaction.accountingMonth != null);
       setMonth(transaction.accountingMonth ?? transaction.dateTime);
@@ -792,6 +801,8 @@ export function TransactionDetailsModal({
       setViaApp("");
       // No category is pre-picked: description or category is enough, so an untouched picker means "uncategorized".
       setCategoryId("");
+      categoryManualRef.current = false;
+      autoCategoryRef.current = null;
       setExclude(false);
       setReassign(false);
       setMonth(new Date());
@@ -853,6 +864,14 @@ export function TransactionDetailsModal({
     suggestionsApply && categoryId === "" && description.trim() !== ""
       ? suggestCategoryForDescription({ description, kind: kind === "income" ? "income" : "expense", categories: filteredCategories })
       : null;
+  // Several plausible categories (the user's history for this payee disagrees): ranked chips instead of an auto-pick.
+  const rankedCategories =
+    suggestionsApply && categoryId === "" && description.trim() !== ""
+      ? (() => {
+          const intel = suggestCategoryIntel({ text: description, kind: autocompleteKind, categories: filteredCategories, history: categoryHistory });
+          return intel.confident ? [] : intel.ranked.filter((c) => !dismissedCategorySuggestions.includes(c.id)).slice(0, 2);
+        })()
+      : [];
   const shownCategorySuggestion = suggestedCategory != null && !dismissedCategorySuggestions.includes(suggestedCategory.id) ? suggestedCategory : null;
   const chosenCategory = categoryId !== "" ? filteredCategories.find((c) => c.id === categoryId) : undefined;
   const shownDescriptionSuggestion =
@@ -866,8 +885,21 @@ export function TransactionDetailsModal({
   const descListShown = descRows.length > 0;
   // Which row is highlighted: the user's arrow choice, else the first row when it directly continues the typed text.
   const descHighlight = !descListShown ? -1 : descActive >= 0 ? Math.min(descActive, descRows.length - 1) : descCompletion.preselect ? 0 : -1;
-  const acceptDescription = (text: string) => {
+  /** Pre-selects the category the text clearly points at — only while the user hasn't chosen one themselves. */
+  const applyAutoCategory = (text: string, preferredId?: string | null) => {
+    if (!suggestionsApply || categoryManualRef.current) return;
+    if (categoryId !== "" && categoryId !== autoCategoryRef.current) return;
+    const preferred = preferredId ? filteredCategories.find((c) => c.id === preferredId && c.isActive !== false) : undefined;
+    const intel = preferred ? null : suggestCategoryIntel({ text, kind: autocompleteKind, categories: filteredCategories, history: categoryHistory });
+    const pick = preferred ?? (intel?.confident ? intel.category : null);
+    if (pick && pick.id !== categoryId) {
+      setCategoryId(pick.id);
+      autoCategoryRef.current = pick.id;
+    }
+  };
+  const acceptDescription = (text: string, categoryOfRow?: string | null) => {
     setDescription(text);
+    applyAutoCategory(text, categoryOfRow);
     setDescListOpen(false);
     setDescActive(-1);
     setDescNavigated(false);
@@ -2025,6 +2057,7 @@ export function TransactionDetailsModal({
                     value={description}
                     onChange={(e) => {
                       setDescription(e.target.value);
+                      applyAutoCategory(e.target.value);
                       setDescListOpen(true);
                       setDescActive(-1);
                       setDescNavigated(false);
@@ -2040,10 +2073,10 @@ export function TransactionDetailsModal({
                         setDescActive(e.key === "ArrowDown" ? (descHighlight >= last ? 0 : descHighlight + 1) : descHighlight <= 0 ? last : descHighlight - 1);
                       } else if (e.key === "Tab" && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && descHighlight >= 0) {
                         e.preventDefault(); // Tab accepts the ready completion; the next Tab moves on as usual
-                        acceptDescription(descRows[descHighlight].text);
+                        acceptDescription(descRows[descHighlight].text, descRows[descHighlight].categoryId);
                       } else if (e.key === "Enter" && descNavigated && descHighlight >= 0 && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
                         e.preventDefault(); // only after arrowing to a row — a plain Enter keeps moving to the next field
-                        acceptDescription(descRows[descHighlight].text);
+                        acceptDescription(descRows[descHighlight].text, descRows[descHighlight].categoryId);
                       }
                     }}
                     placeholder={kind === "income" ? "e.g. Salary, Freelance payment" : kind === "transfer" ? (paysCardBill ? "e.g. Card bill payment" : "e.g. Savings sweep") : "e.g. Blue Tokai Coffee"}
@@ -2076,7 +2109,7 @@ export function TransactionDetailsModal({
                             // mousedown (not click) + preventDefault: the field keeps focus, so the list never blurs shut first.
                             onMouseDown={(e) => {
                               e.preventDefault();
-                              acceptDescription(row.text);
+                              acceptDescription(row.text, row.categoryId);
                               descriptionRef.current?.focus();
                             }}
                             className={cn(
@@ -2097,7 +2130,15 @@ export function TransactionDetailsModal({
                             {active && i === 0 && descCompletion.preselect && !descNavigated ? (
                               <kbd className="hidden shrink-0 rounded-[5px] border border-border-strong bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground sm:inline">Tab</kbd>
                             ) : (
-                              row.source !== "keyword" && <span className="shrink-0 text-[11px] text-muted-foreground">{row.source === "history" ? "Used before" : "Category"}</span>
+                              row.source !== "keyword" && (
+                                <span className="shrink-0 truncate text-[11px] text-muted-foreground" data-testid="description-row-meta">
+                                  {(() => {
+                                    const cat = row.categoryId ? filteredCategories.find((c) => c.id === row.categoryId)?.name : null;
+                                    const label = row.source === "history" ? "Used before" : row.source === "merchant" ? "Known merchant" : "Category";
+                                    return cat && row.source !== "category" ? `${cat} · ${label}` : label;
+                                  })()}
+                                </span>
+                              )
                             )}
                           </li>
                         );
@@ -2116,6 +2157,21 @@ export function TransactionDetailsModal({
                   onDismiss={() => setDismissedCategorySuggestions((list) => [...list, shownCategorySuggestion.id])}
                 />
               )}
+              {!shownCategorySuggestion &&
+                rankedCategories.map((c) => (
+                  <SuggestionChip
+                    key={c.id}
+                    testId="category-ranked-suggestion"
+                    label="Category"
+                    value={c.name}
+                    applyLabel={`Use ${c.name} as the category`}
+                    onApply={() => {
+                      categoryManualRef.current = true;
+                      setCategoryId(c.id);
+                    }}
+                    onDismiss={() => setDismissedCategorySuggestions((list) => [...list, c.id])}
+                  />
+                ))}
               {shownDescriptionSuggestion && (
                 <SuggestionChip
                   testId="description-suggestion"
@@ -2133,7 +2189,10 @@ export function TransactionDetailsModal({
                       allowClear
                       categories={filteredCategories}
                       value={categoryId}
-                      onChange={setCategoryId}
+                      onChange={(id) => {
+                        categoryManualRef.current = true; // a manual pick or clear is final — typing never replaces it
+                        setCategoryId(id);
+                      }}
                       type={kind === "income" ? "income" : "expense"}
                     />
                   </FormRow>

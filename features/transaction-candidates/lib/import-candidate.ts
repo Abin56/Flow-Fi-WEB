@@ -86,6 +86,8 @@ export interface ImportCandidateParams {
   /** Required — Android's Phase 1 deliberately never resolves a FlowFi category at candidate-build time (see the Dart model's module doc), so this always comes from the user. */
   categoryId: string | null;
   notes?: string;
+  /** Reviewer-edited title; blank/absent falls back to the detected merchant/bank name. */
+  description?: string;
   personAssignment?: CandidatePersonAssignment | null;
   /**
    * Already-loaded existing transactions to check the candidate against before writing — source-
@@ -210,8 +212,9 @@ async function applyPersonAssignment(
   notes: string,
   transactionRepository: TransactionRepository,
   expenseRepository: ExpenseRepository,
+  editedDescription?: string,
 ): Promise<void> {
-  const description = candidate.merchant ?? candidate.bankName ?? "SMS transaction";
+  const description = editedDescription?.trim() || (candidate.merchant ?? candidate.bankName ?? "SMS transaction");
 
   if (assignment.kind === "assign" && !assignment.owesPersonToggle) {
     await transactionRepository.editTransaction(transaction, { linkedPersonId: assignment.personId, owesPersonToggle: false });
@@ -337,7 +340,7 @@ async function runImport(
     dateTime: candidate.transactionDate,
     accountId,
     categoryId: params.categoryId,
-    description: candidate.merchant ?? candidate.bankName ?? "SMS transaction",
+    description: params.description?.trim() || (candidate.merchant ?? candidate.bankName ?? "SMS transaction"),
     notes: params.notes ?? "",
     source: "sms" as const,
     idempotencyKey,
@@ -391,6 +394,7 @@ async function runImport(
         params.notes ?? "",
         transactionRepository,
         expenseRepository,
+        params.description,
       );
     } catch (error) {
       // The transaction exists but without the requested person/split — surfaced as a distinct,
@@ -529,6 +533,8 @@ export async function bulkImportCandidates(
    * applied to a credit candidate (income), same rule `resolvePersonAssignment` enforces there.
    */
   personAssignment?: CandidatePersonAssignment | null,
+  /** Per-candidate description (the same auto-fill rule the candidate sheet uses). Blank/absent = the detected name. */
+  describe?: (candidate: SmsTransactionCandidate) => string | null | undefined,
 ): Promise<BulkImportResult[]> {
   const results: BulkImportResult[] = [];
   // Transactions this very batch has already created. Each later candidate is compared against the stored
@@ -549,6 +555,7 @@ export async function bulkImportCandidates(
           accountId: forcedDestination.accountId,
           matchedCard: forcedDestination.matchedCard,
           categoryId,
+          description: describe?.(candidate) ?? undefined,
           personAssignment: resolvedPersonAssignment,
           existingTransactions: existingForThisCandidate,
           skipDuplicateCheck,
@@ -568,6 +575,7 @@ export async function bulkImportCandidates(
                 accountId: matchedCard ? null : candidate.accountId,
                 matchedCard,
                 categoryId,
+                description: describe?.(candidate) ?? undefined,
                 personAssignment: resolvedPersonAssignment,
                 existingTransactions: existingForThisCandidate,
                 skipDuplicateCheck,

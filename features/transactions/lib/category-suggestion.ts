@@ -18,7 +18,7 @@ interface Rule {
 
 const RULES: Rule[] = [
   {
-    names: ["food"],
+    names: ["food", "food & dining", "food and dining", "dining"],
     kind: "expense",
     keywords: [
       "coffee", "tea", "chai", "mandi", "restaurant", "lunch", "dinner", "breakfast", "snack", "snacks", "biryani", "pizza", "burger",
@@ -26,12 +26,12 @@ const RULES: Rule[] = [
     ],
   },
   {
-    names: ["transport"],
+    names: ["transport", "transportation", "travel"],
     kind: "expense",
     keywords: ["petrol", "diesel", "fuel", "uber", "taxi", "cab", "rapido", "bus", "metro", "train", "parking", "toll", "transport"],
   },
   {
-    names: ["health"],
+    names: ["health", "healthcare", "medical"],
     kind: "expense",
     keywords: ["medicine", "medicines", "doctor", "hospital", "pharmacy", "clinic", "dental", "dentist", "medical", "health"],
   },
@@ -41,7 +41,7 @@ const RULES: Rule[] = [
     keywords: ["clothes", "shirt", "shoes", "myntra", "flipkart", "shopping"],
   },
   {
-    names: ["bills & utilities", "bills and utilities", "bills", "utilities"],
+    names: ["bills & utilities", "bills and utilities", "bills", "utilities", "mobile & internet"],
     kind: "expense",
     keywords: ["electricity", "wifi", "broadband", "internet", "recharge", "dth", "water bill", "gas bill", "phone bill", "mobile bill", "bill", "bills"],
   },

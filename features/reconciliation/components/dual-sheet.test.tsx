@@ -18,6 +18,7 @@ import type { ReconciliationData } from "../lib/analyze";
 import { commitRepositoriesFor, type ApprovalDeps } from "../lib/approval-commit";
 import { DRAFT_KEY_PREFIX, buildReconciliationDraft, saveReconciliationDraft } from "../lib/reconciliation-draft";
 import { APPROVAL_NOW, reconData, reconRow, reconSession, txn } from "../lib/test-fixtures";
+import type { Category } from "@/lib/models/category";
 import type { ReconRow, RowDecision } from "../lib/types";
 import { activeRowId, menuItem, openImportConfirm, pickedRecordId } from "./menu-test-utils";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
@@ -72,6 +73,7 @@ const DATA: ReconciliationData = reconData({
     txn({ id: "t-bank", amount: 250, description: "Bookstore", accountId: "acc-bank", dateTime: at(24) }),
   ],
 });
+const OTHER_CATEGORY = { id: "c-other", name: "Other", type: "both", isActive: true, deletedAt: null } as unknown as Category;
 const LOADED: RecordsSync = { loading: [], failed: [], retry: vi.fn() };
 
 function seed(decisions: Record<string, Partial<RowDecision>> = {}) {
@@ -106,9 +108,11 @@ const comparingRow = () => activeRowId();
 const select = (id: string) => fireEvent.click(rowEl(id));
 const draft = () => sessionStorage.getItem(`${DRAFT_KEY_PREFIX}u1`)!;
 
-function renderStudio() {
+/** `withOther`: the user has the system "Other" category, so clean unmatched rows are Ready by default. */
+function renderStudio(withOther = false) {
   const t = tripwire();
-  render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} approvalDeps={t.deps} />);
+  const data = withOther ? { ...DATA, categories: [...DATA.categories, OTHER_CATEGORY] } : DATA;
+  render(<ReconciliationWorkspace uid="u1" data={data} sync={LOADED} approvalDeps={t.deps} />);
   return t;
 }
 
@@ -268,7 +272,7 @@ describe("Git-style resolution", () => {
     expect(submit.disabled).toBe(true);
     fireEvent.click(screen.getByRole("radio", { name: "Refund" }));
     fireEvent.click(submit);
-    expect(within(rowEl("r7")).getByTestId("decision-chip").textContent).toBe("Import new");
+    expect(within(rowEl("r7")).getByTestId("decision-chip").textContent).toBe("Ready");
     expect(JSON.parse(draft()).decisions.r7).toMatchObject({ kind: "import_new", category: "Salary", creditAs: "refund" });
   });
 
@@ -430,7 +434,7 @@ describe("layout and scrolling", () => {
 describe("approval regression and zero writes", () => {
   it("a full comparison pass writes nothing; decisions made here feed the unchanged Phase 4 approval", () => {
     seed();
-    const { creates, readData } = renderStudio();
+    const { creates, readData } = renderStudio(true);
     select("r1");
     fireEvent.click(resolve("keep_existing"));
     select("r2");
@@ -441,19 +445,19 @@ describe("approval regression and zero writes", () => {
     fireEvent.click(resolve("keep_existing"));
     select("r4");
     fireEvent.click(resolve("keep_existing"));
-    for (const id of ["r5", "r6", "r7"]) {
+    for (const id of ["r5", "r7"]) {
       select(id);
       fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "i" });
     }
+    // r6 (Bookstore, nothing similar on the card) is simply Ready.
+    expect(within(rowEl("r6")).getByTestId("decision-chip").dataset.status).toBe("ready");
     expect(readData).not.toHaveBeenCalled();
     expect(creates).not.toHaveBeenCalled();
 
+    // The button says what it will do, and nothing has been written until it is pressed.
     const approve = screen.getByTestId("open-approval") as HTMLButtonElement;
     expect(approve.disabled).toBe(false);
-    fireEvent.click(approve);
-    const dialog = screen.getByTestId("approval-dialog");
-    expect(dialog.textContent).toMatch(/HDFC Millennia •••• 4821/);
-    // Opening the summary is still not a write; only its explicit confirmation is.
+    expect(approve.textContent).toBe("Import 1 transaction");
     expect(readData).not.toHaveBeenCalled();
     expect(creates).not.toHaveBeenCalled();
   });
@@ -488,8 +492,6 @@ describe("approval regression and zero writes", () => {
     importVia("r7", "import_new", "Refund");
     fireEvent.click(screen.getByTestId("open-approval"));
     const dialog = screen.getByTestId("approval-dialog");
-    fireEvent.click(within(dialog).getByTestId("approval-confirm"));
-    fireEvent.click(within(dialog).getByTestId("approval-submit"));
     await waitFor(() => expect(within(dialog).getByTestId("approval-result")).toBeTruthy());
     const outcomes = within(dialog).getAllByTestId("approval-outcome").map((e) => `${e.dataset.rowId}:${e.dataset.outcome}`);
     expect(outcomes).toEqual(expect.arrayContaining(["r5:imported", "r6:imported", "r7:imported", "r1:linked"]));
@@ -511,7 +513,7 @@ describe("select → find possible matches → compare → decide (2026-11-18)",
     expect(existingIds()).toEqual(["t-sw"]);
     // Decide r1, then show only Pending rows: r1 is hidden, so the selection moves on to the next shown row.
     fireEvent.click(resolve("keep_existing"));
-    fireEvent.click(screen.getByTestId("status-pending"));
+    fireEvent.click(screen.getByTestId("rf-duplicate")); // only rows that still need a duplicate decision
     expect(screen.getAllByTestId("recon-row").some((r) => r.dataset.rowId === "r1")).toBe(false);
     expect(comparing()).toBe("r2");
     expect(screen.queryByTestId("inline-review")).toBeNull();

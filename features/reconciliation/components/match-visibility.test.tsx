@@ -15,6 +15,7 @@ import { DRAFT_KEY_PREFIX, buildReconciliationDraft, saveReconciliationDraft } f
 import { APPROVAL_NOW, reconData, reconRow, reconSession, txn } from "../lib/test-fixtures";
 import type { ReconRow, RowDecision } from "../lib/types";
 import { activeRowId, menuItem } from "./menu-test-utils";
+import type { Category } from "@/lib/models/category";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
 
 beforeAll(() => {
@@ -49,6 +50,10 @@ const ROWS: ReconRow[] = [
   reconRow({ id: "r4", day: OCT(21), description: "GYM", amount: 700 }),
 ];
 const DATA: ReconciliationData = reconData({
+  categories: [
+    { id: "c1", name: "Food", type: "expense", isActive: true, deletedAt: null } as unknown as Category,
+    { id: "c-other", name: "Other", type: "both", isActive: true, deletedAt: null } as unknown as Category,
+  ],
   transactions: [txn({ id: "t-sw", amount: 452, description: "Swiggy", dateTime: at(24) }), txn({ id: "t-am", amount: 1299.5, description: "Amazon Mktp", dateTime: at(23) })],
 });
 const NO_MATCH_DATA: ReconciliationData = reconData({ transactions: [] });
@@ -127,9 +132,11 @@ describe("detected matches are visible on open", () => {
     open();
     expect(within(rowEl("r2")).getByRole("button", { name: "Compare row 2" }).textContent).toBe("Possible match");
     expect(within(rowEl("r1")).getByRole("button", { name: "Compare row 1" }).textContent).toBe("No match");
-    expect(within(rowEl("r2")).getByTestId("decision-chip").textContent).toBe("Needs review");
-    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Needs review");
+    // One status per row: a possible match is a Possible duplicate; a clean row with no match is simply Ready.
+    expect(within(rowEl("r2")).getByTestId("decision-chip").textContent).toBe("Possible duplicate");
+    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Ready");
     expect(screen.queryByText("Undecided")).toBeNull();
+    expect(screen.queryByText("Needs review")).toBeNull();
   });
 });
 
