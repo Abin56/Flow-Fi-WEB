@@ -133,8 +133,10 @@ describe("Standardized money-direction wording", () => {
     expect(signedSideLabel(0, "AMMA")).toBeNull();
     const detail = read("features/people/components/person-detail-workspace.tsx");
     // Gross sides lead; the net is a summary-only line and never reads as an amount due.
-    expect(detail).toContain('label: "You need to give"');
-    expect(detail).toContain('label: "You need to receive"');
+    // (the gross-side headers moved from person-detail-workspace.tsx into the ledger it renders)
+    const ledger = read("features/people/components/workspace/transaction-ledger-mode.tsx");
+    expect(ledger).toContain(">You need to give</span>");
+    expect(ledger).toContain(">You need to receive</span>");
     expect(detail).toContain("Summary only — payments are settled separately.");
     expect(detail).not.toMatch(/"Net you need to (give|receive)"/);
     expect(detail).not.toMatch(/" you owe"|" owed to you"/);
@@ -144,7 +146,8 @@ describe("Standardized money-direction wording", () => {
     const src = read("features/month-cycle/components/month-cycle-workspace.tsx");
     expect(src).toContain('label="You need to give"');
     expect(src).toContain('label="You need to receive"');
-    expect(src).toContain(">You need to receive</p>");
+    // The side navigation lists both labels, and each People column header carries its own label.
+    expect(src).toContain('label: "You need to receive"');
     expect(src).not.toMatch(/Handover pending|owes you|You owe nobody/);
   });
 

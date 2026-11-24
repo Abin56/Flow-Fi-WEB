@@ -670,14 +670,17 @@ async function recordPayment(page, name, payLabel) {
   const card = page.getByText(name).first();
   await card.waitFor({ timeout: 120000 });
   await card.click();
+  await page.waitForTimeout(1500); // the detail pane loads in place — pressing Record Payment before it settles opens a form that is reset
   await page.getByRole("button", { name: "Record Payment" }).click({ timeout: 90000 });
-  const dlg = page.getByRole("dialog", { name: /Pay installment|Pay EMI/ });
+  // The pay form opens INLINE in the agreement page (Loan & EMI workspace), no longer in a role=dialog.
+  const dlg = page.locator("main");
   // The dialog's summary label differs by agreement kind ("To pay lender" / "Lender installment balance").
-  await dlg.getByText(/to pay lender|lender installment balance/i).first().waitFor({ timeout: 90000 });
+  await dlg.getByText(/to pay lender|installment balance/i).first().waitFor({ timeout: 90000 });
   await dlg.getByText("Choose paying account").click();
   await page.getByRole("option", { name: /QA Bank/ }).click();
-  await dlg.getByRole("button", { name: payLabel }).click();
-  await dlg.waitFor({ state: "hidden", timeout: 25000 });
+  // The installment detail pane has its own small "Pay ₹…" button; the footer's "Pay ₹… to lender" is the last one.
+  await dlg.getByRole("button", { name: payLabel }).last().click();
+  await dlg.getByText(/to pay lender|installment balance/i).first().waitFor({ state: "hidden", timeout: 25000 });
   await page.waitForTimeout(1500);
 }
 /** Opens installment 1's recorded payment and saves it with a new date (dd/mm/yyyy). */

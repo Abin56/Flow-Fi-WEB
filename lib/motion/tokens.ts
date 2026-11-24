@@ -22,10 +22,10 @@ export const easings = {
 export const stagger = {
   container: {
     hidden: {},
-    show: { transition: { staggerChildren: 0.06, delayChildren: 0.04 } },
+    show: { transition: { staggerChildren: 0.015, delayChildren: 0 } },
   },
   item: {
-    hidden: { opacity: 0, y: 12 },
-    show: { opacity: 1, y: 0, transition: { duration: durations.base, ease: easings.out } },
+    hidden: { opacity: 0, y: 4 },
+    show: { opacity: 1, y: 0, transition: { duration: durations.fast, ease: easings.out } },
   },
 } as const;

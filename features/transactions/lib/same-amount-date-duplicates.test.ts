@@ -76,6 +76,17 @@ describe("findSameAmountDateDuplicateIds", () => {
     expect(result.size).toBe(2);
   });
 
+  it("'exact calendar day' is the user's own day — late night and just after midnight are different days, early morning and afternoon are the same", () => {
+    // Local clock times (not UTC): in IST 00:30 is still the previous UTC day, which used to merge/split these wrongly.
+    const lateNight = txn({ id: "late", dateTime: new Date(2026, 10, 9, 23, 0) });
+    const afterMidnight = txn({ id: "after", dateTime: new Date(2026, 10, 10, 0, 30) });
+    const afternoon = txn({ id: "pm", dateTime: new Date(2026, 10, 10, 14, 0) });
+    expect(findSameAmountDateDuplicateIds([lateNight, afterMidnight]).size).toBe(0);
+    const sameDay = findSameAmountDateDuplicateIds([afterMidnight, afternoon]);
+    expect(sameDay.has("after")).toBe(true);
+    expect(sameDay.has("pm")).toBe(true);
+  });
+
   it("returns an empty set for an empty list", () => {
     expect(findSameAmountDateDuplicateIds([]).size).toBe(0);
   });

@@ -44,6 +44,21 @@ describe("budgets-workspace statusFor", () => {
     expect(statusFor(insight).label).toBe("At Risk"); // at100 alert level, but not over
   });
 
+  it("float residue never turns a budget spent exactly to its limit into Over Budget", () => {
+    // Several transactions summing to exactly the limit, to the paisa — the raw float sum is 0.30000000000000004, not 0.3.
+    const summed = 0.1 + 0.2;
+    expect(summed).not.toBe(0.3);
+    const insight = insightFor(0.3, summed);
+    expect(insight.isOverBudget).toBe(false);
+    expect(insight.alertLevel).toBe("at100");
+    expect(insight.usageRatioRaw).toBe(1);
+    expect(statusFor(insight).label).toBe("At Risk");
+    // A real overshoot by one paisa is still over.
+    const over = insightFor(0.3, 0.31);
+    expect(over.isOverBudget).toBe(true);
+    expect(statusFor(over).label).toBe("Over Budget");
+  });
+
   it("never reads At Risk for a budget the engine considers over, at any spend level", () => {
     for (const spent of [1000.01, 1050, 2000, 5000]) {
       const insight = insightFor(1000, spent);

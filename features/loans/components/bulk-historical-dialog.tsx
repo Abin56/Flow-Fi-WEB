@@ -149,15 +149,18 @@ export function BulkHistoricalDialog({
   const pickedIds = picked.map((c) => c.installment.id).join(",");
   const reconcileSource = loanRow?.loan ?? emiRow?.emi ?? null;
   // (The hook memoises on the id list itself.)
+  // Pay several: only the installments someone else paid directly reach People (their share is covered, no account moves).
+  const directIds = fromAccount ? picked.filter((c) => payerOf(c.installment.id) === "other").map((c) => c.installment.id).join(",") : pickedIds;
   const reconcileTarget =
-    !lent && !fromAccount && step !== "select" && reconcileSource && pickedIds
-      ? { sourceKind: loanRow ? ("loan" as const) : ("emi" as const), source: reconcileSource, installments, installmentIds: pickedIds.split(",") }
+    !lent && step !== "select" && reconcileSource && directIds
+      ? { sourceKind: loanRow ? ("loan" as const) : ("emi" as const), source: reconcileSource, installments, installmentIds: directIds.split(",") }
       : null;
   const reconcile = useHistoricalReconcile({
     target: reconcileTarget,
     defaultAccountId: accountId,
     // Each person's row starts on the date chosen for that installment above ("blank / unknown" stays blank).
-    defaultDateOf: (l) => (fromAccount ? null : bulkDraftDate(dateMode ?? "unknown", l.dueDate, sameDate, draft[l.installmentId]?.date ?? "")),
+    paidDirectly: fromAccount,
+    defaultDateOf: (l) => (fromAccount ? payDate : bulkDraftDate(dateMode ?? "unknown", l.dueDate, sameDate, draft[l.installmentId]?.date ?? "")),
   });
   const [peopleItems, setPeopleItems] = useState<ReimbursementItem[] | null>(null);
   const reconcileTotal = reconcile.plan.ok ? reconcile.plan.summary.total : 0;
@@ -172,7 +175,9 @@ export function BulkHistoricalDialog({
   // Only the installments still to be written count (a retry has already recorded the rest).
   const underfunded = fromAccount && !lent && needsAccount && mineCount > 0 && isUnderfunded(account, mineTotal);
   // The account must be chosen when it moves (pay now) — or, for a Loan paid earlier, anchors the record. An EMI paid earlier posts nothing.
-  const accountRequired = fromAccount ? needsAccount && (loanRow != null || mineCount > 0) : loanRow != null;
+  const accountRequired = fromAccount ? needsAccount && (loanRow != null || mineCount > 0 || reconcile.lines.length > 0) : loanRow != null;
+  // Pay several: the directly-paid installments' People shares are still loading — don't save before they're known.
+  const directPeopleChecking = fromAccount && !lent && otherCount > 0 && reconcile.loading;
   const plural = (n: number) => `${n} ${unit}${n === 1 ? "" : "s"}`;
   // Past payments: the date answer is complete (a chosen mode; "one date" needs that date).
   const datesReady = dateMode != null && !(dateMode === "same" && sameDate === "");
@@ -260,10 +265,10 @@ export function BulkHistoricalDialog({
       if (reconcile.blocker == null) setStep("review");
       return;
     }
-    if (running || !plan.ok || (accountRequired && accountId === "") || underfunded) return;
+    if (running || !plan.ok || (accountRequired && accountId === "") || underfunded || directPeopleChecking) return;
     if (!fromAccount && !started && reconcile.blocker != null) return;
     // Frozen at the first save: exactly what the user answered.
-    const people = fromAccount ? [] : (peopleItems ?? (reconcile.plan.ok ? reconcile.plan.items : []));
+    const people = peopleItems ?? (reconcile.plan.ok ? reconcile.plan.items : []);
     if (peopleItems == null) setPeopleItems(people);
     setRunning(true);
     try {
@@ -326,7 +331,7 @@ export function BulkHistoricalDialog({
           ? reconcile.blocker != null
           : peopleFailed > 0 && failed.length === 0
             ? running
-            : !plan.ok || plan.items.length === 0 || (accountRequired && accountId === "") || underfunded || (!fromAccount && !started && reconcile.blocker != null);
+            : !plan.ok || plan.items.length === 0 || (accountRequired && accountId === "") || underfunded || directPeopleChecking || (!fromAccount && !started && reconcile.blocker != null);
 
   // Review: what each person's answers come to — received now (already in the balance vs added) and still owed.
   const peopleReview = (() => {
@@ -685,7 +690,7 @@ export function BulkHistoricalDialog({
                 !needsAccount && <span className="text-muted-foreground">Charged to the linked card.</span>
               )}
               {!workspace && <span className="text-muted-foreground">
-                {lent ? "Income is posted once per installment." : "One payment is posted per installment."} {!lent && "Paying the lender doesn't mark anyone's share as received — People stays as it is."}
+                {lent ? "Income is posted once per installment." : "One payment is posted per installment."} {!lent && (otherCount > 0 ? "Paying the lender doesn't mark anyone's share as received, except for installments they paid directly — those are covered in People with no money through your accounts." : "Paying the lender doesn't mark anyone's share as received — People stays as it is.")}
               </span>}
             </div>
           </TotalCard>

@@ -20,11 +20,14 @@ export interface TransactionForDuplicateGrouping {
   transferId: string | null;
 }
 
+/** The user's own calendar day (same rule as the import-time duplicate check) — never the UTC day, which is yesterday for the first 5½ hours of an IST day. */
+const localDayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+
 export function findSameAmountDateDuplicateIds(transactions: TransactionForDuplicateGrouping[]): Set<string> {
   const groups = new Map<string, string[]>();
   for (const transaction of transactions) {
     if (transaction.transferId != null) continue;
-    const key = `${transaction.amount.toFixed(2)}_${transaction.dateTime.toISOString().slice(0, 10)}`;
+    const key = `${transaction.amount.toFixed(2)}_${localDayKey(transaction.dateTime)}`;
     const ids = groups.get(key);
     if (ids) ids.push(transaction.id);
     else groups.set(key, [transaction.id]);

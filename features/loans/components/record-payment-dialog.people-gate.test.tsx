@@ -702,7 +702,7 @@ describe("J — Mark an old EMI as paid: had the people sharing it already paid 
   const choose = async (user: ReturnType<typeof userEvent.setup>, who: string, option: string) =>
     user.click(within(screen.getByRole("radiogroup", { name: who })).getByRole("radio", { name: option }));
 
-  it("nothing is assumed received; a received share needs the balance answer; lender first, then the People settlement (no account change)", async () => {
+  it("nothing is assumed received; a received share asks no balance question (a past payment never moves an account); lender first, then the People settlement", async () => {
     const user = userEvent.setup();
     reimbLines = [share("amma", "AMMA"), share("sanju", "SANJU")];
     renderDialog(emiTarget());
@@ -712,12 +712,13 @@ describe("J — Mark an old EMI as paid: had the people sharing it already paid 
     expect(footer("Save past payment of ₹3,000")).toBeTruthy();
 
     await choose(user, "SANJU", "Received in full");
-    const save = footer("Save past payment of ₹3,000");
-    expect(save.disabled).toBe(true); // where is the money? must be answered
+    // Past payment: the lender was paid earlier, so there is no "where is the money" question — it is already in the balance.
+    expect(screen.queryByRole("radiogroup", { name: "Where is SANJU's money" })).toBeNull();
+    const save = footer("Save past payment of ₹3,000 · ₹1,000 from people");
+    expect(save.disabled).toBe(true); // the account the record is filed under is chosen, never assumed
     // The date already given for the lender payment is the starting point — not asked again from today's calendar.
     expect(screen.queryByText("No date entered — it will be saved as “Date not known”.")).toBeNull();
     expect((screen.getByLabelText("Date received from SANJU") as HTMLInputElement).value).not.toBe("");
-    await choose(user, "Where is SANJU's money", "Already in my account");
     expect(screen.getByTestId("reconcile-summary").textContent).toContain("AMMA: ₹1,000 still to receive");
     expect(screen.getByTestId("reconcile-summary").textContent).toContain("SANJU: fully received");
     expect(screen.getByTestId("reconcile-summary").textContent).toContain("Account balance won't change");
@@ -743,7 +744,6 @@ describe("J — Mark an old EMI as paid: had the people sharing it already paid 
     await choose(user, "SANJU", "Received in full");
     await user.clear(screen.getByLabelText("Date received from SANJU"));
     expect(screen.getByText("No date entered — it will be saved as “Date not known”.")).toBeTruthy();
-    await choose(user, "Where is SANJU's money", "Already in my account");
     await pickAccount(user, "Received into account");
     await user.click(footer("Save past payment of ₹3,000 · ₹1,000 from people"));
     await waitFor(() => expect(reimbRecord).toHaveBeenCalledTimes(1));
@@ -752,7 +752,7 @@ describe("J — Mark an old EMI as paid: had the people sharing it already paid 
     expect(item.date.toDateString()).toBe(day(-40).toDateString());
   });
 
-  it("received some + 'Add money to my account': an ordinary receipt for exactly that amount", async () => {
+  it("received some: recorded for exactly that amount as money already in the balance — a past payment never adds money to an account", async () => {
     const user = userEvent.setup();
     reimbLines = [share("amma", "AMMA")];
     renderDialog(emiTarget());
@@ -761,13 +761,13 @@ describe("J — Mark an old EMI as paid: had the people sharing it already paid 
     await user.type(screen.getByRole("spinbutton", { name: /amount received from amma/i }), "400");
     await user.clear(screen.getByLabelText("Date received from AMMA"));
     await user.type(screen.getByLabelText("Date received from AMMA"), "05/09/2026");
-    await choose(user, "Where is AMMA's money", "Add to my account");
+    expect(screen.queryByRole("radiogroup", { name: "Where is AMMA's money" })).toBeNull();
     expect(screen.getByTestId("reconcile-summary").textContent).toContain("AMMA: ₹600 still to receive");
-    expect(screen.getByTestId("reconcile-summary").textContent).toContain("Account balance +₹400");
+    expect(screen.getByTestId("reconcile-summary").textContent).not.toContain("Account balance +");
     await pickAccount(user, "Received into account");
     await user.click(footer("Save past payment of ₹3,000 · ₹400 from people"));
     await waitFor(() => expect(reimbRecord).toHaveBeenCalledTimes(1));
-    expect(reimbRecord.mock.calls[0][0][0]).toMatchObject({ amount: 400, recordedEarlier: false, dateKnown: true });
+    expect(reimbRecord.mock.calls[0][0][0]).toMatchObject({ amount: 400, recordedEarlier: true, dateKnown: true });
     expect(reimbRecord.mock.calls[0][0][0].date).toEqual(new Date(2026, 8, 5, 12));
   });
 
@@ -788,7 +788,6 @@ describe("J — Mark an old EMI as paid: had the people sharing it already paid 
     await openPastSingle(user);
     await choose(user, "AMMA", "Received in full");
     await choose(user, "SANJU", "Received in full");
-    await user.click(screen.getByRole("button", { name: "Already in my account" }));
     await pickAccount(user, "Received into account");
     await user.click(footer("Save past payment of ₹3,000 · ₹2,000 from people"));
     const retry = await screen.findByRole("button", { name: "Retry people's payments" });

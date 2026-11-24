@@ -56,6 +56,8 @@ export interface BudgetInsightResult {
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+const round2 = (v: number) => Math.round(v * 100) / 100;
+
 /** Mirrors `num.clampedProgress` — clamps to 0.0-1.0, guarding NaN/Infinity. */
 function clampedProgress(ratio: number): number {
   if (Number.isNaN(ratio) || !Number.isFinite(ratio)) return 0;
@@ -73,7 +75,11 @@ function diffInDays(a: Date, b: Date): number {
 
 /** Pure port of the `BudgetInsight` getters. */
 export function computeBudgetInsight(input: BudgetInsightInput): BudgetInsightResult {
-  const { limit, spent, periodStart, periodEnd } = input;
+  const { periodStart, periodEnd } = input;
+  // Money is whole paise: `spent` is a sum of many float amounts (0.1 + 0.2 = 0.30000000000000004), so round both sides
+  // before comparing — a budget spent exactly to its limit must read "at limit", never "over" from float residue.
+  const limit = round2(input.limit);
+  const spent = round2(input.spent);
   const now = input.now ?? new Date();
 
   const remaining = limit - spent;

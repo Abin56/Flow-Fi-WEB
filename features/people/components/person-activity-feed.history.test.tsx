@@ -9,6 +9,8 @@ import type { LedgerEntry, LedgerEntryType } from "@/lib/models/person";
 
 vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, storage: {} }));
 vi.mock("next/link", () => ({ default: ({ children }: { children: React.ReactNode }) => children }));
+// The money list resolves account chips through `useAccounts` (display only); no accounts here, so rows fall back to the plain account name.
+vi.mock("@/hooks/use-accounts", () => ({ useAccounts: () => ({ data: [] }) }));
 afterEach(cleanup);
 vi.mock("@/features/people/components/linked-emis-panel", () => ({ usePostponedLookup: () => () => null }));
 

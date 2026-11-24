@@ -281,7 +281,7 @@ describe("monthly planning, locks and allocations (additive fields)", () => {
     const w = await world();
     const until = new Date(2027, 4, 1);
     const g = await w.savings.createGoal({ name: "Vehicle", targetAmount: 60_000, kind: "deposit", monthlyTarget: 5_000, planAccountId: w.bank.id, locked: true, lockedUntil: until });
-    let stored = (await getDoc(doc(w.db, "users", UID, "savingsGoals", g.id))).data()!;
+    const stored = (await getDoc(doc(w.db, "users", UID, "savingsGoals", g.id))).data()!;
     expect(stored).toMatchObject({ kind: "deposit", monthlyTarget: 5_000, planAccountId: w.bank.id, locked: true, skippedCycles: [] });
     expect(stored.planSince).not.toBeNull();
     expect(stored.lockedUntil.toDate().getTime()).toBe(until.getTime());

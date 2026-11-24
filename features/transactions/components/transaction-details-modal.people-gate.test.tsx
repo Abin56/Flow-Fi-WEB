@@ -317,133 +317,47 @@ describe("Add Transfer — transfer identity, From → To, card bill", () => {
   });
 });
 
-describe("Card bill — People settlement gate", () => {
-  it("pending People share → blocked: settlement card, exact Settle CTA, no Pay action", () => {
-    renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 0)])));
-    const card = settlementCard()!;
-    expect(card.dataset.state).toBe("blocked");
-    expect(within(card).getByText("People payment pending")).toBeTruthy();
-    expect(within(card).getByText("Not received yet")).toBeTruthy();
-    expect(within(card).getByText(/still to come from AMMA\. Collect it first, or pay the bill anyway/)).toBeTruthy();
-    // Paying anyway is offered, never preselected.
-    expect((within(screen.getByTestId("gate-pay-anyway")).getByRole("checkbox") as HTMLInputElement).checked).toBe(false);
-    // The five accounting rows stay collapsed by default.
-    expect(within(card).queryByText("People share")).toBeNull();
+// A card bill payment never waits on People repayments (Nov 23): what people owe stays in the People Ledger on its own.
+// The write guard (`PeopleSettlementPendingError`) is satisfied by an acknowledgement that marks no share received and
+// allocates nothing, so Pay is always available and saves ONE transfer pair.
+describe("Card bill — never waits on People repayments", () => {
+  const shapes: [string, () => LinkedPeopleReadiness, number][] = [
+    ["a People share not received yet", () => readinessOf(1000, [person("amma", "AMMA", 1000, 0)]), 1000],
+    ["a partly received People share", () => readinessOf(1000, [person("amma", "AMMA", 1000, 400)]), 1000],
+    ["a fully received People share", () => readinessOf(1000, [person("amma", "AMMA", 1000, 1000)]), 1000],
+    ["several people, some open", () => readinessOf(5000, [person("amma", "AMMA", 2000, 0), person("john", "JOHN", 1000, 1000), person("anu", "ANU", 500, 200)]), 5000],
+  ];
 
-    const cta = footerSettle()!;
-    expect(cta.textContent).toBe("Settle with AMMA");
-    // The footer says WHY the bill waits — the bill payment is step 2, never one person's amount.
-    expect(screen.getByTestId("gate-reason").textContent).toMatch(/of this bill is still owed by AMMA. Settle first, then pay the bill./);
-    expect(cta.getAttribute("href")).toBe("/people?person=amma&obligation=ledger%3Aamma-g&settle=1&return=%2Fcredit-cards%3Fcard%3Dc-octane%26pay%3D1");
-    expect(screen.queryByRole("button", { name: /pay ₹|add transfer/i })).toBeNull();
-  });
-
-  it("Enter, Ctrl+Enter and a raw submit can't bypass the gate — focus lands on the Settle step", async () => {
+  it.each(shapes)("%s: no settlement card, no Settle step — Pay saves once, acknowledged, and writes nothing to People", async (_name, readiness, amount) => {
     const user = userEvent.setup();
-    renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 0)])));
-    amountInput().focus();
-    await user.keyboard("{Enter}"); // Description empty → steps there first (existing behavior)
-    await user.type(document.activeElement as HTMLElement, "Bill");
-    await user.keyboard("{Enter}");
-    await waitFor(() => expect(document.activeElement).toBe(footerSettle()));
-    amountInput().focus();
-    await user.keyboard("{Control>}{Enter}{/Control}");
-    await waitFor(() => expect(document.activeElement).toBe(footerSettle()));
-    fireEvent.submit(amountInput().form!);
-    await new Promise((r) => setTimeout(r, 30));
-    nothingSaved();
-  });
-
-  it("“Pay the bill now anyway” → ONE transfer pair with the write gate's acknowledgement; no People write, nothing marked received", async () => {
-    const user = userEvent.setup();
-    renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 400)])));
-    await chooseFrom(user, /SBI/);
-    expect(screen.queryByRole("button", { name: /pay ₹1,000/i })).toBeNull();
-    const choice = screen.getByTestId("gate-pay-anyway");
-    expect(choice.textContent).toMatch(/₹600(\.00)? from AMMA stays owed to you in People — nothing is marked received/);
-    await user.click(within(choice).getByRole("checkbox"));
+    renderCardBill(gateOf(readiness()), { initialAmount: amount });
+    expect(settlementCard()).toBeNull();
     expect(footerSettle()).toBeNull();
-    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
+    await chooseFrom(user, /SBI/);
+    await user.click(screen.getByRole("button", { name: new RegExp(`pay ₹${amount.toLocaleString("en-IN")}`, "i") }));
     await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
     const params = actions.createTransferPair.mock.calls[0][0];
-    expect(params).toMatchObject({ amount: 1000, sourceAccountId: "sbi", destinationAccountId: "octane" });
-    expect(params.peopleGateAcknowledgement).toMatchObject({ acknowledgedUnsettledPeople: true, reason: expect.stringMatching(/AMMA/) });
-    expect(actions.createTransaction).not.toHaveBeenCalled();
-    expect(addLedgerEntryWithTransaction).not.toHaveBeenCalled();
+    expect(params).toMatchObject({ amount, sourceAccountId: "sbi", destinationAccountId: "octane" });
+    expect(params.peopleGateAcknowledgement).toMatchObject({ acknowledgedUnsettledPeople: true, reason: expect.stringMatching(/independently of People/) });
+    expect(actions.createTransaction).not.toHaveBeenCalled(); // never an income / expense
+    expect(addLedgerEntryWithTransaction).not.toHaveBeenCalled(); // no People write — nothing is marked received
   });
 
-  it("an ordinary card payment (nothing owed by People) sends no acknowledgement", async () => {
-    const user = userEvent.setup();
-    renderCardBill(gateOf(readinessOf(1000, [])));
-    await chooseFrom(user, /SBI/);
-    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
-    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
-    expect(actions.createTransferPair.mock.calls[0][0].peopleGateAcknowledgement).toBeNull();
-  });
-
-  it("partial People settlement → still blocked for exactly what remains", () => {
-    renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 400)])));
-    expect(settlementCard()!.dataset.state).toBe("blocked");
-    expect(screen.getByText(/₹400 of ₹1,000 received · ₹600 remaining/)).toBeTruthy();
-    expect(footerSettle()!.textContent).toBe("Settle with AMMA");
-  });
-
-  it("fully settled → the card turns into PEOPLE SETTLED and Pay saves once", async () => {
-    const user = userEvent.setup();
-    renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 1000)])));
-    await chooseFrom(user, /SBI/);
-    const card = settlementCard()!;
-    expect(card.dataset.state).toBe("settled");
-    expect(within(card).getByText("People settled")).toBeTruthy();
-    expect(within(card).getByText("Ready to pay OCTANE.")).toBeTruthy();
-    expect(within(card).getByText("received")).toBeTruthy();
-    expect(footerSettle()).toBeNull();
-    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
-    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
-  });
-
-  it("multiple people: both open items need attention, the received one shows ✓, all must resolve", () => {
-    renderCardBill(gateOf(readinessOf(5000, [person("amma", "AMMA", 2000, 0), person("john", "JOHN", 1000, 1000), person("anu", "ANU", 500, 200)])), {
-      initialAmount: 5000,
-    });
-    const card = settlementCard()!;
-    expect(within(card).getByText("2 need attention")).toBeTruthy();
-    expect(within(card).getByRole("link", { name: "Settle ₹2,000 with AMMA" })).toBeTruthy();
-    expect(within(card).getByRole("link", { name: "Settle ₹300 with ANU" })).toBeTruthy();
-    expect(within(card).queryByRole("link", { name: /with JOHN/ })).toBeNull();
-    expect(within(card).getByText("JOHN")).toBeTruthy();
-    expect(within(card).getByText(/₹2,300/)).toBeTruthy();
-    expect(footerSettle()!.textContent).toBe("Settle with AMMA");
-  });
-
-  it("View breakdown reveals Bill / People share / Received / Remaining / Your share", async () => {
-    const user = userEvent.setup();
-    renderCardBill(gateOf(readinessOf(5000, [person("amma", "AMMA", 2000, 0), person("anu", "ANU", 500, 200)])), { initialAmount: 5000 });
-    await user.click(screen.getByRole("button", { name: /view breakdown/i }));
-    const card = settlementCard()!;
-    for (const label of ["Bill", "People share", "Received", "Remaining", "Your share"]) expect(within(card).getByText(label)).toBeTruthy();
-    expect(within(card).getByText("Your share").nextElementSibling?.textContent).toBe("₹2,500"); // 5,000 − 2,500
-    expect(within(card).getByText("Remaining").nextElementSibling?.textContent).toBe("₹2,300");
-  });
-
-  it("loading People data → the payment waits (no save), never reads as 'nothing linked'", async () => {
+  it("People data still loading never delays the bill (and never reads as a pending settlement)", async () => {
     const user = userEvent.setup();
     renderCardBill(gateOf(null, true));
-    expect(screen.getByText("Checking linked People…")).toBeTruthy();
-    const waiting = screen.getByRole("button", { name: /checking people/i }) as HTMLButtonElement;
-    expect(waiting.disabled).toBe(true);
-    await user.type(screen.getAllByRole("textbox")[1], "Bill{Enter}");
-    fireEvent.submit(amountInput().form!);
-    await new Promise((r) => setTimeout(r, 30));
-    nothingSaved();
+    expect(screen.queryByText("Checking linked People…")).toBeNull();
+    expect(settlementCard()).toBeNull();
+    await chooseFrom(user, /SBI/);
+    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
   });
 
-  it("the gate only covers the gated card: paying a different account is not blocked by it", async () => {
+  it("the acknowledgement covers only the gated card: paying a different card sends none", async () => {
     const user = userEvent.setup();
     const onDestinationAccountChange = vi.fn();
     renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 0)])), { onDestinationAccountChange });
     await chooseFrom(user, /SBI/);
-    expect(footerSettle()).not.toBeNull();
 
     const toTrigger = screen
       .getAllByRole("combobox")
@@ -451,14 +365,21 @@ describe("Card bill — People settlement gate", () => {
     await user.click(toTrigger);
     await user.click(await screen.findByRole("option", { name: /HDFC CARD/ }));
     expect(onDestinationAccountChange).toHaveBeenCalledWith("hdfc-card");
-    expect(settlementCard()).toBeNull();
-    expect(footerSettle()).toBeNull();
     await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
     await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
-    expect(actions.createTransferPair.mock.calls[0][0]).toMatchObject({ destinationAccountId: "hdfc-card" });
+    expect(actions.createTransferPair.mock.calls[0][0]).toMatchObject({ destinationAccountId: "hdfc-card", peopleGateAcknowledgement: null });
   });
 
-  it("switching the flow to Expense drops the gate (it applies to the bill payment only)", async () => {
+  it("an ordinary card payment with no People gate sends no acknowledgement", async () => {
+    const user = userEvent.setup();
+    renderCardBill(null);
+    await chooseFrom(user, /SBI/);
+    await user.click(screen.getByRole("button", { name: /pay ₹1,000/i }));
+    await waitFor(() => expect(actions.createTransferPair).toHaveBeenCalledTimes(1));
+    expect(actions.createTransferPair.mock.calls[0][0].peopleGateAcknowledgement).toBeNull();
+  });
+
+  it("switching the flow to Expense leaves no bill-payment UI behind", async () => {
     const user = userEvent.setup();
     renderCardBill(gateOf(readinessOf(1000, [person("amma", "AMMA", 1000, 0)])));
     await user.click(screen.getByRole("button", { name: /expense/i }));

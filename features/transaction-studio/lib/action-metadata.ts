@@ -167,14 +167,24 @@ export function deriveRecordAction(record: ActionAxes): RecordAction | null {
  * finishes the flow (`contextual-cell.tsx` already treats an empty
  * `emiId`/`loanId`/`billId` as "chosen but not yet linked").
  */
-const ACTION_DETAIL_PLACEHOLDERS: Partial<Record<RecordAction, RecordActionDetail>> = {
-  existing_emi: { kind: "existing_emi", emiId: "" },
-  create_emi: { kind: "create_emi", name: "", principalAmount: 0, interestRatePercent: null, months: 0, startDate: new Date() },
-  existing_loan: { kind: "existing_loan", loanId: "" },
-  create_loan: { kind: "create_loan", name: "", loanAmount: 0, interestRatePercent: null, months: null, startDate: new Date(), personId: "" },
-  recurring_bill: { kind: "recurring_bill", billId: "" },
-  cashback: { kind: "cashback" },
+const ACTION_DETAIL_PLACEHOLDERS: Partial<Record<RecordAction, () => RecordActionDetail>> = {
+  existing_emi: () => ({ kind: "existing_emi", emiId: "" }),
+  create_emi: () => ({ kind: "create_emi", name: "", principalAmount: 0, interestRatePercent: null, months: 0, startDate: studioToday() }),
+  existing_loan: () => ({ kind: "existing_loan", loanId: "" }),
+  create_loan: () => ({ kind: "create_loan", name: "", loanAmount: 0, interestRatePercent: null, months: null, startDate: studioToday(), personId: "" }),
+  recurring_bill: () => ({ kind: "recurring_bill", billId: "" }),
+  cashback: () => ({ kind: "cashback" }),
 };
+
+/**
+ * Today's calendar day in Studio's date form (UTC midnight, like a date typed into a date field). A raw `new Date()` would
+ * read as yesterday in the inspector's date input for the first 5½ hours of an IST day — and, evaluated once at module load,
+ * would also go stale in a tab left open overnight, so each pick builds its own.
+ */
+function studioToday(): Date {
+  const now = new Date();
+  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+}
 
 /**
  * The inverse of `deriveRecordAction` — the write-side patch for picking an
@@ -190,7 +200,7 @@ export function actionToAxesPatch(
   action: RecordAction,
   detail?: RecordActionDetail | null,
 ): { flowType: RecordFlowType; ownership: RecordOwnership | null; modifiers: RecordModifiers; actionDetail: RecordActionDetail | null } {
-  const resolvedDetail = detail !== undefined ? detail : (ACTION_DETAIL_PLACEHOLDERS[action] ?? null);
+  const resolvedDetail = detail !== undefined ? detail : (ACTION_DETAIL_PLACEHOLDERS[action]?.() ?? null);
   switch (action) {
     case "normal_expense":
       return { flowType: "expense", ownership: "mine", modifiers: DEFAULT_RECORD_MODIFIERS, actionDetail: resolvedDetail };

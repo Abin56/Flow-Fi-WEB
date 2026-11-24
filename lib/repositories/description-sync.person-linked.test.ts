@@ -1,4 +1,4 @@
-﻿import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Account } from "@/lib/models/account";
 import type { LedgerEntry, Person } from "@/lib/models/person";
 import type { Transaction } from "@/lib/models/transaction";
@@ -10,7 +10,7 @@ import { TransactionRepository } from "./transaction-repository";
 
 /**
  * Renaming a person-linked transaction (person-funded expense, "Money I Gave" cash leg): the People row
- * (its ledger entry's `note`) follows the new description with ZERO financial effect â€” no SBI move, no
+ * (its ledger entry's `note`) follows the new description with ZERO financial effect — no SBI move, no
  * People balance change, no My Spend change, no new entry. Same fake-Firestore transaction as
  * `person-funded-expense.test.ts`.
  */
@@ -102,7 +102,7 @@ function setup() {
   return { store, transactions, ammaLedger, deps, amma, tx, money, entriesOf };
 }
 
-describe("Person-funded expense â€” AMMA paid â‚¹1,000 directly; Exam â†’ KSEB Bill", () => {
+describe("Person-funded expense — AMMA paid ₹1,000 directly; Exam → KSEB Bill", () => {
   beforeEach(() => {
     vi.mocked(runTransaction).mockClear();
   });
@@ -122,7 +122,7 @@ describe("Person-funded expense â€” AMMA paid â‚¹1,000 directly; Exam �
 
     expect(t.entriesOf("amma").map((e) => e.note)).toEqual(["KSEB Bill"]);
     expect(t.tx(transaction.id).description).toBe("KSEB Bill");
-    // SBI â‚¹10,000, I owe AMMA â‚¹1,000, My Spend â‚¹1,000, the same single entry â€” unchanged.
+    // SBI ₹10,000, I owe AMMA ₹1,000, My Spend ₹1,000, the same single entry — unchanged.
     expect(t.money(transaction.id)).toEqual(before);
     expect(before).toMatchObject({ sbi: 10000, amma: -1000, mySpend: 1000 });
   });
@@ -144,7 +144,7 @@ describe("Person-funded expense â€” AMMA paid â‚¹1,000 directly; Exam �
   });
 });
 
-describe("Money I Gave â€” â‚¹1,000 from SBI to AMMA (cash leg); Exam â†’ KSEB Bill", () => {
+describe("Money I Gave — ₹1,000 from SBI to AMMA (cash leg); Exam → KSEB Bill", () => {
   beforeEach(() => {
     vi.mocked(runTransaction).mockClear();
   });
@@ -158,7 +158,7 @@ describe("Money I Gave â€” â‚¹1,000 from SBI to AMMA (cash leg); Exam �
     );
   }
 
-  it("the People row reads the new description; SBI, AMMA owes â‚¹1,000 and My Spend unchanged", async () => {
+  it("the People row reads the new description; SBI, AMMA owes ₹1,000 and My Spend unchanged", async () => {
     const t = setup();
     const { transaction } = await gave(t);
     const before = t.money(transaction.id);
@@ -172,7 +172,7 @@ describe("Money I Gave â€” â‚¹1,000 from SBI to AMMA (cash leg); Exam �
     expect(before).toMatchObject({ sbi: 9000, amma: 1000 });
   });
 
-  it("a note customised on the People side is the user's own text â€” never overwritten", async () => {
+  it("a note customised on the People side is the user's own text — never overwritten", async () => {
     const t = setup();
     const { transaction } = await gave(t, "Mom's exam fee (cash)");
     const old = t.tx(transaction.id);
@@ -181,7 +181,7 @@ describe("Money I Gave â€” â‚¹1,000 from SBI to AMMA (cash leg); Exam �
     expect(t.entriesOf("amma").map((e) => e.note)).toEqual(["Mom's exam fee (cash)"]);
   });
 
-  it("a Record Payment entry (paymentId) is a payment-history snapshot â€” never rewritten", async () => {
+  it("a Record Payment entry (paymentId) is a payment-history snapshot — never rewritten", async () => {
     const t = setup();
     const { transaction } = await gave(t);
     // A payment line that happens to reference the same transaction and mirror its description.
