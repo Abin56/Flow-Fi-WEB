@@ -73,6 +73,11 @@ export function useHistoricalReconcile(params: {
    * due date. Never later than today — money already received can't be dated in the future.
    */
   defaultDateOf?: (line: ReimbursementLine) => string | null;
+  /**
+   * Past payment: the lender payment moves no balance, so what people paid back must not credit the account either
+   * (the money went straight on to the lender). Every received row is recorded as "Already in my account".
+   */
+  noBalanceChange?: boolean;
 }): HistoricalReconcileState {
   const { lines, isLoading, record } = useHistoricalReimbursement(params.target);
   const [batchId] = useState(generateId);
@@ -100,7 +105,8 @@ export function useHistoricalReconcile(params: {
   const shown: Record<string, ReimbursementDraft> = Object.fromEntries(
     Object.entries(draft).map(([k, d]) => {
       const l = lineByKey.get(k);
-      return [k, l != null && received(d) && d.date === undefined ? { ...d, date: defaultDateFor(l) } : d];
+      const withDate = l != null && received(d) && d.date === undefined ? { ...d, date: defaultDateFor(l) } : d;
+      return [k, params.noBalanceChange && received(withDate) ? { ...withDate, treatment: "included" as const } : withDate];
     }),
   );
   const plan = planReimbursements({ lines, draft: shown, batchId });
@@ -246,11 +252,14 @@ export function HistoricalPeopleReconcile({
   locked,
   viaLender,
   directPaymentLabels = false,
+  noBalanceChange = false,
   compact = false,
 }: {
   /** The person paid the lender directly (rather than paying me): the intro says how to mark their share. */
   viaLender?: boolean;
   directPaymentLabels?: boolean;
+  /** Past payment: the account balance never changes, so the "where is the money" choice is not offered. */
+  noBalanceChange?: boolean;
   compact?: boolean;
   state: HistoricalReconcileState;
   accounts: readonly Account[];
@@ -346,13 +355,13 @@ export function HistoricalPeopleReconcile({
                     value={sharedDate(ownReceived.map((l) => draft[reimbursementLineKey(l)]?.date ?? ""))}
                     onChange={(e) => state.setPersonReceived(personId, { date: e.target.value })}
                   />
-                  <Segmented
+                  {!noBalanceChange && <Segmented
                     name={`Where is ${personName}'s money, for all received`}
                     value={sharedTreatment(ownReceived.map((l) => draft[reimbursementLineKey(l)]?.treatment))}
                     options={treatmentOptions}
                     wrap={compact}
                     onChange={(v) => state.setPersonReceived(personId, { treatment: v })}
-                  />
+                  />}
                 </div>
               )}
               {foldable && !ownFailed && (
@@ -382,6 +391,7 @@ export function HistoricalPeopleReconcile({
                   showInstallment={showInstallment}
                   locked={locked}
                   directPaymentLabels={directPaymentLabels}
+                  noBalanceChange={noBalanceChange}
                   compact={compact}
                   treatmentOptions={treatmentOptions}
                   onChange={(patch) => state.setLine(reimbursementLineKey(l), patch)}
@@ -394,7 +404,7 @@ export function HistoricalPeopleReconcile({
 
       {receivedCount > 0 && (
         <div className="flex flex-col gap-1.5 border-t border-border pt-2.5">
-          {receivedCount > 1 && !locked && (
+          {receivedCount > 1 && !locked && !noBalanceChange && (
             <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
               {directPaymentLabels ? "Apply to all covered shares" : "Set every row marked received to:"}
               {treatmentOptions.map((t) => (
@@ -409,7 +419,7 @@ export function HistoricalPeopleReconcile({
             <AccountSelect className="h-9 rounded-[6px] border border-border bg-card px-2 text-sm" accounts={accounts as Account[]} value={state.accountId} onChange={state.setAccountId} ariaLabel={directPaymentLabels && !anyAdded ? "Account for the People record" : "Received into account"} />
           </label>
           {/* What the two per-row choices mean — the buttons alone don't say it. */}
-          {!compact && <p className="text-[11px] leading-snug text-muted-foreground">
+          {noBalanceChange ? <p className="text-[11px] leading-snug text-muted-foreground">Past payment — your account balance doesn&apos;t change. What people paid back went straight to the lender.</p> : !compact && <p className="text-[11px] leading-snug text-muted-foreground">
             {directPaymentLabels ? (
               <><span className="font-semibold text-foreground/80">Add to my account</span> credits the account above when the person paid you directly.</>
             ) : (
@@ -524,6 +534,7 @@ function ShareLineRow({
   showInstallment,
   locked,
   directPaymentLabels,
+  noBalanceChange,
   compact,
   treatmentOptions,
   onChange,
@@ -535,6 +546,7 @@ function ShareLineRow({
   showInstallment: boolean;
   locked?: boolean;
   directPaymentLabels: boolean;
+  noBalanceChange: boolean;
   compact: boolean;
   treatmentOptions: { value: BalanceTreatment; label: string }[];
   onChange: (patch: Partial<ReimbursementDraft>) => void;
@@ -590,14 +602,14 @@ function ShareLineRow({
             disabled={locked}
             onChange={(e) => onChange({ date: e.target.value })}
           />
-          <Segmented
+          {!noBalanceChange && <Segmented
             name={directPaymentLabels ? `Account effect for ${name}'s share` : `Where is ${name}'s money`}
             value={draft?.treatment ?? null}
             disabled={locked}
             wrap={compact}
             options={treatmentOptions}
             onChange={(v) => onChange({ treatment: v })}
-          />
+          />}
         </div>
       )}
       {compact && directPaymentLabels && choice !== "none" && draft?.treatment == null && <p className="text-xs text-muted-foreground">For money paid to the lender, choose “Record without balance change”.</p>}

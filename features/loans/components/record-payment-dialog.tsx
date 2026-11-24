@@ -412,6 +412,7 @@ export function RecordPaymentDialog({
           }
         : null,
     defaultAccountId: accountId,
+    noBalanceChange: earlier && !directPayer,
     // The people's rows start on the date already given for the lender payment — not asked again from today's calendar.
     defaultDateOf: () => (earlier ? (dateUnknown ? null : earlierDate) : date),
   });
@@ -1092,7 +1093,7 @@ export function RecordPaymentDialog({
               onClear={() => setLinkedTx(null)}
             />
           )}
-          {!lent && !earlierSplit && <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} viaLender={directPayer} />}
+          {!lent && !earlierSplit && <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} viaLender={directPayer} noBalanceChange={!directPayer} />}
           {!earlierSplit && (
             <p className="text-xs font-medium text-foreground/80" data-testid="past-payment-effect">
               No account balance changes for the {lent ? "repayment" : "lender payment"}.
@@ -1128,7 +1129,7 @@ export function RecordPaymentDialog({
       </PayCard>
     ) : null;
 
-  const accountPreview = fundsApply && payingAccount ? <PaymentSourceSummary account={payingAccount} amount={planAmount} paymentLabel={isLoan ? "Loan payment" : "EMI payment"} /> : null;
+  const accountPreview = fundsApply && payingAccount ? <PaymentSourceSummary account={payingAccount} amount={planAmount} credit={yesRecord && reconcile.plan.ok && reconcile.accountId === payingAccount.id ? reconcile.plan.summary.balanceChange : 0} paymentLabel={isLoan ? "Loan payment" : "EMI payment"} /> : null;
   // Read off the same allocation the write performs.
   const receiptDetails =
     showPaymentDetails && !earlier && planAmount != null ? (
@@ -1242,7 +1243,7 @@ export function RecordPaymentDialog({
   const pastPeopleCard = showPastPeople && (
     <PayCard tone="people" title={loanDetail ? "People shares" : "From people"}>
       {!loanDetail && <p className="text-xs font-medium text-foreground/85" data-testid="past-payment-effect">The lender payment doesn&apos;t change your accounts.</p>}
-      <HistoricalPeopleReconcile compact={loanDetail} state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} viaLender={directPayer} directPaymentLabels={directLoanRecord} />
+      <HistoricalPeopleReconcile compact={loanDetail} state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} viaLender={directPayer} directPaymentLabels={directLoanRecord} noBalanceChange={earlier && !directPayer} />
     </PayCard>
   );
   const reviewColumn = earlier ? pastPeopleCard : (peopleCard || receiptCard || linkedFundsNotice) && (

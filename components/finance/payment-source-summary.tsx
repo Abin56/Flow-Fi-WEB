@@ -20,14 +20,18 @@ export function PaymentSourceSummary({
   account,
   amount,
   paymentLabel = "Payment",
+  credit = 0,
   className,
 }: {
   account: PaymentSourceAccount | null | undefined;
   amount: number | null;
   paymentLabel?: string;
+  /** Money credited back to this same account in the same save (e.g. people's shares added to it) — nets against the payment. */
+  credit?: number;
   className?: string;
 }) {
   if (!account) return null;
+  const hasCredit = Number.isFinite(credit) && credit > 0.005;
   const hasAmount = amount != null && Number.isFinite(amount) && amount > 0;
   const preview = previewFunds(account, hasAmount ? amount : 0);
   const insufficient = hasAmount && preview.status === "insufficient";
@@ -51,10 +55,16 @@ export function PaymentSourceSummary({
             <span className="text-muted-foreground">{paymentLabel}</span>
             <span className="font-semibold text-foreground tabular-nums">− {money(preview.amount)}</span>
           </div>
+          {hasCredit && (
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground">Received from people</span>
+              <span className="font-semibold text-income tabular-nums" data-testid="payment-source-credit">+ {money(credit)}</span>
+            </div>
+          )}
           <div className="flex items-center justify-between gap-3 border-t border-border pt-1">
             <span className="font-medium text-foreground">After payment</span>
             <span className={cn("font-semibold tabular-nums", insufficient ? "text-expense" : "text-foreground")} data-testid="payment-source-after">
-              {money(preview.after)}
+              {money(preview.after + (hasCredit ? credit : 0))}
             </span>
           </div>
         </>
