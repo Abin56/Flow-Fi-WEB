@@ -1,6 +1,7 @@
 "use client";
 
-import { CalendarClock, CheckCircle2 } from "lucide-react";
+import { CalendarClock, CheckCircle2, HandCoins } from "lucide-react";
+import { ICON_BTN, TD, TH } from "@/features/people/components/money-in-out-list";
 import { useState } from "react";
 import { usePostponedLookup } from "@/features/people/components/linked-emis-panel";
 import type { PayableObligation } from "@/features/people/lib/person-payment-obligations";
@@ -14,9 +15,6 @@ const shortDate = (d: Date, year: number) => d.toLocaleDateString("en-IN", {
 });
 const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 
-const BTN =
-  "inline-flex min-h-8 shrink-0 items-center rounded-[5px] border px-2.5 text-xs font-semibold whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
-
 type Kind = "overdue" | "due" | "postponed" | "later" | "youOwe";
 
 const KIND: Record<Kind, { label: string; chip: string }> = {
@@ -27,7 +25,6 @@ const KIND: Record<Kind, { label: string; chip: string }> = {
   youOwe: { label: "You owe", chip: "text-settle-payable-text" },
 };
 
-const TH = "border-y border-border-subtle px-3 py-2 text-[11px] font-semibold tracking-[0.045em] text-muted-foreground uppercase";
 const DESKTOP_PREVIEW_LIMIT = 4;
 const PREVIEW_LIMIT = 8;
 
@@ -91,58 +88,61 @@ export function PersonOpenItems({
   const foot = "px-2 py-1 text-[12px] tabular-nums";
 
   return (
-    <div data-testid="open-items" className="@container">
-      <table role="table" aria-label="Open items across all cycles" className="w-full border-collapse text-left @max-[32rem]:block">
-        <thead className="@max-[32rem]:sr-only">
-          <tr className="bg-secondary/35">
-            <th scope="col" className={cn(TH, "w-[6.75rem] pl-5")}>Date</th>
-            <th scope="col" className={TH}>Item</th>
-            <th scope="col" className={cn(TH, "w-[8.75rem]")}>Status</th>
-            <th scope="col" className={cn(TH, "w-[8rem] text-right")}>Amount</th>
-            <th scope="col" className={cn(TH, "w-[13.5rem] pr-5 text-right")}>
-              <span className="sr-only">Actions</span>
+    <div data-testid="open-items" className="@container overflow-x-auto">
+      <table role="table" aria-label="Open items across all cycles" className="isolate w-full border-separate border-spacing-0 text-sm">
+        <thead>
+          <tr>
+            <th scope="col" className={cn(TH, "w-[6.25rem]")}>Date</th>
+            <th scope="col" className={TH}>Description</th>
+            <th scope="col" className={cn(TH, "w-40")}>Status</th>
+            <th scope="col" className={cn(TH, "w-28 text-right sm:w-36")}>Amount</th>
+            <th scope="col" className={cn(TH, "w-[6.25rem]")}>
+              <span className="sr-only sm:not-sr-only">Actions</span>
             </th>
           </tr>
         </thead>
-        <tbody role="rowgroup" className="divide-y divide-border-subtle @max-[32rem]:block @max-[32rem]:border-t @max-[32rem]:border-border-subtle">
+        <tbody role="rowgroup">
           {shown.map(({ o, theirs, moved, kind }, index) => {
             const isCovered = coveredKeys.has(o.key);
             return (
-              <tr key={o.key} role="row" className={cn("transition-colors hover:bg-secondary/30 @max-[32rem]:grid @max-[32rem]:grid-cols-[minmax(0,1fr)_auto] @max-[32rem]:items-start @max-[32rem]:gap-x-2 @max-[32rem]:gap-y-1 @max-[32rem]:px-3.5 @max-[32rem]:py-2.5 lg:[&>td]:py-1.5", !showAll && index >= DESKTOP_PREVIEW_LIMIT && "lg:hidden")}>
-                <td role="cell" className="px-3 py-2 pl-5 text-xs whitespace-nowrap text-muted-foreground tabular-nums @max-[32rem]:col-start-1 @max-[32rem]:row-start-2 @max-[32rem]:p-0">{shortDate(o.date, year)}</td>
-                <td role="cell" className="min-w-0 px-3 py-2 @max-[32rem]:col-start-1 @max-[32rem]:row-start-1 @max-[32rem]:p-0">
-                  <span className="block text-sm leading-snug font-semibold break-words text-foreground">
-                    {o.title}
-                  </span>
-                  {!(o.isEmi && o.title.endsWith(" · EMI share")) && <span className="mt-0.5 block text-xs text-muted-foreground">{o.typeLabel}</span>}
+              <tr key={o.key} role="row" className={cn("group transition-colors hover:bg-secondary/70", !showAll && index >= DESKTOP_PREVIEW_LIMIT && "lg:hidden")}>
+                <td role="cell" className={cn(TD, "whitespace-nowrap")}>
+                  <span className="text-[13px] font-semibold text-foreground">{o.date.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</span>{" "}
+                  <span className="text-[11px] text-muted-foreground tabular-nums">{o.date.getFullYear()}</span>
                 </td>
-                <td role="cell" className="px-3 py-2 @max-[32rem]:col-start-2 @max-[32rem]:row-start-2 @max-[32rem]:justify-self-end @max-[32rem]:p-0">
+                <td role="cell" className={cn(TD, "max-w-0")}>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <p className="min-w-[35%] shrink truncate text-[13px] leading-tight font-semibold text-foreground">{o.title}</p>
+                    {!(o.isEmi && o.title.endsWith(" · EMI share")) && <span className="truncate text-[11.5px] text-muted-foreground">{o.typeLabel}</span>}
+                  </div>
+                </td>
+                <td role="cell" className={TD}>
                   {isCovered ? (
-                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success" title="You already received money from them toward the overall balance. It covers this item, but it isn't linked to it — so the item stays listed.">
-                      <CheckCircle2 className="size-3" aria-hidden />
+                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-success" title="You already received money from them toward the overall balance. It covers this item, but it isn't linked to it — so the item stays listed.">
+                      <CheckCircle2 className="size-3.5" aria-hidden />
                       Covered
                     </span>
                   ) : (
-                    <span className={cn("inline-flex items-center gap-1.5 text-xs font-medium", KIND[kind].chip)}>
-                      {kind === "postponed" ? <CalendarClock className="size-3 shrink-0" aria-hidden /> : <span className="size-[5px] shrink-0 rounded-full bg-current" aria-hidden />}
+                    <span className={cn("inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap", KIND[kind].chip)}>
+                      {kind === "postponed" ? <CalendarClock className="size-3.5 shrink-0" aria-hidden /> : <span className="size-[5px] shrink-0 rounded-full bg-current" aria-hidden />}
                       {kind === "postponed" ? `Moved to ${moved?.date ? shortDate(moved.date, year) : `${moved?.name} cycle`}` : KIND[kind].label}
                     </span>
                   )}
                 </td>
-                <td role="cell" className={cn("px-3 py-2 text-right text-sm font-semibold whitespace-nowrap tabular-nums @max-[32rem]:col-start-2 @max-[32rem]:row-start-1 @max-[32rem]:p-0", theirs ? "text-foreground" : "text-settle-payable-text")}>
-                  {money(o.outstanding)}
-                  {o.outstanding < o.amount - 0.005 && <span className="block text-[10px] font-medium text-foreground/45">of {money(o.amount)}</span>}
+                <td role="cell" className={cn(TD, "text-right whitespace-nowrap")}>
+                  <p className={cn("text-[13.5px] font-semibold tabular-nums", theirs ? "text-foreground" : "text-settle-payable-text")}>{money(o.outstanding)}</p>
+                  {o.outstanding < o.amount - 0.005 && <p className="text-[11px] text-muted-foreground tabular-nums">of {money(o.amount)}</p>}
                 </td>
-                <td role="cell" className="px-3 py-2 pr-5 @max-[32rem]:col-span-2 @max-[32rem]:p-0">
-                  <span className="flex items-center justify-end gap-1.5 empty:hidden">
+                <td role="cell" className={cn(TD, "px-1.5")}>
+                  <span className="flex items-center justify-end gap-0.5 opacity-60 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 motion-reduce:transition-none">
                     {onPostpone && theirs && o.isEmi && !moved && !isCovered && kind !== "later" && (
-                      <button type="button" title={`Move collecting this to a later date — ${first} still owes it`} onClick={() => onPostpone(o.key)} className={cn(BTN, "border-border text-foreground hover:border-border-strong hover:bg-secondary")}>
-                        Postpone
+                      <button type="button" title={`Postpone — move collecting this to a later date; ${first} still owes it`} aria-label={`Postpone ${o.title}`} onClick={() => onPostpone(o.key)} className={cn(ICON_BTN, "hover:bg-primary/25")}>
+                        <CalendarClock className="size-3.5" strokeWidth={1.75} aria-hidden />
                       </button>
                     )}
                     {onRecord && !isCovered && (
-                      <button type="button" title={theirs ? `Record money ${first} paid you for this item` : `Record money you paid ${first} for this item`} onClick={() => onRecord(o.key)} className={cn(BTN, "border-[#aabeb0] bg-[#edf4ee] text-[#244237] hover:bg-[#deebdf] dark:border-[#527460] dark:bg-[#253a2f] dark:text-[#e0eedf] dark:hover:bg-[#314a3c]")} aria-label={`${theirs ? "Record receipt" : "Record payment"} for ${o.title}`}>
-                        {theirs ? "Record receipt" : "Record payment"}
+                      <button type="button" title={theirs ? `Record receipt — money ${first} paid you for this item` : `Record payment — money you paid ${first} for this item`} onClick={() => onRecord(o.key)} className={cn(ICON_BTN, "hover:bg-primary/25")} aria-label={`${theirs ? "Record receipt" : "Record payment"} for ${o.title}`}>
+                        <HandCoins className="size-3.5" strokeWidth={1.75} aria-hidden />
                       </button>
                     )}
                   </span>
@@ -152,7 +152,7 @@ export function PersonOpenItems({
           })}
         </tbody>
         {covered > 0.005 && generalCreditOwed != null && (
-          <tfoot data-testid="open-items-general" className="border-t border-border bg-secondary/35 @max-[32rem]:table @max-[32rem]:w-full">
+          <tfoot data-testid="open-items-general" className="bg-secondary/35">
             <tr>
               <th scope="row" colSpan={3} className={cn(foot, "text-left font-medium text-foreground/65")}>Total open</th>
               <td className={cn(foot, "text-right font-semibold text-foreground")}>{money(theirTotal)}</td>
@@ -165,10 +165,10 @@ export function PersonOpenItems({
               <td className={cn(foot, "text-right font-semibold text-success")}>− {money(covered)}</td>
               <td />
             </tr>
-            <tr className="border-t border-border-strong/60">
-              <th scope="row" colSpan={3} className={cn(foot, "text-left font-semibold text-foreground")}>Still to collect</th>
-              <td className={cn(foot, "text-right font-heading text-[14px] font-bold", generalCreditOwed < 0.005 ? "text-success" : "text-settle-receivable-text")}>{money(generalCreditOwed)}</td>
-              <td />
+            <tr>
+              <th scope="row" colSpan={3} className={cn(foot, "border-t border-border-strong/60 text-left font-semibold text-foreground")}>Still to collect</th>
+              <td className={cn(foot, "border-t border-border-strong/60 text-right font-heading text-[14px] font-bold", generalCreditOwed < 0.005 ? "text-success" : "text-settle-receivable-text")}>{money(generalCreditOwed)}</td>
+              <td className="border-t border-border-strong/60" />
             </tr>
           </tfoot>
         )}

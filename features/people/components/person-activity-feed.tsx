@@ -2,6 +2,7 @@
 
 import { CheckCircle2, History, Maximize2, Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
+import { isPaidDirectlyEntry } from "@/lib/engines/historical-reimbursement";
 import { EntryEditForm, isEditable, type EntryEditValues, type EntrySettleValues } from "@/features/people/components/workspace/ledger-ui";
 import { transactionHref } from "@/features/people/lib/people-return-link";
 import { WS_SECONDARY } from "@/features/people/components/workspace/person-workspace-ui";
@@ -10,6 +11,7 @@ import { usePostponedLookup } from "@/features/people/components/linked-emis-pan
 import type { PaymentLine, StatementBalance } from "@/features/people/lib/statement-balance";
 import type { SettlementLookupsWithAccounts } from "@/features/people/hooks/use-settlement-lookups";
 import { filterLedgerRows, type LedgerRow, type PaymentRecord } from "@/features/people/lib/person-ledger-rows";
+import { isSplit, type Expense } from "@/lib/models/expense";
 import { MoneyInOutList, type MoneyItem } from "@/features/people/components/money-in-out-list";
 import { isGenericRowTitle, settlementKind } from "@/features/people/lib/settlement-presentation";
 import type { PersonCycleStatement } from "@/lib/engines/person-cycle-statement";
@@ -202,7 +204,13 @@ export function PersonActivityFeed({
   balances,
   outstanding,
   postponed,
+  preview,
+  expenses = [],
 }: {
+  /** Expenses, only to show who shared a paid-for item (display only). */
+  expenses?: readonly Expense[];
+  /** Overview mode: the same table, newest `limit` rows only, with a "View all" that opens the Transactions tab. */
+  preview?: { limit: number; onViewAll: () => void };
   personId: string;
   personName: string;
   /** The selected scope's rows, newest first. */
@@ -258,6 +266,7 @@ export function PersonActivityFeed({
   const shownKeys = new Set([...sourceRows, ...carriedRows].map((r) => r.key));
   const appliedPayments = paymentLines.filter((line) => !shownKeys.has(line.key));
   const receivedEarlier = (entryId: string | null) => entryId != null && lookups.entriesById.get(entryId)?.recordedEarlier === true;
+  const paidDirectly = (entryId: string | null) => entryId != null && isPaidDirectlyEntry(lookups.entriesById.get(entryId));
 
   // Overdue respects a postponement: an amount moved to a later date is not overdue (and never paid) until that date passes.
   const isOverdue = (r: LedgerRow) =>
@@ -312,6 +321,12 @@ export function PersonActivityFeed({
     ...(handlers.editablePayment?.(p) && handlers.onEditPayment ? [{ id: "edit" as const, onClick: () => handlers.onEditPayment!(p) }] : []),
     ...(p.undo && handlers.onUndoPayment ? [{ id: "revert" as const, onClick: () => handlers.onUndoPayment!(parent, p) }] : []),
   ];
+  const splitOfEntry = (entryId: string | null): MoneyItem["split"] => {
+    const ref = entryId ? lookups.entriesById.get(entryId)?.transactionRef : null;
+    const expense = ref ? expenses.find((e) => e.transactionId === ref && e.deletedAt == null) : null;
+    if (!expense || !isSplit(expense)) return undefined;
+    return { total: expense.totalAmount, participants: expense.participants.map((p) => ({ name: p.isMe ? "You" : p.name, share: p.share, isMe: p.isMe, isThisPerson: p.personId === personId })) };
+  };
   const hrefOfEntry = (entryId: string | null): string | null => {
     const ref = entryId ? lookups.entriesById.get(entryId)?.transactionRef : null;
     return ref ? transactionHref(ref, lookups.sourceReturn) : null;
@@ -347,8 +362,10 @@ export function PersonActivityFeed({
         description: noteOfEntry(row.entryId) ?? ((manual || !cash) && !row.recordedLoanCash && !isGenericRowTitle(row.title) ? row.title : null),
         account: row.recordedLoanCash?.account ?? lookups.accountForEntry(row.entryId) ?? null,
         earlier: receivedEarlier(row.entryId),
+        direct: paidDirectly(row.entryId),
         caption: captionOf(row),
         openHref: hrefOfEntry(row.entryId),
+        split: cash ? undefined : splitOfEntry(row.entryId),
         actions,
         extra: editing && handlers.onEditSubmit ? (
           <div className="border-t border-border-subtle px-3 py-2"><EntryEditForm row={row} onCancel={() => handlers.onEditCancel?.()} onSubmit={(values) => handlers.onEditSubmit!(row, values)} /></div>
@@ -366,6 +383,7 @@ export function PersonActivityFeed({
       description: noteOfEntry(l.payment.entryId),
       account: lookups.accountForEntry(l.payment.entryId) ?? null,
       earlier: receivedEarlier(l.payment.entryId),
+      direct: paidDirectly(l.payment.entryId),
       caption: null,
       openHref: hrefOfEntry(l.payment.entryId),
       actions: paymentActions(l.parent, l.payment) ?? [],
@@ -395,6 +413,30 @@ export function PersonActivityFeed({
     ) : (
       <p className="px-3 py-4 text-sm font-medium text-foreground/75">No transactions match this search or filter.</p>
     );
+
+  if (preview) {
+    return (
+      <section data-testid="person-overview-transactions" aria-label="Recent transactions" className="flex min-w-0 flex-col gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1">
+          <div className="flex flex-wrap items-baseline gap-x-2.5">
+            <h2 className="font-heading text-base font-semibold">Recent transactions</h2>
+            <p className="text-xs text-muted-foreground tabular-nums">{scope === "all" ? "All dates" : cycleRange}</p>
+          </div>
+          {moneyItems.length > preview.limit && (
+            <button type="button" onClick={preview.onViewAll} className="inline-flex min-h-7 items-center gap-1 rounded-[5px] px-1.5 text-xs font-semibold text-primary-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">
+              View all transactions ({moneyItems.length})
+            </button>
+          )}
+        </div>
+        <MoneyInOutList
+          items={moneyItems}
+          isLoading={isLoading}
+          maxRows={preview.limit}
+          empty={<p className="px-3 py-4 text-sm font-medium text-foreground/75">{`No money has moved with ${firstName} in this ${scope === "cycle" ? "cycle" : "history"} yet.`}</p>}
+        />
+      </section>
+    );
+  }
 
   return (
     <section className="flex min-w-0 flex-col">
@@ -442,12 +484,12 @@ export function PersonActivityFeed({
         <div data-testid="money-summary" className="mb-2 flex flex-wrap items-baseline gap-x-5 gap-y-1 rounded-[10px] border border-border bg-card px-3 py-2 text-xs shadow-e1">
           <span className="text-muted-foreground">Received <span className="font-heading text-sm font-bold text-success tabular-nums">{money(moneyIn)}</span></span>
           <span className="text-muted-foreground">Paid <span className="font-heading text-sm font-bold text-expense tabular-nums">{money(moneyOut)}</span></span>
-          <span className="ml-auto text-muted-foreground tabular-nums">
-            {(outstanding?.toReceive ?? 0) >= 0.005 && <>{firstName} owes you <span className="font-semibold text-settle-receivable-text">{money(outstanding!.toReceive)}</span></>}
-            {(outstanding?.toReceive ?? 0) >= 0.005 && (outstanding?.toGive ?? 0) >= 0.005 && " · "}
-            {(outstanding?.toGive ?? 0) >= 0.005 && <>You owe {firstName} <span className="font-semibold text-settle-payable-text">{money(outstanding!.toGive)}</span></>}
-            {(outstanding?.toReceive ?? 0) < 0.005 && (outstanding?.toGive ?? 0) < 0.005 && "All settled"}
-          </span>
+          {/* Remaining = the person's actual current balance (same figures as the header), each direction on its own — not Received − Paid. */}
+          {(outstanding?.toReceive ?? 0) >= 0.005 && <span className="text-muted-foreground" data-testid="money-remaining">To receive <span className="font-heading text-sm font-bold text-settle-receivable-text tabular-nums">{money(outstanding!.toReceive)}</span></span>}
+          {(outstanding?.toGive ?? 0) >= 0.005 && <span className="text-muted-foreground" data-testid="money-remaining-pay">To pay <span className="font-heading text-sm font-bold text-settle-payable-text tabular-nums">{money(outstanding!.toGive)}</span></span>}
+          {(outstanding?.toReceive ?? 0) < 0.005 && (outstanding?.toGive ?? 0) < 0.005 && (
+            <span className="text-muted-foreground" data-testid="money-remaining">Remaining <span className="font-heading text-sm font-bold text-foreground tabular-nums">{money(0)}</span> <span className="font-semibold text-success">— Settled</span></span>
+          )}
         </div>
       )}
       {/* The "Settled cycle" banner is retired from the main view — the totals strip above already reads Remaining ₹0. */}

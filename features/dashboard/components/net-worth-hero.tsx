@@ -29,6 +29,8 @@ export interface NetWorthHeroProps {
     assignedReceivable?: number;
     /** Person EMI shares already due and unpaid — the "due now" part of what people owe you for EMIs. */
     emiDueReceivable?: number;
+    /** Everything people owe you now, gross per person (direct ledger — splits, money lent — plus due EMI shares). */
+    peopleReceivable?: number;
     /** Part of `debt` that belongs to other people (their share of a card/loan/EMI in your name). */
     assignedDebt?: number;
     /** `debt` minus `assignedDebt` — what you personally have to repay. */
@@ -158,9 +160,9 @@ function NetWorthFunnel({ netWorth, hide, className }: { netWorth: NetWorthHeroP
     return () => cancelAnimationFrame(id);
   }, []);
 
-  const { assets, debt, upcoming, dueNow, emiTotal, assigned, mine } = splits(netWorth);
+  const { assets, debt, upcoming, dueNow, direct, othersTotal, assigned, mine } = splits(netWorth);
   const net = netWorth.amount;
-  const myAssets = Math.max(assets - emiTotal, 0);
+  const myAssets = Math.max(assets - othersTotal, 0);
   const keptPct = assets > 0 ? Math.round((Math.max(Math.min(net, assets), 0) / assets) * 100) : 0;
   const money = (v: number) => (hide ? "••••" : formatCurrency(Math.abs(v)));
   const neg = (v: number) => (v > 0 ? `−${money(v)}` : money(0));
@@ -171,10 +173,19 @@ function NetWorthFunnel({ netWorth, hide, className }: { netWorth: NetWorthHeroP
     {
       key: "a-others",
       label: "From others",
-      value: money(emiTotal),
-      amount: emiTotal,
+      value: money(othersTotal),
+      amount: othersTotal,
       ink: "var(--settle-receivable-edge)",
-      tip: dueNow > 0 && upcoming > 0 ? <>EMI shares people owe you | Due now <b>{formatCurrency(dueNow)}</b> | Coming up <b>{formatCurrency(upcoming)}</b></> : <>EMI shares people owe you | <b>{share(emiTotal, assets)}%</b> of assets</>,
+      tip:
+        direct > 0 || (dueNow > 0 && upcoming > 0) ? (
+          <>
+            Money people owe you | {direct > 0 && <>Shared & lent <b>{formatCurrency(direct)}</b> | </>}
+            {dueNow > 0 && <>EMIs due now <b>{formatCurrency(dueNow)}</b> | </>}
+            {upcoming > 0 && <>EMIs coming up <b>{formatCurrency(upcoming)}</b></>}
+          </>
+        ) : (
+          <>EMI shares people owe you | <b>{share(othersTotal, assets)}%</b> of assets</>
+        ),
     },
   ];
   const debtBars: Bar[] = [
@@ -450,9 +461,11 @@ function splits(netWorth: NetWorthHeroProps["netWorth"]) {
   const debt = netWorth.debt ?? 0;
   const upcoming = Math.min(netWorth.assignedReceivable ?? 0, assets);
   const dueNow = Math.min(netWorth.emiDueReceivable ?? 0, Math.max(assets - upcoming, 0));
+  // Owed now but not through an EMI (split expenses, money lent) — `peopleReceivable` already contains the due EMI part.
+  const direct = Math.min(Math.max((netWorth.peopleReceivable ?? 0) - (netWorth.emiDueReceivable ?? 0), 0), Math.max(assets - upcoming - dueNow, 0));
   const assigned = Math.min(netWorth.assignedDebt ?? 0, debt);
   const mine = netWorth.myDebt ?? Math.max(debt - assigned, 0);
-  return { assets, debt, upcoming, dueNow, assigned, mine, emiTotal: upcoming + dueNow };
+  return { assets, debt, upcoming, dueNow, direct, assigned, mine, emiTotal: upcoming + dueNow, othersTotal: upcoming + dueNow + direct };
 }
 
 /** Explanatory lines under the bars: the hatch meaning, the assigned-debt sentence and advances held. */

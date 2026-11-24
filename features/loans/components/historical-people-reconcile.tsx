@@ -73,6 +73,12 @@ export function useHistoricalReconcile(params: {
    * due date. Never later than today — money already received can't be dated in the future.
    */
   defaultDateOf?: (line: ReimbursementLine) => string | null;
+  /**
+   * "Paid directly": the people paid the lender themselves. Every open share starts as covered in full with no account change
+   * (the answer the choice itself implies) instead of "Leave pending" — the user can still cover part or leave one pending.
+   * An answer the user has given always wins over this starting point.
+   */
+  paidDirectly?: boolean;
 }): HistoricalReconcileState {
   const { lines, isLoading, record } = useHistoricalReimbursement(params.target);
   const [batchId] = useState(generateId);
@@ -97,8 +103,15 @@ export function useHistoricalReconcile(params: {
     return d != null && d !== "" && d <= todayText() ? d : "";
   };
   const lineByKey = new Map(lines.map((l) => [reimbursementLineKey(l), l]));
+  const blank: ReimbursementDraft = { choice: "none", amount: "" };
+  const paidDirectly = params.paidDirectly === true;
+  // The starting answer of a line nobody has touched: covered in full, no account change (direct payment only).
+  const startingDraft = (l: ReimbursementLine | undefined): ReimbursementDraft =>
+    paidDirectly && l != null && l.remaining > PAYMENT_EPSILON ? { choice: "full", amount: "", treatment: "included" } : blank;
+  const merged: Record<string, ReimbursementDraft> = { ...draft };
+  if (paidDirectly) for (const l of lines) { const k = reimbursementLineKey(l); if (merged[k] === undefined) merged[k] = startingDraft(l); }
   const shown: Record<string, ReimbursementDraft> = Object.fromEntries(
-    Object.entries(draft).map(([k, d]) => {
+    Object.entries(merged).map(([k, d]) => {
       const l = lineByKey.get(k);
       return [k, l != null && received(d) && d.date === undefined ? { ...d, date: defaultDateFor(l) } : d];
     }),
@@ -107,27 +120,27 @@ export function useHistoricalReconcile(params: {
   const total = plan.ok ? plan.summary.total : 0;
   const blocker = !plan.ok ? "Check the people's rows." : total > PAYMENT_EPSILON && accountId === "" ? "Choose the account it was received into." : null;
   const failed = useMemo(() => ranItems.filter((i) => results[i.key]?.status === "failed"), [ranItems, results]);
-  const blank: ReimbursementDraft = { choice: "none", amount: "" };
 
   return {
     lines,
     loading: isLoading,
     draft: shown,
-    setLine: (key, patch) => setDraft((prev) => ({ ...prev, [key]: { ...blank, ...prev[key], ...patch } })),
+    setLine: (key, patch) => setDraft((prev) => ({ ...prev, [key]: { ...blank, ...(prev[key] ?? startingDraft(lineByKey.get(key))), ...patch } })),
     setPerson: (personId, choice) =>
       setDraft((prev) => {
         const next = { ...prev };
-        for (const l of lines) if (l.personId === personId && l.remaining > PAYMENT_EPSILON) next[reimbursementLineKey(l)] = { ...blank, ...prev[reimbursementLineKey(l)], choice, amount: "" };
+        for (const l of lines) if (l.personId === personId && l.remaining > PAYMENT_EPSILON) next[reimbursementLineKey(l)] = { ...blank, ...(prev[reimbursementLineKey(l)] ?? startingDraft(l)), choice, amount: "" };
         return next;
       }),
     setAllTreatments: (treatment) =>
-      setDraft((prev) => Object.fromEntries(Object.entries(prev).map(([k, d]) => [k, received(d) ? { ...d, treatment } : d]))),
+      setDraft((prev) => Object.fromEntries(Object.entries({ ...Object.fromEntries(lines.map((l) => [reimbursementLineKey(l), startingDraft(l)])), ...prev }).map(([k, d]) => [k, received(d) ? { ...d, treatment } : d]))),
     setPersonReceived: (personId, patch) =>
       setDraft((prev) => {
         const next = { ...prev };
         for (const l of lines) {
           const key = reimbursementLineKey(l);
-          if (l.personId === personId && received(prev[key])) next[key] = { ...prev[key]!, ...patch };
+          const base = prev[key] ?? startingDraft(l);
+          if (l.personId === personId && received(base)) next[key] = { ...base, ...patch };
         }
         return next;
       }),
@@ -143,7 +156,7 @@ export function useHistoricalReconcile(params: {
     reminderStatus,
     run: async (items) => {
       setRanItems((prev) => [...prev.filter((p) => !items.some((i) => i.key === p.key)), ...items]);
-      const r = await record(items, accountId, results);
+      const r = await record(items, accountId, results, { paidDirectly });
       setResults(r);
       // The reminder follows the receipts, and only once all of them are saved — it never touches the payments.
       if (remindOn !== "" && reminderStatus !== "saved" && items.every((i) => r[i.key]?.status !== "failed")) {

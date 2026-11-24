@@ -58,6 +58,7 @@ import {
   type SettlementTone,
 } from "@/features/people/lib/settlement-presentation";
 import { formatStatementDate, type EmiRowStatus } from "@/lib/engines/person-cycle-statement";
+import { isPaidDirectlyEntry } from "@/lib/engines/historical-reimbursement";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { splitAllocation } from "@/lib/split/split-allocation";
 import { cn } from "@/lib/utils";
@@ -175,6 +176,7 @@ export function tableStatus(row: LedgerRow, kind: SettlementKind, personName: st
  */
 export function receivedEarlierStatus(row: Pick<LedgerRow, "entryId">, kind: SettlementKind, lookups: SettlementLookups): SettlementRowView["status"] | null {
   if (kind !== "paymentReceived" || !row.entryId || lookups.entriesById.get(row.entryId)?.recordedEarlier !== true) return null;
+  if (isPaidDirectlyEntry(lookups.entriesById.get(row.entryId))) return { label: "Paid directly to lender", detail: "Settled by the person paying the lender — no money came into or left your accounts", tone: "received" };
   return { label: "Received earlier", detail: "Already in your account balance — no account change here", tone: "received" };
 }
 
@@ -1674,7 +1676,8 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
     const entry = p.entryId ? lookups.entriesById.get(p.entryId) : null;
     const date = entry?.receivedDateKnown === false ? "Date not known" : formatStatementDate(p.date);
     const account = cash ? accountForEntry(p.entryId) : null;
-    const paymentSource = entry?.recordedEarlier ? "Recorded earlier · no account change" : account ? `${inbound ? "To" : "From"} ${account}` : l.parent.category === "loan" ? "Recorded in Loan & EMI" : null;
+    const direct = isPaidDirectlyEntry(entry);
+    const paymentSource = direct ? "Paid directly to lender · no account change" : entry?.recordedEarlier ? "Recorded earlier · no account change" : account ? `${inbound ? "To" : "From"} ${account}` : l.parent.category === "loan" ? "Recorded in Loan & EMI" : null;
     return (
       <tr key={`pay:${l.key}`} data-payment-line={l.key} className="transition-colors duration-150 hover:bg-secondary/45">
         <td className={cn(cell, "w-[5rem]")}>
@@ -1686,7 +1689,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
               <Icon className="size-3.5" strokeWidth={2.25} />
             </span>
             <div className={cn("min-w-0", !compactDesktop && "flex items-baseline gap-2")}>
-              <p className="truncate text-[13.5px] leading-tight font-semibold text-foreground">{compactDesktop && entry?.recordedEarlier ? "Earlier repayment" : payTitle(p)}</p>
+              <p className="truncate text-[13.5px] leading-tight font-semibold text-foreground">{direct ? "Paid directly to lender" : compactDesktop && entry?.recordedEarlier ? "Earlier repayment" : payTitle(p)}</p>
               <p className="min-w-0 truncate text-[11.5px] leading-tight text-muted-foreground" title={`Applied to ${l.parent.title}${paymentSource ? ` · ${paymentSource}` : ""}`}>
                 Applied to {l.parent.title}{compactDesktop ? (paymentSource ? ` · ${paymentSource}` : "") : ` · ${payLeft(l)}`}
               </p>
@@ -1697,7 +1700,7 @@ export function SettlementTable({ personId, personName, rows, carriedRows = [], 
         <td className={cn(cell, NUM, "w-[6.5rem]")}>{cash ? <span className="text-foreground/25">—</span> : <span className="text-[13.5px] font-semibold text-settle-advance-text" title="Advance applied — no cash moved">{money(p.amount)}</span>}</td>
         <td className={cn(cell, compactDesktop ? "w-[9.5rem]" : "w-[8rem]")}>
           <span className="inline-flex h-5 items-center gap-1 rounded-full bg-success/10 px-2 text-[11px] leading-none font-semibold whitespace-nowrap text-success">
-            {cash ? (compactDesktop && entry?.recordedEarlier ? "Recorded earlier" : inbound ? "Received" : "Paid") : "Advance used"}
+            {cash ? (direct ? "Settled directly" : compactDesktop && entry?.recordedEarlier ? "Recorded earlier" : inbound ? "Received" : "Paid") : "Advance used"}
           </span>
           {compactDesktop && <span className={cn("mt-0.5 block text-[11px] font-medium tabular-nums", p.remainingAfter < 0.005 ? "text-success" : "text-muted-foreground")}>{payLeft(l)}</span>}
         </td>

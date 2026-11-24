@@ -111,7 +111,7 @@ export function rowMatchesTypeFilter(row: LedgerRow, kind: SettlementKind, filte
  * the ledger entry behind a row (its `sourceKind`), and the Expense behind a split/assigned share.
  */
 export interface SettlementLookups {
-  entriesById: ReadonlyMap<string, Pick<LedgerEntry, "sourceKind" | "transactionRef"> & { recordedEarlier?: boolean; receivedDateKnown?: boolean }>;
+  entriesById: ReadonlyMap<string, Pick<LedgerEntry, "sourceKind" | "transactionRef"> & { recordedEarlier?: boolean; receivedDateKnown?: boolean; note?: string | null }>;
   expenseByTransactionId: ReadonlyMap<string, Expense>;
   /**
    * Whether a transaction id is live, deleted (in trash or gone for a transaction-owned entry), or not yet

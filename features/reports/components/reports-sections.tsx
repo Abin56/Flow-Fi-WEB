@@ -432,16 +432,16 @@ const LIABILITY_COLORS = ["var(--chart-2)", "var(--purple)", "var(--chart-4)", "
 
 export function DebtsTab({ detail, position, accountInfo }: { detail: PeriodDetail; position: CurrentPosition; accountInfo: Map<string, ReportAccountInfo> }) {
   const paid = [
-    { label: "EMI installments", value: detail.debt.emiPaid, color: "var(--chart-4)" },
-    { label: "Loan repayments", value: detail.debt.loanRepaid, color: "var(--purple)" },
+    { label: "EMI installments", value: detail.debt.emiPaidDirect, color: "var(--chart-4)" },
+    { label: "Loan repayments", value: Math.max(0, detail.debt.loanRepaid - detail.debt.loanRepaidOnCard), color: "var(--purple)" },
     { label: "Card bills", value: detail.debt.cardBillPayments, color: "var(--chart-2)" },
   ];
-  const paidTotal = paid.reduce((s, p) => s + p.value, 0);
+  const paidTotal = detail.debt.paidTowardsDebts;
   const util = position.cardLimit > 0 ? (position.cardUsedCredit / position.cardLimit) * 100 : null;
   return (
     <div className="grid gap-5 @4xl:grid-cols-3" data-testid="rep-debts">
       <div className="min-w-0">
-        <SubHead title="Paid this period" sub={`${formatCurrency(paidTotal)} towards debts`} hint="Payments marked “already paid earlier” are left out because no money moved in FlowFi. Card bill payments are cash leaving your accounts; card purchases are in Total outflow." />
+        <SubHead title="Paid this period" sub={`${formatCurrency(paidTotal)} towards debts`} hint="Payments marked “already paid earlier” are left out because no money moved in FlowFi. Card bill payments are cash leaving your accounts; card purchases are in Total outflow. EMI and loan installments charged to a card are settled by its bill, so they count under Card bills only, never twice." />
         <div className="flex flex-col gap-2.5">
           {paid.map((p) => (
             <div key={p.label}>
@@ -456,6 +456,11 @@ export function DebtsTab({ detail, position, accountInfo }: { detail: PeriodDeta
             </div>
           ))}
           {detail.debt.loanCollected > 0 && <FigureRow label="Loan repayments collected" tone={MONEY.in} value={formatCurrency(detail.debt.loanCollected)} />}
+          {detail.debt.loanCollectedLegacy > 0 && (
+            <p className="text-[11px] leading-snug text-muted-foreground" data-testid="rep-legacy-collected">
+              {formatCurrency(detail.debt.loanCollectedLegacy)} of this is an older record with no account transaction: it counts in cash-basis Money In only, never in Income or any account balance.
+            </p>
+          )}
         </div>
       </div>
 

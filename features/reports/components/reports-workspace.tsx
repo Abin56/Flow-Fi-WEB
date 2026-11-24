@@ -8,8 +8,10 @@ import { downloadCsv } from "@/features/transaction-studio/lib/export-csv";
 import { useFinancialReportData, useSyncedReportPeriod } from "@/features/reports/hooks/use-financial-report-data";
 import { periodReportCsv } from "@/features/reports/lib/report-csv";
 import { selectionForTrendPoint, type ReportPeriod } from "@/lib/engines/report-period";
+import { incomeCompositionNote } from "@/features/reports/lib/income-note";
 import { formatCurrencyCompact } from "@/lib/format";
 import { PeriodBar } from "./period-bar";
+import { focusedPointIndex } from "@/features/analytics/lib/focus-point";
 import { changePercent, MONEY, percentLabel, signedCurrency } from "./report-ui";
 import { CashFlowChart, KpiStrip, MoneyFlowPanel, type FlowView, type KpiKey, type KpiSpec } from "./reports-overview";
 import { AccountsTab, DebtsTab, DetailsCard, NetWorthTab, PeopleTab, SpendingTab, type DetailTab } from "./reports-sections";
@@ -71,7 +73,7 @@ export function ReportsWorkspace() {
 
   const requested = useMemo(() => trendOf(period, Number(windowSize)), [trendOf, period, windowSize]);
   const trend = useMemo(() => withRecords(requested).map((p) => ({ period: p, figures: figuresFor(p) })), [requested, figuresFor, withRecords]);
-  const focusIndex = Math.max(0, trend.findIndex((t) => t.period.start.getTime() === period.start.getTime()));
+  const focusIndex = focusedPointIndex(trend, period);
   const netWorthPoints = useMemo(() => {
     const periods = withRecords(trendOf(period, NET_WORTH_COUNT));
     const values = netWorthAtEnds(periods);
@@ -105,7 +107,7 @@ export function ReportsWorkspace() {
     return {
       spending: top ? `Top: ${categoryName(top[0])} ${formatCurrencyCompact(top[1].amount)}` : "No spending",
       accounts: `${signedCurrency(cashChange)} in bank & cash`,
-      debts: `${formatCurrencyCompact(detail.debt.emiPaid + detail.debt.loanRepaid + detail.debt.cardBillPayments)} paid · ${formatCurrencyCompact(position.totalLiabilities)} owed`,
+      debts: `${formatCurrencyCompact(detail.debt.paidTowardsDebts)} paid · ${formatCurrencyCompact(position.totalLiabilities)} owed`,
       people: `${formatCurrencyCompact(position.peopleReceivable)} owed to me · ${formatCurrencyCompact(position.peoplePayable)} I owe`,
       networth: `${signedCurrency(nwLast - nwFirst)} over ${netWorthPoints.length} ${unit}`,
     };
@@ -136,8 +138,8 @@ export function ReportsWorkspace() {
       value: detail.income,
       delta: delta(detail.income, previous?.income),
       spark: spark((f) => f.income),
-      hint: "Money earned: salary and other income. Transfers, loan money received, card refunds and People settlements are not counted.",
-      note: "Earned",
+      hint: "Month Cycle income: salary and other income, plus repayments you collect on money you lent. Money you borrow, transfers, card refunds and People settlements are not counted.",
+      note: incomeCompositionNote(detail, formatCurrencyCompact) ?? "Month Cycle",
     },
     {
       key: "outflow",

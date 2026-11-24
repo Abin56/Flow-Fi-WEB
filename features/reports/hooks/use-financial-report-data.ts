@@ -36,6 +36,7 @@ import { accountBalancesAtCutoffs, debtPrincipalEvents, netWorthAtCutoffs, perio
 import { personEmiObligations } from "@/lib/engines/person-emi-obligations";
 import { cycleContaining } from "@/lib/engines/person-cycle-statement";
 import { usePersonPositions } from "@/features/people/hooks/use-people-data";
+import { loanCollectionPrincipalByTransaction } from "@/features/reports/lib/loan-collection-principal";
 import { buildPeriodReportSources, periodDetail, periodFigures, type PeriodDetail, type PeriodFigures, type PeriodReportSources } from "@/lib/engines/period-report";
 import { cycleSelectionForDay, previousReportPeriod, resolveReportPeriod, trendPeriods, type ReportPeriod, type ReportPeriodSelection } from "@/lib/engines/report-period";
 import { useGlobalCycle } from "@/features/month-cycle/hooks/use-global-cycle";
@@ -214,6 +215,19 @@ export function useFinancialReportData(filters: ReportFilters = {}) {
   }, [spendCategories]);
   const categoryName = useCallback((id: string) => categoryInfo.get(id)?.name ?? "Uncategorized", [categoryInfo]);
 
+  // Principal part of each repayment I COLLECTED on money I lent, by its transaction id — `debtPrincipalEvents` (the balance
+  // sheet's own principal rule) replayed up to each payment, so a collection that includes interest keeps that interest
+  // as earned income. Never a second formula: each payment's principal = replay(up to it) − replay(before it).
+  const loanCollectionPrincipal = useMemo(
+    () =>
+      loanCollectionPrincipalByTransaction({
+        givenScheduleIds: loanRows.filter((r) => r.direction === "given").map((r) => r.loan.scheduleId),
+        installments: loanRows.flatMap((r) => r.installments),
+        loanPayments,
+      }),
+    [loanRows, loanPayments],
+  );
+
   // Account filter (Analytics): only transaction-based rows are tied to an account. EMI / Loan schedule payments
   // and split collections are not, so they are left out while a filter is on (the UI says so).
   const accountKey = (filters.accountIds ?? []).slice().sort().join(",");
@@ -235,8 +249,9 @@ export function useFinancialReportData(filters: ReportFilters = {}) {
       loanPayments: only ? [] : loanPayments,
       installmentsByScheduleId: only ? {} : (installmentsByScheduleId as Record<string, Installment[]>),
       accounts: (accounts as Account[]).filter((a) => !only || only.has(a.id)).map((a) => ({ id: a.id, currentBalance: a.currentBalance })),
+      loanCollectionPrincipal,
     });
-  }, [accountKey, transactions, spendTransactions, mySpendCtx, creditCards, emis, expenses, emiPayments, loanPayments, installmentsByScheduleId, accounts]);
+  }, [loanCollectionPrincipal, accountKey, transactions, spendTransactions, mySpendCtx, creditCards, emis, expenses, emiPayments, loanPayments, installmentsByScheduleId, accounts]);
 
   const resolve = useCallback((selection: ReportPeriodSelection) => resolveReportPeriod(selection, startDay, now), [startDay, now]);
   const previousOf = useCallback((p: ReportPeriod) => previousReportPeriod(p, startDay, now), [startDay, now]);

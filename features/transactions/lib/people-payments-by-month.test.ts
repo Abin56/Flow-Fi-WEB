@@ -32,4 +32,22 @@ describe("peopleMonth", () => {
     const r = peopleMonth([t({ excludeFromCalculations: true }), t({ transferId: "x" }), t({ deletedAt: new Date() }), t({ isPersonLedgerMovement: false })], 2026, 9);
     expect(r).toEqual([]);
   });
+  it("keeps expenses paid for a person apart from cash: ABIN Nov = in 2000, out 0, paid-for 1500", () => {
+    const nov = (d: number) => new Date(2026, 10, d);
+    const r = peopleMonth(
+      [
+        t({ amount: 1200, dateTime: nov(24) }),
+        t({ amount: 800, dateTime: nov(1) }),
+        t({ type: "expense", amount: 1500, dateTime: nov(24), isPersonLedgerMovement: false, owesPersonToggle: true }),
+        t({ type: "expense", amount: 500, dateTime: new Date(2026, 9, 1), isPersonLedgerMovement: false, owesPersonToggle: true }),
+        t({ type: "expense", amount: 700, dateTime: nov(3), isPersonLedgerMovement: false, owesPersonToggle: true, loanId: "l1" }),
+        t({ type: "expense", amount: 300, dateTime: nov(3), isPersonLedgerMovement: false, owesPersonToggle: false }),
+      ],
+      2026,
+      10,
+    );
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatchObject({ received: 2000, paid: 0, paidFor: 1500 });
+    expect(r[0].movements.filter((m) => m.dir === "for")).toHaveLength(1);
+  });
 });

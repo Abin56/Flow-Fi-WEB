@@ -24,6 +24,18 @@ import type { PersonCycleStatement } from "@/lib/engines/person-cycle-statement"
 import { PAYMENT_EPSILON, round2 } from "@/lib/engines/person-payment";
 import type { Installment } from "@/lib/models/payment-schedule";
 
+/**
+ * Note prefix of a People settlement written when the person paid the LENDER directly (no money reached my account).
+ * It rides on a `recordedEarlier` entry; the History labels read it so the row says "Paid directly to lender" rather
+ * than "Received earlier". Display only — no balance logic depends on it.
+ */
+export const PAID_DIRECTLY_NOTE = "Paid directly to lender";
+
+/** Whether a People settlement entry records a person paying the lender directly. */
+export function isPaidDirectlyEntry(entry: { recordedEarlier?: boolean; note?: string | null } | null | undefined): boolean {
+  return entry?.recordedEarlier === true && typeof entry.note === "string" && entry.note.startsWith(PAID_DIRECTLY_NOTE);
+}
+
 export type ReceivedChoice = "full" | "some" | "none";
 /** Where the received money already is: in my FlowFi balance, or still to be added to an account. */
 export type BalanceTreatment = "included" | "addToAccount";

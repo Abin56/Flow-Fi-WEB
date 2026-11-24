@@ -12,6 +12,7 @@ import { usePeopleActions } from "@/features/people/hooks/use-people-data";
 import { usePeopleCycleStatements } from "@/features/people/hooks/use-person-cycle-statement";
 import type { OwnershipSource } from "@/lib/engines/debt-ownership";
 import {
+  PAID_DIRECTLY_NOTE,
   reimbursementLines,
   runReimbursements,
   type ReimbursementItem,
@@ -36,7 +37,12 @@ export function useHistoricalReimbursement(target: ReimbursementTarget | null): 
   lines: ReimbursementLine[];
   isLoading: boolean;
   /** Records the planned items into `accountId` (for an "included" item, for the record only). */
-  record: (items: readonly ReimbursementItem[], accountId: string, previous?: Record<string, ReimbursementResult>) => Promise<Record<string, ReimbursementResult>>;
+  record: (
+    items: readonly ReimbursementItem[],
+    accountId: string,
+    previous?: Record<string, ReimbursementResult>,
+    options?: { paidDirectly?: boolean },
+  ) => Promise<Record<string, ReimbursementResult>>;
 } {
   const { statementsByPersonId, isLoading } = usePeopleCycleStatements(ALL_TIME);
   const { data: people = [] } = usePeople();
@@ -55,7 +61,7 @@ export function useHistoricalReimbursement(target: ReimbursementTarget | null): 
   );
 
   const record = useCallback(
-    async (items: readonly ReimbursementItem[], accountId: string, previous: Record<string, ReimbursementResult> = {}) => {
+    async (items: readonly ReimbursementItem[], accountId: string, previous: Record<string, ReimbursementResult> = {}, options: { paidDirectly?: boolean } = {}) => {
       if (!actions) throw new Error("Sign in again to save.");
       // The person as this screen saw them; after each of our own writes, their balance as that write left it —
       // so the repository's stale-balance check still refuses a concurrent change made elsewhere.
@@ -70,7 +76,10 @@ export function useHistoricalReimbursement(target: ReimbursementTarget | null): 
             amount: item.amount,
             date: item.date,
             accountId,
-            note: [item.recordedEarlier ? "Received earlier — already in my account" : null, item.dateKnown ? null : "date not known"].filter(Boolean).join(" · "),
+            note: [
+              item.recordedEarlier ? (options.paidDirectly ? `${PAID_DIRECTLY_NOTE} — no money through my account` : "Received earlier — already in my account") : null,
+              item.dateKnown ? null : "date not known",
+            ].filter(Boolean).join(" · "),
             lines: [
               {
                 key: item.obligationKey,

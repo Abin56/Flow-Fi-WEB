@@ -7,6 +7,7 @@ import { ClayAvatar } from "@/components/clay/clay-avatar";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useAccounts } from "@/hooks/use-accounts";
+import { useExpenses } from "@/hooks/use-expenses";
 import { useCategories } from "@/hooks/use-categories";
 import { usePeople } from "@/hooks/use-people";
 import { usePersonCashLegIds, useTransactions } from "@/hooks/use-transactions";
@@ -257,6 +258,7 @@ export function PersonDetailWorkspace({
   const router = useRouter();
   const { items: upcomingEmi, isLoading: upcomingLoading } = usePersonUpcomingEmi(person.id);
   const { data: accounts = [] } = useAccounts();
+  const { data: expenses = [] } = useExpenses();
   const { data: categories = [] } = useCategories();
   const { data: people = [] } = usePeople();
   const firstName = person.name.split(" ")[0];
@@ -991,6 +993,33 @@ export function PersonDetailWorkspace({
           )}
         </div>
       </section>
+      {/* Same table as the Transactions tab (shared component + handlers) — just the newest rows. */}
+      <PersonActivityFeed
+        expenses={expenses}
+        preview={{ limit: 6, onViewAll: () => openTabFromOverview("transactions") }}
+        personId={person.id}
+        personName={person.name}
+        rows={scopeRows}
+        carriedRows={carriedRows}
+        lookups={lookups}
+        statement={statement}
+        historyStatement={allTimeStatement}
+        loanRows={allRows}
+        transactions={allTransactions}
+        cycleLabelOf={cycleLabelOf}
+        isLoading={rowsLoading}
+        scope={scope}
+        onScopeChange={setScope}
+        paymentLines={statementPaymentLines}
+        balances={statementBalances}
+        outstanding={{ toReceive: person.breakdown.toReceive, toGive: person.breakdown.toGive }}
+        postponed={postponedSummary}
+        cycleLabel={cycleLabel}
+        cycleRange={formatCycleLabel(cycle)}
+        onExpand={() => go({ kind: "ledger" })}
+        handlers={rowHandlers}
+        carriedForward={carriedForward}
+      />
       {rawPerson && <MoneyToUseSection person={rawPerson} entries={ledgerEntries} onRevertPayment={onRevertPayment} />}
       {onApplyAdvance &&
         heldSides.map((side) => (
@@ -1036,6 +1065,7 @@ export function PersonDetailWorkspace({
   const transactionsTab = (
     <section id="person-sec-transactions" aria-label="Transactions" className="flex min-w-0 flex-col">
       <PersonActivityFeed
+        expenses={expenses}
         personId={person.id}
         personName={person.name}
         rows={scopeRows}

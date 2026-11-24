@@ -24,6 +24,10 @@ export function periodReportCsv(params: {
   lines.push([]);
   lines.push(["Summary", "Amount", "Basis"]);
   lines.push(["Income", d.income, "Month Cycle"]);
+  lines.push(["  of which loan principal recovered (money I lent)", d.principalRecovered, "Month Cycle"]);
+  lines.push(["  of which loan interest collected", d.loanInterestEarned, "Month Cycle"]);
+  lines.push(["  of which loan collection not split (unknown)", d.loanCollectionUnclassified, "Month Cycle"]);
+  lines.push(["  earned income (income − principal − not split)", d.earnedIncome, "Month Cycle"]);
   lines.push(["Total outflow", d.outflow, "Month Cycle"]);
   for (const [k, v] of Object.entries(d.outflowBreakdown)) lines.push([`  ${k}`, v, "Month Cycle"]);
   lines.push(["Net (income − outflow)", d.net, "Month Cycle"]);
@@ -35,6 +39,9 @@ export function periodReportCsv(params: {
   lines.push(["EMI installments paid", d.debt.emiPaid, "Payments"]);
   lines.push(["Loan repayments made", d.debt.loanRepaid, "Payments"]);
   lines.push(["Loan repayments collected", d.debt.loanCollected, "Payments"]);
+  lines.push(["  of which older records with no account transaction", d.debt.loanCollectedLegacy, "Payments"]);
+  lines.push(["  of which settled by a card bill (EMI + loan)", d.debt.emiPaidOnCard + d.debt.loanRepaidOnCard, "Payments"]);
+  lines.push(["Paid towards debts (each rupee once)", d.debt.paidTowardsDebts, "Payments"]);
   lines.push(["Received from people", d.people.receivedFromPeople, "People"]);
   lines.push(["Paid to people", d.people.paidToPeople, "People"]);
   lines.push([]);
