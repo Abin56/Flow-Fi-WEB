@@ -125,7 +125,13 @@ export function BulkActionBar({
       );
     }
     if (failures.length > 0) {
-      toast.error(`Couldn't update ${describeBulkFailures(failures)}`, "The rest were applied. Retry the failed rows.");
+      // One shared reason is what the user needs (an ambiguous category can't be fixed by retrying); "the rest" only if any were.
+      const reasons = [...new Set(failures.map((f) => (f.error instanceof Error ? f.error.message : "")))];
+      const applied = succeededCount > 0 ? "The other rows were applied." : "";
+      toast.error(
+        `Couldn't update ${describeBulkFailures(failures)}`,
+        reasons.length === 1 && reasons[0] ? `${reasons[0]} ${applied}`.trim() : `${applied} Retry the failed rows.`.trim(),
+      );
     }
     if (opts.skippedForCommitted) {
       toast.warning(
