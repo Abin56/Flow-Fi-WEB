@@ -101,9 +101,9 @@ describe("Review & Import", () => {
     expect(count("summary-included")).toBe("5");
     expect(screen.getByTestId("rf-duplicate-count").textContent).toBe("1"); // CAFE ₹100.00 vs ₹100.70
     expect(count("summary-to-check")).toBe("1"); // ZOMATO's unclear amount
-    expect(count("summary-will-import")).toBe("2"); // SWIGGY and NEW SHOP are Ready by default
-    expect(within(rowEl("ZOMATO")).getByTestId("row-check-label").textContent).toBe("Check amount");
-    expect(within(rowEl("SWIGGY")).queryByTestId("row-check-label")).toBeNull();
+    expect(count("summary-will-import")).toBe("1"); // SWIGGY is Ready by default (the user's own Food history)
+    expect(within(rowEl("ZOMATO")).getByTestId("row-fix").textContent?.trim()).toBe("Check amount");
+    expect(within(rowEl("SWIGGY")).queryByTestId("row-fix")).toBeNull();
   });
 
   it("the unclear OCR amount is settled with ONE confirmation that names the value, beside the image strip", () => {
@@ -111,41 +111,44 @@ describe("Review & Import", () => {
     fireEvent.click(screen.getByTestId("next-check"));
     const editor = screen.getByTestId("row-editor");
     expect(within(editor).getByTestId("editor-evidence")).toBeTruthy();
-    expect(within(editor).getAllByRole("button", { name: /^Confirm/ })).toHaveLength(1);
-    expect(within(editor).getByTestId("confirm-row").textContent).toMatch(/Confirm ₹810\.00$/);
-    fireEvent.click(within(editor).getByTestId("confirm-row"));
+    // ONE confirmation, beside the amount it accepts — nothing else on the row asks again.
+    expect(within(editor).getAllByRole("button", { name: /looks right$|^Confirm/ })).toHaveLength(1);
+    expect(within(editor).getByTestId("confirm-amount").textContent).toMatch(/₹810\.00 looks right$/);
+    fireEvent.click(within(editor).getByTestId("confirm-amount"));
+    expect(within(screen.getByTestId("row-editor")).queryByTestId("confirm-amount")).toBeNull();
     expect(within(screen.getByTestId("row-editor")).queryByTestId("confirm-row")).toBeNull();
     expect(count("summary-to-check")).toBe("0");
   });
 
-  it("a row's warning is one compact indicator; clicking it opens that row's editor on the value to fix", () => {
+  it("a row's specific issue is its Action ('Check amount'); clicking it opens that row's editor on the value to check", () => {
     open();
-    const flag = within(rowEl("ZOMATO")).getByTestId("row-check-label");
-    expect(flag.tagName).toBe("BUTTON"); // an icon, not a text badge
+    const flag = within(rowEl("ZOMATO")).getByTestId("row-fix");
+    expect(flag.tagName).toBe("BUTTON");
     expect(flag.getAttribute("title")).toMatch(/Check amount/);
     expect(screen.queryByTestId("row-editor")).toBeNull();
     fireEvent.click(flag);
     expect(rowEl("ZOMATO").getAttribute("aria-selected")).toBe("true");
-    expect(within(screen.getByTestId("row-editor")).getByTestId("confirm-row")).toBeTruthy();
+    expect(within(screen.getByTestId("row-editor")).getByTestId("confirm-amount")).toBeTruthy();
   });
 
-  it("clean unmatched charges are Ready by default — history fills SWIGGY, 'Other' covers the rest; unclear, possible-duplicate and credit rows are not defaulted", () => {
+  it("clean unmatched charges are Ready by default only with a reliable category — history fills SWIGGY; NEW SHOP asks instead of 'Other'; unclear, possible-match and credit rows are not defaulted", () => {
     open();
     const status = (desc: string) => within(rowEl(desc)).getByTestId("decision-chip").dataset.status;
     expect(status("SWIGGY")).toBe("ready");
-    expect(status("NEW SHOP")).toBe("ready");
+    expect(status("NEW SHOP")).toBe("fix"); // no history, not a known merchant → "Choose a category", never a guess
+    expect(within(rowEl("NEW SHOP")).getByTestId("row-choose-category")).toBeTruthy();
     expect(status("ZOMATO")).toBe("fix"); // the unclear OCR amount still needs its one look
     expect(status("CAFE")).toBe("duplicate"); // ₹100.00 vs FlowFi ₹100.70
     expect(status("REFUND")).toBe("fix"); // a credit is never assumed to be a refund or income
     expect(screen.queryByTestId("bulk-import-open")).toBeNull(); // nothing left for a bulk step
-    expect(count("summary-will-import")).toBe("2");
+    expect(count("summary-will-import")).toBe("1");
   });
 
-  it("the final button says how many will be imported and waits for the rows that still need the user", () => {
+  it("the final button imports the Ready rows now and leaves the rows that still need the user for later", () => {
     open();
-    // Three rows still need the user (unclear amount, possible duplicate, a credit) — Import waits, and names the count.
-    expect((screen.getByTestId("open-approval") as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByTestId("open-approval").textContent).toBe("Import 2 transactions");
+    // Four rows still need the user (unclear amount, possible match, a credit, a category) — they don't hold SWIGGY back.
+    expect((screen.getByTestId("open-approval") as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByTestId("open-approval").textContent).toBe("Import 1 transaction");
   });
 
   it("excluding a row updates the totals at once; including it again restores them", () => {

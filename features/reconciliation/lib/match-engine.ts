@@ -21,6 +21,7 @@
 import { isComplete } from "@/features/smart-capture/lib/capture-review";
 import { amountBand, calendarDayIndex, DATE_WINDOW_DAYS, toPaise } from "./amounts-and-days";
 import { containsReference, merchantKey, merchantSimilarity, merchantStrength } from "./merchant-normalize";
+import { differentReferences, rowRrn } from "./statement-narration";
 import type { ExistingRecord, MatchCandidate, MatchState, MatchTier, ReconRow, RowDecision, RowMatch, RowNote } from "./types";
 
 export interface MatchContext {
@@ -206,6 +207,7 @@ export function matchRows(rows: ReconRow[], ctx: MatchContext): RowMatch[] {
     const rowDay = calendarDayIndex(row.date!);
     const rowPaise = toPaise(row.amount!);
     const rejected = new Set(ctx.decisions[row.id]?.rejectedRecordIds ?? []);
+    const rrn = rowRrn(row);
     const txnCandidates: MatchCandidate[] = [];
     const smsCandidates: MatchCandidate[] = [];
 
@@ -239,6 +241,14 @@ export function matchRows(rows: ReconRow[], ctx: MatchContext): RowMatch[] {
           continue;
         }
         if (rejected.has(record.id)) continue;
+        // Both sides state a 12-digit UPI/IMPS reference and they differ: positive evidence of two different
+        // transactions, however alike the amount, day and payee — said as a note, never offered as the same one.
+        if (differentReferences(rrn, record.description, record.notes)) {
+          if (candidate.amountBand === "exact" && Math.abs(candidate.dayGap) <= 1) {
+            notes.push({ kind: "different_reference", recordId: record.id, message: `A FlowFi transaction on ${formatDay(record)} has the same amount but a different UPI reference — treated as a separate transaction.` });
+          }
+          continue;
+        }
         (record.kind === "sms_pending" ? smsCandidates : txnCandidates).push(candidate);
         continue;
       }
@@ -276,10 +286,14 @@ export function matchRows(rows: ReconRow[], ctx: MatchContext): RowMatch[] {
   for (const group of groups.values()) {
     if (group.length < 2) continue;
     const existing = new Set(group.flatMap((r) => (candidatesByRow.get(r.id) ?? []).filter((c) => c.tier === "exact").map((c) => c.recordId)));
+    const rrnOf = new Map(group.map((r) => [r.id, rowRrn(r)]));
     for (const row of group) {
+      // Two rows each stating a different UPI reference are two transactions — not a possible repeat.
+      const twins = group.filter((o) => o.id !== row.id && !(rrnOf.get(o.id) && rrnOf.get(row.id) && rrnOf.get(o.id) !== rrnOf.get(row.id)));
+      if (twins.length === 0) continue;
       notesByRow.get(row.id)!.push({
         kind: "possible_repeat",
-        message: `${group.length} identical rows on this statement (same date, merchant and amount); FlowFi has ${existing.size} exact match${existing.size === 1 ? "" : "es"}. They may be genuine repeat purchases — decide each row separately.`,
+        message: `${twins.length + 1} identical rows on this statement (same date, merchant and amount); FlowFi has ${existing.size} exact match${existing.size === 1 ? "" : "es"}. They may be genuine repeat purchases — decide each row separately.`,
       });
     }
   }

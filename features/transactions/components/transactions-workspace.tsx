@@ -1083,6 +1083,7 @@ export function TransactionsWorkspace() {
                   const Icon = categoryIconFor(iconKey);
                   const t = row.transaction;
                   const isDuplicate = duplicateTransactionIds.has(t.id);
+                  const gridLoanTag = loanTagFor(t);
                   return (
                     <button
                       key={t.id}
@@ -1094,8 +1095,8 @@ export function TransactionsWorkspace() {
                       )}
                     >
                       <span className="flex min-w-0 items-center gap-2.5">
-                        <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", TONE_ICON_CLASS[categoryToneFor(iconKey)])}>
-                          <Icon className="size-4" />
+                        <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px]", gridLoanTag ? TONE_ICON_CLASS.purple : TONE_ICON_CLASS[categoryToneFor(iconKey)])}>
+                          {gridLoanTag ? <Landmark className="size-4" /> : <Icon className="size-4" />}
                         </span>
                         <span className="flex min-w-0 flex-1 flex-col">
                           <span className="truncate text-sm leading-snug font-semibold text-foreground">{displayDescription(t) || (t.transferId ? TRANSFER_SIDE_LABEL[transferSideOf(t)] : "(No description)")}</span>
@@ -2112,8 +2113,16 @@ function LedgerTable({
                   {/* The Type column already names the loan/EMI kind at xl+, so the corner tag only shows where Type is hidden. */}
                   {loanTag && <CornerTag label={loanTag.label} className="xl:hidden" />}
                   <div className="flex min-w-0 items-center gap-2">
-                    <span className={cn("hidden size-6 shrink-0 items-center justify-center rounded-[6px] sm:flex", TONE_ICON_CLASS[categoryToneFor(iconKey)])}>
-                      <Icon className="size-3.5" />
+                    <span
+                      className={cn(
+                        "hidden size-6 shrink-0 items-center justify-center rounded-[6px] sm:flex",
+                        // A Loan/EMI payment gets its own logo (Landmark) in the debt tone instead of the
+                        // generic category icon, so a loan payment reads as one at a glance — no need to
+                        // open the row to learn it isn't an ordinary expense.
+                        loanTag ? TONE_ICON_CLASS.purple : TONE_ICON_CLASS[categoryToneFor(iconKey)],
+                      )}
+                    >
+                      {loanTag ? <Landmark className="size-3.5" /> : <Icon className="size-3.5" />}
                     </span>
                     {/* One line: description, then category · person · badges — shrinks before the description does. */}
                     <div className="flex min-w-0 flex-1 items-center gap-2">

@@ -71,44 +71,48 @@ describe("quick-decide menu", () => {
   it("decides a row from the grid, shows what each choice does, and clears it again", () => {
     seed();
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
-    expect(within(rowEl("r3")).getByTestId("decision-chip").dataset.pending).toBe("true");
+    expect(within(rowEl("r2")).getByTestId("decision-chip").dataset.pending).toBe("true"); // needs a category
 
-    fireEvent.click(menuOf("r3"));
-    expect(screen.getByRole("menuitem", { name: /^Import as transaction/ })).toBeTruthy();
+    fireEvent.click(menuOf("r2"));
+    expect(screen.getByRole("menuitem", { name: /^Edit details/ })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: /^Skip/ })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: /Clear my decision/ })).toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: /Review later/ }));
-    expect(within(rowEl("r3")).getByTestId("decision-chip").textContent).toBe("Review later");
-    expect(rowEl("r3").getAttribute("aria-selected")).toBe("true");
+    expect(within(rowEl("r2")).getByTestId("decision-chip").textContent).toBe("Review later");
+    expect(rowEl("r2").getAttribute("aria-selected")).toBe("true");
 
-    fireEvent.click(menuOf("r3"));
+    fireEvent.click(menuOf("r2"));
     fireEvent.click(screen.getByRole("menuitem", { name: /Clear my decision/ }));
-    expect(within(rowEl("r3")).getByTestId("decision-chip").dataset.pending).toBe("true");
+    expect(within(rowEl("r2")).getByTestId("decision-chip").dataset.pending).toBe("true");
   });
 
-  it("keeps a rule-blocked choice visible but disabled, with the reason", () => {
+  it("a rule-blocked row says so on the row (Blocked, with the reason) — its details still open, so the date can be fixed", () => {
     seed();
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
-    fireEvent.click(menuOf("r5")); // dated inside a closed card bill
-    const add = screen.getByRole("menuitem", { name: /^Import as transaction/ }) as HTMLButtonElement;
-    expect(add.disabled).toBe(true);
-    expect(add.textContent).toMatch(/already closed/);
+    expect(within(rowEl("r5")).getByTestId("row-blocked").getAttribute("title")).toMatch(/already closed/); // dated inside a closed card bill
+    fireEvent.click(menuOf("r5"));
+    const edit = screen.getByRole("menuitem", { name: /^Edit details/ }) as HTMLButtonElement;
+    expect(edit.disabled).toBe(false);
+    fireEvent.click(edit);
+    expect((screen.getByTestId("import-as-transaction") as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("'Keep both' on a row with possible matches opens the explicit confirmation instead of deciding", () => {
+  it("a row with possible matches can't be imported from its details until the match is decided — the details point to the comparison", () => {
     seed();
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
     fireEvent.click(menuOf("r1"));
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Import as transaction/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Edit details/ }));
     expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true"); // opening the editor decides nothing
-    fireEvent.click(screen.getByTestId("import-as-transaction"));
-    expect(screen.getByTestId("import-confirm").textContent).toMatch(/these are separate transactions/);
+    expect((screen.getByTestId("import-as-transaction") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByTestId("editor-review-match"));
+    expect(screen.getByTestId("inline-review")).toBeTruthy();
   });
 
   it("excluded rows have no menu", () => {
     seed();
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
     expect(within(rowEl("r4")).queryByTestId("quick-decide")).toBeNull();
-    expect(within(rowEl("r4")).getByText("Not imported")).toBeTruthy();
+    expect(within(rowEl("r4")).getByTestId("decision-chip").textContent).toBe("Skipped");
   });
 });
 
@@ -122,19 +126,15 @@ describe("next undecided", () => {
 
     select("r2");
     fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "i" }); // skip
-    fireEvent.click(screen.getByTestId("next-open"));
-    expect(rowEl("r3").getAttribute("aria-selected")).toBe("true");
-    select("r3");
-    fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "i" }); // skip (this user has no "Other" category, so r3 isn't Ready by default)
-
-    // r5 is the last one; once it's decided the review is complete.
+    // r3 (CAFE ONE → the user's Food category by keyword, nothing similar in FlowFi) is Ready by default — skipped over.
+    expect(rowEl("r3").dataset.status).toBe("ready");
     fireEvent.click(screen.getByTestId("next-open"));
     expect(rowEl("r5").getAttribute("aria-selected")).toBe("true");
     select("r5");
     fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "i" }); // skip
     expect(screen.queryByTestId("next-open")).toBeNull();
-    // Everything is resolved; with nothing left to import there is simply nothing to press.
-    expect(screen.getByTestId("open-approval").textContent).toBe("Import 0 transactions");
+    // Everything is resolved; the one Ready row is what Import would add.
+    expect(screen.getByTestId("open-approval").textContent).toBe("Import 1 transaction");
     expect(screen.getByRole("progressbar", { name: "Review progress" }).getAttribute("aria-valuenow")).toBe("100");
   });
 

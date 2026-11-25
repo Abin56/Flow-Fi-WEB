@@ -28,7 +28,8 @@ import { analyzeSession, type ReconciliationData } from "./analyze";
 import { buildApprovalPlan, changedEvidence, stagedRecordsForImport, type ApprovalPlan } from "./approval-plan";
 import { decisionFor } from "./decisions";
 import type { DraftState } from "./reconciliation-draft";
-import { reconciliationSessionId } from "./session-key";
+import { importedTransactionIdsFor, reconciliationSessionId } from "./session-key";
+import { differentReferences, rowRrn } from "./statement-narration";
 
 /** What the user was looking at when they opened the approval — the baseline every commit-time check is made against. */
 export interface ApprovalSnapshot {
@@ -80,17 +81,41 @@ export function classifyDuplicateWarnings(staged: StagedRecord[], data: Reconcil
   const byId = new Map(data.transactions.map((t) => [t.id, t]));
   const unseen: StaleReason[] = [];
   const repeatRowIds = new Set<string>();
+  // The rows' own 12-digit UPI/IMPS references (from the bank narration, never the edited description): two stated,
+  // different references prove two different transactions — the same rule the matcher applies (statement-narration.ts).
+  const rrnOf = new Map(session.rows.map((r) => [r.id, rowRrn(r)]));
+  // A transaction that IS another row of this same capture, imported earlier (its own deterministic key — e.g. by that
+  // row's own Import button), is the same situation as two rows imported together: a possible repeat the user
+  // acknowledges, never an "unseen" transaction that would block this row for good.
+  const ownImportOf = new Map<string, string>();
+  if (session.accountId) {
+    for (const r of session.rows) for (const id of importedTransactionIdsFor(r.id, { fingerprint: session.fingerprint, accountId: session.accountId, priorSessionIds: session.priorSessionIds })) ownImportOf.set(id, r.id);
+  }
   for (const warning of warnings) {
     const row = staged.find((s) => s.id === warning.recordId);
     const seen = new Set([...(snapshot.candidateIds[warning.recordId] ?? []), ...decisionFor(session.decisions, warning.recordId).rejectedRecordIds]);
+    const rrn = rrnOf.get(warning.recordId) ?? null;
     for (const match of warning.result.matches) {
       if (match.transactionId.startsWith(PENDING_ROW_PREFIX)) {
+        const other = match.transactionId.slice(PENDING_ROW_PREFIX.length);
+        const otherRrn = rrnOf.get(other) ?? null;
+        if (rrn && otherRrn && rrn !== otherRrn) continue;
         repeatRowIds.add(warning.recordId);
-        repeatRowIds.add(match.transactionId.slice(PENDING_ROW_PREFIX.length));
+        repeatRowIds.add(other);
         continue;
       }
       const existing = byId.get(match.transactionId);
       if (!existing || existing.deletedAt != null) continue;
+      if (differentReferences(rrn, existing.description, existing.notes)) continue;
+      const sibling = ownImportOf.get(existing.id);
+      if (sibling && sibling !== warning.recordId) {
+        const otherRrn = rrnOf.get(sibling) ?? null;
+        if (!(rrn && otherRrn && rrn !== otherRrn)) {
+          repeatRowIds.add(warning.recordId);
+          repeatRowIds.add(sibling);
+        }
+        continue;
+      }
       const sameDirection = (existing.type === "income") === (row?.direction === "credit");
       if (existing.accountId !== accountId || !sameDirection) continue;
       if (!seen.has(existing.id)) {
@@ -103,9 +128,19 @@ export function classifyDuplicateWarnings(staged: StagedRecord[], data: Reconcil
 
 export type Revalidation = { ok: true; plan: ApprovalPlan; staged: StagedRecord[]; repeatRowIds: string[] } | { ok: false; reasons: StaleReason[] };
 
-/** Steps 2–3 above, pure over already-read records. Anything but `ok` means: write nothing, send the user back. */
-export function revalidateApproval(params: { session: DraftState; fresh: ReconciliationData; reviewed: ApprovalSnapshot; repeatsAcknowledged: boolean; now?: Date }): Revalidation {
+/**
+ * Steps 2–3 above, pure over already-read records. Anything but `ok` means: write nothing, send the user back.
+ *
+ * `scope` (2026-11-25): the rows this approval imports — one row (the row's own Import) or every row that was Ready
+ * (the global Import). Rows outside it are simply not part of this approval: they are not written, and an unresolved
+ * one no longer holds the others back. EVERY check still runs for every row in scope — the server re-read, the evidence
+ * diff, the rule gates, pre-flight, the duplicate re-check — and a row is only ever written through its own key, so a
+ * later approval of the remaining rows finds the earlier ones as already imported.
+ */
+export function revalidateApproval(params: { session: DraftState; fresh: ReconciliationData; reviewed: ApprovalSnapshot; repeatsAcknowledged: boolean; now?: Date; scope?: ReadonlySet<string> | null }): Revalidation {
   const { session, fresh, reviewed, repeatsAcknowledged } = params;
+  const scope = params.scope ?? null;
+  const inScope = (rowId: string) => scope == null || scope.has(rowId);
   const reasons: StaleReason[] = [];
   const accountId = session.accountId;
   if (!accountId) return { ok: false, reasons: [{ code: "no_account", message: "No statement account is chosen." }] };
@@ -119,18 +154,19 @@ export function revalidateApproval(params: { session: DraftState; fresh: Reconci
   const plan = buildApprovalPlan({ rows: session.rows, matches: analysis.matches, decisions: session.decisions, gate: analysis.gate });
 
   if (plan.counts.captured - plan.counts.excluded === 0) reasons.push({ code: "nothing_to_review", message: "No rows are included in this review." });
+  if (scope != null && scope.size === 0) reasons.push({ code: "nothing_to_review", message: "No rows were chosen to import." });
   const blocked = new Set<string>();
   for (const row of plan.rows) {
-    if (row.status !== "blocked") continue;
+    if (row.status !== "blocked" || !inScope(row.rowId)) continue;
     blocked.add(row.rowId);
     reasons.push({ code: "row_blocked", rowId: row.rowId, rowNumber: row.number, message: row.reasons[0] ?? "This row no longer has a valid decision." });
   }
   for (const rowId of changedEvidence(reviewed.evidence, plan.evidence)) {
-    if (blocked.has(rowId)) continue;
+    if (blocked.has(rowId) || !inScope(rowId)) continue;
     reasons.push({ code: "records_changed", rowId, rowNumber: rowNumber(rowId), message: "FlowFi's records for this row changed since you reviewed it." });
   }
 
-  const importRowIds = new Set(plan.rows.filter((r) => r.status === "import").map((r) => r.rowId));
+  const importRowIds = new Set(plan.rows.filter((r) => r.status === "import" && inScope(r.rowId)).map((r) => r.rowId));
   if (importRowIds.size > 0 && analysis.account.type === "card") {
     if (!analysis.card) reasons.push({ code: "card_unavailable", message: "This card's profile can't be found, so its bill status can't be checked. Nothing was imported." });
     else if (!isCreditCardActive(analysis.card.status)) reasons.push({ code: "card_unavailable", message: `This card is ${analysis.card.status} — new transactions can't be imported onto it.` });
@@ -211,8 +247,17 @@ export function commitRepositoriesFor(transactionRepository: CommitRepositories[
 /** One approval per review at a time within this tab — a double click or a repeated approval can never overlap. */
 const inFlight = new Set<string>();
 
-export async function runApproval(input: { session: DraftState; reviewed: ApprovalSnapshot; repeatsAcknowledged: boolean; deps: ApprovalDeps; onStage?: (stage: "checking" | "importing") => void }): Promise<ApprovalRunResult> {
+export async function runApproval(input: {
+  session: DraftState;
+  reviewed: ApprovalSnapshot;
+  repeatsAcknowledged: boolean;
+  deps: ApprovalDeps;
+  onStage?: (stage: "checking" | "importing") => void;
+  /** Only these rows are imported (and reported) — see `revalidateApproval`. Absent = the whole review. */
+  scope?: ReadonlySet<string> | null;
+}): Promise<ApprovalRunResult> {
   const { session, reviewed, deps } = input;
+  const scope = input.scope ?? null;
   if (inFlight.has(reviewed.sessionId)) return { status: "busy" };
   inFlight.add(reviewed.sessionId);
   try {
@@ -224,7 +269,7 @@ export async function runApproval(input: { session: DraftState; reviewed: Approv
       return { status: "unavailable", message: error instanceof Error ? error.message : "FlowFi's records couldn't be re-read." };
     }
 
-    const check = revalidateApproval({ session, fresh, reviewed, repeatsAcknowledged: input.repeatsAcknowledged, now: deps.now?.() });
+    const check = revalidateApproval({ session, fresh, reviewed, repeatsAcknowledged: input.repeatsAcknowledged, now: deps.now?.(), scope });
     if (!check.ok) return { status: "stale", reasons: check.reasons };
     const { plan, staged } = check;
     const assignedRow = plan.rows.find((r) => r.status === "import" && (r.action === "shared_expense" || r.action === "someone_elses_expense"));
@@ -271,6 +316,7 @@ export async function runApproval(input: { session: DraftState; reviewed: Approv
     const outcomes: RowOutcome[] = [];
     for (const row of plan.rows) {
       if (row.status === "excluded") continue;
+      if (scope != null && !scope.has(row.rowId)) continue; // not part of this approval — left exactly as it is
       const base = { rowId: row.rowId, number: row.number };
       switch (row.status) {
         case "import": {

@@ -114,9 +114,25 @@ export function useReconciliationSession(uid: string | null | undefined, account
       })),
     patchRow: (rowId: string, patch: RowPatch) =>
       update((s) => {
-        const valueEdit = "date" in patch || "description" in patch || "amount" in patch || "direction" in patch;
-        return { ...s, rows: s.rows.map((r) => (r.id === rowId ? editRow(r, patch) : r)), decisions: valueEdit ? invalidateAfterEdit(s.decisions, rowId) : s.decisions };
+        const before = s.rows.find((r) => r.id === rowId);
+        // Only a MATERIAL change (date, amount, Debit/Credit — what matching compares) withdraws decisions made against the
+        // old matches; re-entering the same value changes nothing (2026-11-25).
+        const material =
+          !!before &&
+          (("date" in patch && (patch.date?.getTime() ?? null) !== (before.date?.getTime() ?? null)) ||
+            ("amount" in patch && patch.amount !== before.amount) ||
+            ("direction" in patch && patch.direction !== before.direction) ||
+            ("description" in patch && patch.description !== before.description));
+        const directionChanged = !!before && "direction" in patch && patch.direction !== before.direction;
+        return { ...s, rows: s.rows.map((r) => (r.id === rowId ? editRow(r, patch) : r)), decisions: material ? invalidateAfterEdit(s.decisions, rowId, { directionChanged }) : s.decisions };
       }),
+    /**
+     * The description the transaction will be imported with (the user's own words). Never a value edit: the bank's
+     * narration — what matching and duplicate checks compare — is untouched, so no decision is withdrawn. Empty = back
+     * to FlowFi's clean wording.
+     */
+    setImportDescription: (rowId: string, text: string | null) =>
+      update((s) => ({ ...s, rows: s.rows.map((r) => (r.id === rowId ? { ...r, importDescription: text && text.trim() ? text.trim() : null } : r)) })),
     /** Remove a row from this review (or put it back): the existing include switch plus a marker that hides it from the list. Draft only. */
     setRemoved: (rowId: string, removed: boolean) =>
       update((s) => ({ ...s, rows: s.rows.map((r) => (r.id === rowId ? { ...editRow(r, { include: !removed }), removedFromReview: removed ? true : undefined } : r)) })),

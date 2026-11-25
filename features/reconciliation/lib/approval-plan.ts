@@ -112,7 +112,7 @@ export function buildApprovalPlan(params: {
   const out: PlanRow[] = [];
 
   rows.forEach((row, index) => {
-    const base = { rowId: row.id, number: index + 1, description: row.description, date: row.date, amount: row.amount, direction: row.direction, action: null, category: null, ownership: null, recordId: null, reasons: [] as string[], investigate: false };
+    const base = { rowId: row.id, number: index + 1, description: row.importDescription?.trim() || row.description, date: row.date, amount: row.amount, direction: row.direction, action: null, category: null, ownership: null, recordId: null, reasons: [] as string[], investigate: false };
     const match = matches.get(row.id);
     if (!row.include || match?.state === "excluded") {
       counts.excluded++;
@@ -219,13 +219,17 @@ export function stagedRecordsForImport(rows: ReconRow[], decisions: Record<strin
       const action = importActionFor(r, d);
       // Smart Capture's own mapping covers expense / income / refund; a person / split expense starts as a plain expense and
       // takes its ownership axes and detail below.
-      return { ...r, include: true, action: action === "shared_expense" || action === "someone_elses_expense" ? ("normal_expense" as const) : action, category: d.category, committedTransactionId: null };
+      // The description the user approved (their own, or the clean wording baked in by the screen) — the bank's narration
+      // is kept in the notes below, with its reference, for later verification and matching.
+      const description = r.importDescription?.trim() || r.description;
+      return { ...r, description, include: true, action: action === "shared_expense" || action === "someone_elses_expense" ? ("normal_expense" as const) : action, category: d.category, committedTransactionId: null };
     });
   return toStagedRecords(reviewRows).map((record) => {
     const decision = decisionFor(decisions, record.id);
     const userNote = decision.notes.trim();
-    const notes = userNote ? `${userNote} · ${RECONCILIATION_IMPORT_NOTE}` : RECONCILIATION_IMPORT_NOTE;
     const row = rows.find((r) => r.id === record.id);
+    const narration = row && row.importDescription?.trim() && row.importDescription.trim() !== row.description.trim() ? `Bank narration: ${row.description.trim()}` : null;
+    const notes = [userNote, narration, RECONCILIATION_IMPORT_NOTE].filter(Boolean).join(" · ");
     const assigned = row && decision.ownership && row.direction === "debit" ? ownershipDetail(row, decision.ownership) : null;
     return assigned ? { ...record, notes, ...actionToAxesPatch(assigned.action, assigned.detail) } : { ...record, notes };
   });

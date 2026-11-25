@@ -10,6 +10,7 @@ import { EmiWorkspace } from "@/features/emi/components/emi-workspace";
 import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { AgreementNavList } from "@/features/loans/components/agreement-nav-list";
 import { LE_RADIUS } from "@/features/loans/components/loan-emi-ui";
+import { PaymentAwarenessProvider } from "@/features/loans/components/payment-awareness";
 import { LoansWorkspace } from "@/features/loans/components/loans-workspace";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { cn } from "@/lib/utils";
@@ -58,7 +59,9 @@ export function AgreementDetailPage() {
         <div className={cn("flex min-w-0 gap-3 px-1", WORKSPACE_HEIGHT)} data-testid="loan-emi-workspace">
           <AgreementNavList selectedId={id} onSelect={select} />
           <div key={id} className="min-h-0 min-w-0 flex-1 duration-200 animate-in fade-in-0 slide-in-from-right-2 motion-reduce:animate-none">
-            <StackProvider>{kind === "loan" ? <LoansWorkspace pageAgreementId={id} /> : <EmiWorkspace pageAgreementId={id} />}</StackProvider>
+            <PaymentAwarenessProvider>
+              <StackProvider>{kind === "loan" ? <LoansWorkspace pageAgreementId={id} /> : <EmiWorkspace pageAgreementId={id} />}</StackProvider>
+            </PaymentAwarenessProvider>
           </div>
         </div>
       </InlineHostProvider>

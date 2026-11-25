@@ -198,6 +198,7 @@ export function setDecision(decisions: Record<string, RowDecision>, rowId: strin
     next.notOwnTransferAck = false;
     next.ownership = null;
   }
+  if (patch.kind !== undefined && patch.kind !== "ignore" && !("skipReason" in patch)) next.skipReason = null;
   return { ...decisions, [rowId]: next };
 }
 
@@ -247,11 +248,30 @@ export function confirmRowField(row: ReconRow, field: CaptureField): ReconRow {
   return confirmField(row, field) as ReconRow;
 }
 
-/** A row's decision after its values changed: a Link or an Import confirmation was made against the old values. */
-export function invalidateAfterEdit(decisions: Record<string, RowDecision>, rowId: string): Record<string, RowDecision> {
+/**
+ * A row's decision after a MATERIAL edit (date, amount or Debit/Credit — the values matching compares). Whatever was
+ * decided against the old matches is withdrawn: a Link, a "these are different" acknowledgement, "Not this one"
+ * rejections, and an Import made with such an acknowledgement. What the edit doesn't touch stays: the category, notes,
+ * who the expense is for, and — unless Debit/Credit itself changed — the credit's meaning and the own-account check.
+ * (2026-11-25; before, every edit cleared all of it and the user had to choose everything again.)
+ */
+export function invalidateAfterEdit(decisions: Record<string, RowDecision>, rowId: string, opts: { directionChanged?: boolean } = { directionChanged: true }): Record<string, RowDecision> {
   const current = decisions[rowId];
   if (!current) return decisions;
-  return { ...decisions, [rowId]: { ...current, kind: current.kind === "link" || current.kind === "import_new" ? null : current.kind, linkedRecordId: null, notSameAck: false, creditAs: null, notOwnTransferAck: false, rejectedRecordIds: [], bulkId: null } };
+  const staleImport = current.kind === "import_new" && current.notSameAck;
+  const kind = current.kind === "link" || staleImport || (opts.directionChanged && current.kind === "import_new") ? null : current.kind;
+  return {
+    ...decisions,
+    [rowId]: {
+      ...current,
+      kind,
+      linkedRecordId: null,
+      notSameAck: false,
+      rejectedRecordIds: [],
+      bulkId: null,
+      ...(opts.directionChanged ? { creditAs: null, notOwnTransferAck: false, ownership: null, skipReason: null } : {}),
+    },
+  };
 }
 
 /** Which captured value a row's check label points at — so its editor can open with that field in focus. */

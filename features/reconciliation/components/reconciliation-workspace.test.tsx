@@ -12,7 +12,7 @@ import type { Transaction } from "@/lib/models/transaction";
 import { DRAFT_KEY_PREFIX, buildReconciliationDraft, saveReconciliationDraft } from "../lib/reconciliation-draft";
 import { reconRow } from "../lib/test-fixtures";
 import type { ReconRow } from "../lib/types";
-import { menuItem, openImportConfirm } from "./menu-test-utils";
+import { menuItem, openInlineReview, rowStatusOf, setRowCategory } from "./menu-test-utils";
 import { ReconciliationWorkspace, type ReconciliationData } from "./reconciliation-workspace";
 
 const NOW = new Date(2026, 9, 26, 12, 0, 0);
@@ -165,7 +165,7 @@ describe("Reconciliation workspace — desktop", () => {
     g.focus();
     expect(rowEl("r1").getAttribute("aria-selected")).toBe("true");
     fireEvent.keyDown(g, { key: "l" });
-    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Keep existing");
+    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Already recorded");
     fireEvent.keyDown(g, { key: "j" });
     expect(rowEl("r2").getAttribute("aria-selected")).toBe("true");
     fireEvent.keyDown(g, { key: "i" });
@@ -192,19 +192,13 @@ describe("Reconciliation workspace — desktop", () => {
     expect(resolve("keep_existing").title).toMatch(/Already kept by row 3/);
   });
 
-  it("Import as transaction on a row with a possible match needs the explicit acknowledgement and a category", () => {
+  it("Keep both on a row with a possible match is one explicit click in the comparison; the category is picked on the row", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
-    select("r2");
-    openImportConfirm(); // the row's editor opens, then its import button asks for the rest
-    const submit = screen.getByTestId("import-confirm-submit") as HTMLButtonElement;
-    expect(submit.disabled).toBe(true);
-    expect(screen.getByTestId("import-confirm").textContent).toMatch(/Needs the acknowledgement, a category/);
-    fireEvent.click(screen.getByRole("checkbox", { name: "These are separate transactions" }));
-    fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: "Food" } });
-    expect(submit.disabled).toBe(false);
-    fireEvent.click(submit);
-    expect(within(rowEl("r2")).getByTestId("decision-chip").textContent).toBe("Keep both");
+    openInlineReview("r2");
+    fireEvent.click(screen.getByTestId("inline-keep-both"));
+    setRowCategory("r2", "Food");
+    expect(rowStatusOf("r2")).toBe("ready");
     expect(JSON.parse(sessionStorage.getItem(`${DRAFT_KEY_PREFIX}u1`)!).decisions.r2).toMatchObject({ kind: "import_new", notSameAck: true, category: "Food" });
   });
 
@@ -221,12 +215,9 @@ describe("Reconciliation workspace — desktop", () => {
   it("D10: a row in a closed card bill can't be imported; one in the open cycle can", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
-    select("r6");
-    expect(resolve("import").disabled).toBe(true);
-    expect(resolve("import").textContent).toMatch(/already closed/);
-    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
-    select("r7");
-    expect(resolve("import").disabled).toBe(false);
+    expect(within(rowEl("r6")).getByTestId("row-blocked").getAttribute("title")).toMatch(/already closed/);
+    expect(rowStatusOf("r6")).toBe("fix");
+    expect(within(rowEl("r7")).queryByTestId("row-blocked")).toBeNull();
   });
 
   it("D11: an SMS waiting in the Inbox can be marked 'Handle in Inbox'", () => {
@@ -244,7 +235,7 @@ describe("Reconciliation workspace — desktop", () => {
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     fireEvent.click(screen.getByRole("button", { name: /Keep existing for exact matches \(1\)/ }));
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Keep existing" }));
-    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Keep existing");
+    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Already recorded");
     expect(within(rowEl("r3")).getByTestId("decision-chip").dataset.pending).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: /Undo bulk keep \(1\)/ }));
     expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
@@ -262,8 +253,10 @@ describe("Reconciliation workspace — desktop", () => {
     expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
     // …but the typed amount is accepted on the spot: no "Edited — confirm values", no "Values are correct" step.
     expect(within(rowEl("r1")).queryByText("Edited — confirm values")).toBeNull();
-    expect(screen.queryByTestId("row-check-label")).toBeNull();
-    expect((screen.getByTestId("import-as-transaction") as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId("row-fix")).toBeNull();
+    // It is a possible match again, so its details point to the comparison instead of importing blind.
+    expect((screen.getByTestId("import-as-transaction") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("editor-review-match")).toBeTruthy();
     // Undo can't bring back the Keep existing the edit withdrew — it was made against the old amount.
     fireEvent.click(screen.getByTestId("undo-decision"));
     expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
@@ -279,7 +272,7 @@ describe("Reconciliation workspace — desktop", () => {
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     // One summary strip is the quick filter; the toolbar's Filter menu offers the same statuses.
     fireEvent.click(screen.getByTestId("filter-menu"));
-    fireEvent.click(screen.getByRole("radio", { name: /^Possible duplicates/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /^Possible match/ }));
     expect(screen.getAllByTestId("recon-row").map((r) => r.dataset.rowId)).toEqual(["r1", "r2", "r3", "r4", "r5"]);
     fireEvent.click(screen.getByRole("button", { name: "Show all rows" }));
     fireEvent.click(screen.getByTestId("rf-duplicate"));
@@ -356,21 +349,21 @@ describe("Reconciliation workspace — row bottom sheet", () => {
     expect(panel.getAttribute("role")).toBe("dialog");
     expect(screen.getByTestId("statement-sheet").contains(panel)).toBe(false);
     expect(screen.getByTestId("review-sheet").contains(panel)).toBe(false);
-    expect(within(panel).getByRole("heading", { name: "AMAZON PAY INDIA" })).toBeTruthy();
+    expect(within(panel).getByRole("heading", { name: /Amazon/ })).toBeTruthy(); // FlowFi's clean wording of "AMAZON PAY INDIA"
     expect(rowEl("r2").getAttribute("aria-selected")).toBe("true");
 
     // Its arrows and J/K move the selection; the sheet follows.
     fireEvent.click(within(panel).getByRole("button", { name: "Next row" }));
     expect(rowEl("r3").getAttribute("aria-selected")).toBe("true");
-    expect(within(sheet()!).getByText("Statement row 3 · draft")).toBeTruthy();
+    expect(within(sheet()!).getByText("Statement row 3")).toBeTruthy();
     fireEvent.keyDown(sheet()!, { key: "j" });
-    expect(within(sheet()!).getByText("Statement row 4 · draft")).toBeTruthy();
+    expect(within(sheet()!).getByText("Statement row 4")).toBeTruthy();
 
-    // Escape, Done and the close button all close it; nothing was decided along the way.
+    // Escape, Close and the ✕ all close it; nothing was decided along the way.
     fireEvent.keyDown(sheet()!, { key: "Escape" });
     expect(sheet()).toBeNull();
     fireEvent.keyDown(grid(), { key: "Enter" });
-    fireEvent.click(within(sheet()!).getByRole("button", { name: "Done" }));
+    fireEvent.click(within(sheet()!).getByTestId("editor-close"));
     expect(sheet()).toBeNull();
     fireEvent.doubleClick(rowEl("r2"));
     fireEvent.click(within(sheet()!).getByRole("button", { name: "Close row details" }));
@@ -383,14 +376,16 @@ describe("Reconciliation workspace — row bottom sheet", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     fireEvent.click(screen.getByRole("button", { name: "Expand row 1" }));
+    const shown = (screen.getByLabelText("Description") as HTMLInputElement).value; // FlowFi's wording (here: the user's own "Swiggy" history)
     (screen.getByLabelText("Description") as HTMLInputElement).focus();
     fireEvent.change(screen.getByLabelText("Description"), { target: { value: "SWIGGY BLR" } });
     fireEvent.keyDown(screen.getByLabelText("Description"), { key: "Escape" });
     expect(sheet()).toBeTruthy();
-    expect((screen.getByLabelText("Description") as HTMLInputElement).value).toBe("SWIGGY BANGALORE");
+    expect((screen.getByLabelText("Description") as HTMLInputElement).value).toBe(shown);
     fireEvent.change(screen.getByLabelText("Description"), { target: { value: "SWIGGY BLR" } });
     fireEvent.click(screen.getByRole("button", { name: "Next row" }));
     expect(rowEl("r1").textContent).toContain("SWIGGY BLR");
+    expect(rowEl("r1").dataset.description).toBe("SWIGGY BANGALORE"); // the bank narration itself is never changed
   });
 
   it("offers Mine / Someone else's / Split on a charge — Mine by default, nothing written by choosing", () => {

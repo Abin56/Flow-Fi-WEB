@@ -1,38 +1,39 @@
 "use client";
 
 /**
- * The New Statement sheet — the left spreadsheet of the comparison workspace: one dense, ruled, single-line row per
- * captured statement line (# · Date · Description · Amount · Match · Decision · ✎). Its body scrolls on its own under
- * a sticky column header. Columns follow the pane's own width (container queries), not the window's: a narrow pane
- * folds the Match column into the description cell, so the sheet never scrolls sideways however the divider is dragged.
+ * The statement sheet — ONE compact, Excel-like table is the whole workspace (2026-11-25):
  *
- * Selecting a row drives the Existing FlowFi sheet; rows that are possible matches for the FlowFi transaction picked
- * over there get a quiet highlight here (synchronised selection — never synchronised scrolling).
+ *   # · Date · Description · Amount · Type · Category · Match · Status · Action
  *
- * Without a statement account the Match column says "Account missing" and, as evidence only, where similar
- * transactions live (account-hints.ts) — nothing is compared or decided until the account is chosen.
+ * One ruled, single-line row per captured statement line. Its body scrolls on its own under a sticky column header.
+ * Columns follow the pane's own width (container queries): a narrow pane drops Type, Category and Match first, so the
+ * sheet never scrolls sideways.
  *
- * Editing a row never opens a form inside the table: the pencil, Enter or a double-click opens the row's sheet,
- * which the workspace renders over the viewport — the table stays a list and the row stays highlighted.
+ *  - Description: FlowFi's clean wording ("Received from Mohan · UPI") with the bank's own narration muted beside it
+ *    (full narration in the tooltip). Clicking it opens the row's details.
+ *  - Category: picked right in the row; a reliable suggestion is pre-filled (marked "auto").
+ *  - Match: "Possible match" opens the inline comparison under the row (inside the same scroll body — never clipped,
+ *    never a second sheet).
+ *  - Status: Ready · Possible match · Fix required · Imported · Skipped — one, never two.
+ *  - Action: the row's ONE next step (Import, Review, Check date, Credit type…) rendered by the workspace, plus ⋯ and ✎.
+ *
+ * Without a statement account the Match column says "Account missing" with cross-account evidence (account-hints.ts).
  */
 
 import { Fragment, forwardRef } from "react";
-import { PencilLine, Trash2, TriangleAlert } from "lucide-react";
+import { PencilLine, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { describeAmountDelta, describeDayGap } from "../lib/amounts-and-days";
-import { rowCheckLabel } from "../lib/decisions";
 import type { RowStatus } from "../lib/row-status";
 import type { ReconRow, RowDecision, RowMatch } from "../lib/types";
 import { QuickDecideMenu, type QuickAction } from "./recon-decision-menu";
 import { ACCOUNT_MISSING_META, Mark, StatusChip, Money, SHEET_CELLS, SHEET_FRAME, SHEET_HEAD, SHEET_ROW, STATE_META, formatRowDate } from "./recon-ui";
 
-/** Narrow pane: # · description (date folded in) · amount · decision · ✎. ≥30rem adds Date; ≥38rem adds Match. */
+/** ≥56rem: every column. ≥38rem: # · Date · Description · Amount · Status · Action. Narrow: # · Description · Amount · Action. */
 const COLS =
-  "grid-cols-[1.75rem_minmax(0,1fr)_6.75rem_8rem_3.5rem] @min-[30rem]:grid-cols-[2rem_4rem_minmax(0,1fr)_7.5rem_8rem_3.5rem] @min-[38rem]:grid-cols-[2rem_4rem_minmax(0,1fr)_7.25rem_7.75rem_8rem_3.5rem] @min-[56rem]:grid-cols-[2.25rem_4.25rem_minmax(0,1fr)_7.75rem_5rem_9rem_9rem_3.5rem]";
-const DATE_COL = "hidden @min-[30rem]:block";
-const WIDE_ONLY = "hidden @min-[38rem]:block";
-const NARROW_ONLY = "@min-[38rem]:hidden";
-const TYPE_COL = "hidden @min-[56rem]:block";
+  "grid-cols-[1.75rem_minmax(0,1fr)_6.5rem_8.5rem] @min-[38rem]:grid-cols-[2rem_4rem_minmax(0,1fr)_7.25rem_7.5rem_9rem] @min-[60rem]:grid-cols-[2rem_4.25rem_minmax(0,1fr)_7.5rem_4.25rem_9.5rem_7.5rem_7.5rem_10rem]";
+const MID = "hidden @min-[38rem]:block";
+const WIDE = "hidden @min-[60rem]:block";
 
 /** One short line of evidence for the row's best possible match. */
 export function evidenceLine(match: RowMatch | undefined, pendingLabel = "Choose the statement account"): string {
@@ -44,6 +45,8 @@ export function evidenceLine(match: RowMatch | undefined, pendingLabel = "Choose
   if (best) return [describeAmountDelta(best.amountDeltaPaise).replace(" in FlowFi", ""), describeDayGap(best.dayGap).replace(" in FlowFi", "")].join(" · ");
   if (match.pendingSms.length > 0) return "SMS waiting in Inbox";
   if (match.conflicts[0]) return match.conflicts[0];
+  const different = match.notes.find((n) => n.kind === "different_reference");
+  if (different) return "Same amount, different UPI reference";
   return "Nothing similar on this account";
 }
 
@@ -60,6 +63,18 @@ export function accountHintLine(hint: RowAccountHint | null | undefined): string
   return `${hint.count} similar on ${hint.account ?? "another account"}`;
 }
 
+/** The row's category cell: the value shown, whether FlowFi pre-filled it, and the choices (best first). */
+export interface RowCategoryView {
+  value: string | null;
+  auto: boolean;
+  /** Category names valid for the row's direction — suggested ones first. */
+  options: string[];
+  /** False for rows whose category no longer matters (imported, skipped, already recorded). */
+  editable: boolean;
+  /** The row needs a category before it can be imported. */
+  needed: boolean;
+}
+
 export interface ReconTableProps {
   rows: ReconRow[];
   numberOf: (rowId: string) => number;
@@ -70,38 +85,38 @@ export interface ReconTableProps {
   expandedId: string | null;
   onSelect: (rowId: string) => void;
   onToggleExpand: (rowId: string) => void;
-  /** The row's warning indicator: opens its editor on the value that needs attention. */
-  onFixRow?: (rowId: string) => void;
   onCompare: (rowId: string) => void;
   /** Shown in the Match column while results are withheld (no account yet, still loading, or a load failed). */
   pendingLabel: string;
   onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void;
-  /** The quick-decide options for a row (null = nothing to decide, e.g. excluded or not yet compared). */
+  /** The ⋯ options for a row (null = nothing to decide, e.g. not yet compared). */
   quickActions?: (row: ReconRow) => QuickAction[] | null;
   /** Desktop viewport-fit layout: the body scrolls inside the grid. False = the page scrolls (short windows). */
   contained?: boolean;
-  /** Rows that could be the FlowFi transaction selected in the other sheet. */
-  highlightIds?: Set<string>;
-  /** The sheet's title bar (title, count) — the left page's heading. */
+  /** The sheet's title bar (title, count). */
   header?: React.ReactNode;
   /** No statement account chosen: the Match column shows "Account missing" plus cross-account evidence. */
   accountMissing?: boolean;
   accountHintOf?: (rowId: string) => RowAccountHint | null;
-  /** The row whose inline match review is open, and what to render under it (inside the same scroll body — no nested scroller). */
-  /** Delete from this review (the row is removed from the list; undoable; nothing in FlowFi changes). */
-  onRemove?: (rowId: string) => void;
-  /** The row's single status (Ready · Possible duplicate · Fix required · Skipped); null = matching not finished. */
+  /** The row's single status; null = matching not finished. */
   statusOf?: (row: ReconRow) => RowStatus | null;
+  /** The description shown (clean wording or the user's own) and whether FlowFi derived it. */
+  descriptionOf?: (row: ReconRow) => { text: string; auto: boolean };
+  categoryOf?: (row: ReconRow) => RowCategoryView | null;
+  onCategory?: (rowId: string, category: string | null) => void;
+  /** The row's next step (Import / Review / Check date / Credit type …) — rendered by the workspace. */
+  renderAction?: (row: ReconRow, status: RowStatus | null) => React.ReactNode;
+  /** The row whose inline match review is open, and what to render under it (inside the same scroll body). */
   inlineId?: string | null;
   renderInline?: (row: ReconRow) => React.ReactNode;
 }
 
 export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function ReconTable(
-  { rows, numberOf, matches, decisions, selectedId, expandedId, onSelect, onToggleExpand, onFixRow, onCompare, onKeyDown, pendingLabel, quickActions, contained = true, highlightIds, header, accountMissing = false, accountHintOf, inlineId = null, renderInline, onRemove, statusOf },
+  { rows, numberOf, matches, decisions, selectedId, expandedId, onSelect, onToggleExpand, onCompare, onKeyDown, pendingLabel, quickActions, contained = true, header, accountMissing = false, accountHintOf, inlineId = null, renderInline, statusOf, descriptionOf, categoryOf, onCategory, renderAction },
   ref,
 ) {
   return (
-    <section aria-label="New statement" className={cn(SHEET_FRAME, contained && "h-full")} data-testid="statement-sheet">
+    <section aria-label="Statement" className={cn(SHEET_FRAME, contained && "h-full")} data-testid="statement-sheet">
       {header}
       <div
         ref={ref}
@@ -118,23 +133,26 @@ export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function R
           <span role="columnheader" className="text-right">
             #
           </span>
-          <span role="columnheader" className={DATE_COL}>
+          <span role="columnheader" className={MID}>
             Date
           </span>
           <span role="columnheader">Description</span>
           <span role="columnheader" className="text-right">
             Amount
           </span>
-          <span role="columnheader" className={TYPE_COL}>
+          <span role="columnheader" className={WIDE}>
             Type
           </span>
-          <span role="columnheader" className={WIDE_ONLY}>
+          <span role="columnheader" className={WIDE}>
+            Category
+          </span>
+          <span role="columnheader" className={WIDE}>
             Match
           </span>
-          <span role="columnheader">Status</span>
-          <span role="columnheader" className="sr-only">
-            Details
+          <span role="columnheader" className={MID}>
+            Status
           </span>
+          <span role="columnheader">Action</span>
         </div>
         <div data-testid="recon-grid-body" className={cn("min-h-0 flex-1", contained && "overflow-y-auto overscroll-contain [scrollbar-gutter:stable]")}>
           {rows.length === 0 && <p className="px-4 py-10 text-center text-sm text-muted-foreground">No rows match these filters.</p>}
@@ -143,37 +161,47 @@ export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function R
             const decision = decisions[row.id];
             const selected = row.id === selectedId;
             const expanded = row.id === expandedId;
-            const related = !selected && (highlightIds?.has(row.id) ?? false);
-            const checkLabel = rowCheckLabel(row);
             const status = statusOf ? statusOf(row) : null;
-            // A left stripe marks the rows already decided (green); rows still waiting stay plain, so nothing is orange by default.
-            const stripe = status?.kind === "ready" ? "bg-success/70" : null;
+            const stripe = status?.kind === "ready" ? "bg-success/70" : status?.kind === "imported" ? "bg-success/40" : null;
             const actions = quickActions?.(row) ?? null;
             const hint = accountMissing && row.include && !row.captureExcluded ? (accountHintOf?.(row.id) ?? null) : null;
             const meta = match ? STATE_META[match.state] : null;
             const evidence = match ? evidenceLine(match) : accountMissing ? accountHintLine(hint) : pendingLabel;
+            const shown = descriptionOf ? descriptionOf(row) : { text: row.description, auto: false };
+            const narration = shown.text !== row.description ? row.description : null;
+            const category = categoryOf?.(row) ?? null;
+            const possible = !!match && match.state !== "already_imported" && match.state !== "excluded" && (match.candidates.length > 0 || match.pendingSms.length > 0);
             const matchCell = match && meta ? (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onCompare(row.id);
-                }}
-                title={`${meta.label} — ${evidence}. ${meta.hint}`}
-                data-evidence={evidence}
-                className="flex h-full w-full min-w-0 items-center gap-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-                aria-label={`Compare row ${numberOf(row.id)}`}
-              >
-                <Mark tone={meta.tone} icon={meta.icon} className="shrink-0">
-                  {meta.label}
-                </Mark>
-              </button>
+              match.state !== "excluded" ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCompare(row.id);
+                  }}
+                  title={`${meta.label} — ${evidence}. ${meta.hint}`}
+                  data-evidence={evidence}
+                  aria-expanded={inlineId === row.id}
+                  className="flex h-full w-full min-w-0 items-center gap-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                  aria-label={`Compare row ${numberOf(row.id)}`}
+                >
+                  <Mark tone={meta.tone} icon={meta.icon} className={cn("shrink-0", possible && "underline-offset-2 hover:underline")}>
+                    {meta.label}
+                  </Mark>
+                </button>
+              ) : (
+                <span className="flex min-w-0 items-center" title={`${meta.label} — ${evidence}`} data-evidence={evidence}>
+                  <Mark tone={meta.tone} icon={meta.icon} className="shrink-0">
+                    {meta.label}
+                  </Mark>
+                </span>
+              )
             ) : accountMissing && row.include && !row.captureExcluded ? (
               <span className="flex min-w-0 items-center gap-1.5" title={`${ACCOUNT_MISSING_META.hint} ${evidence}.`} data-testid="match-account-missing">
                 <Mark tone={ACCOUNT_MISSING_META.tone} icon={ACCOUNT_MISSING_META.icon} className="shrink-0">
                   {ACCOUNT_MISSING_META.label}
                 </Mark>
-                <span className="min-w-0 truncate text-[11px] text-muted-foreground">{evidence}</span>
+                <span className="sr-only">{evidence}</span>
               </span>
             ) : (
               <span className="block truncate text-[11px] text-muted-foreground" data-testid="match-pending">
@@ -182,143 +210,131 @@ export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function R
             );
             return (
               <Fragment key={row.id}>
-              <div
-                id={`recon-row-${row.id}`}
-                role="row"
-                aria-selected={selected}
-                data-testid="recon-row"
-                data-row-id={row.id}
-                data-state={match?.state ?? "pending"}
-                data-account-missing={!match && accountMissing ? "true" : undefined}
-                data-amount={row.amount ?? ""}
-                data-direction={row.direction ?? ""}
-                data-description={row.description}
-                data-decision={decision?.kind ?? ""}
-                data-related={related || undefined}
-                onClick={() => onSelect(row.id)}
-                onDoubleClick={(e) => {
-                  // Double-click opens the row's sheet; controls inside the row keep their own clicks.
-                  if (!expanded && !(e.target as HTMLElement).closest("button, a, [role=menu], [role=dialog]")) onToggleExpand(row.id);
-                }}
-                className={cn(
-                  SHEET_ROW,
-                  COLS,
-                  SHEET_CELLS,
-                  !row.include && "opacity-60",
-                  // Selected: tinted + a hairline frame, stronger while the sheet has keyboard focus. Related (a possible
-                  // match for the FlowFi transaction picked opposite): a lighter tint and the right-edge tick.
-                  selected
-                    ? "bg-primary/[0.16]! inset-ring-2 inset-ring-primary/70 group-focus-visible/grid:bg-primary/[0.22]!"
-                    : related
-                      ? "bg-primary/[0.06]! hover:bg-primary/[0.09]!"
-                      : "hover:bg-muted/60!",
-                )}
-              >
-                {(selected || stripe) && <span aria-hidden className={cn("pointer-events-none absolute inset-y-0 left-0 w-[3px] border-0! p-0!", selected ? "bg-primary" : stripe)} />}
-                {related && <span aria-hidden className="pointer-events-none absolute inset-y-1 right-0 w-[3px] rounded-l border-0! bg-primary/60 p-0!" />}
-                <span role="gridcell" className="text-right text-[11px] text-muted-foreground tabular-nums">
-                  {numberOf(row.id)}
-                </span>
-                <span role="gridcell" className={cn("text-xs whitespace-nowrap text-foreground tabular-nums", DATE_COL)}>
-                  {formatRowDate(row.date)}
-                </span>
-                <span role="gridcell" className="flex min-w-0 items-center gap-1.5">
-                  {/* The description keeps a readable width; the check tag and the narrow status mark give way first. */}
-                  <span className={cn("min-w-[6.5rem] flex-1 truncate text-[13px] text-foreground", selected ? "font-semibold" : "font-medium")} title={row.description}>
-                    <span className="text-muted-foreground @min-[30rem]:hidden">{formatRowDate(row.date)} · </span>
-                    {row.description || "No description"}
+                <div
+                  id={`recon-row-${row.id}`}
+                  role="row"
+                  aria-selected={selected}
+                  data-testid="recon-row"
+                  data-row-id={row.id}
+                  data-state={match?.state ?? "pending"}
+                  data-status={status?.kind ?? "checking"}
+                  data-account-missing={!match && accountMissing ? "true" : undefined}
+                  data-amount={row.amount ?? ""}
+                  data-direction={row.direction ?? ""}
+                  data-description={row.description}
+                  data-display-description={shown.text}
+                  data-decision={decision?.kind ?? ""}
+                  onClick={() => onSelect(row.id)}
+                  onDoubleClick={(e) => {
+                    if (!expanded && !(e.target as HTMLElement).closest("button, a, select, [role=menu], [role=dialog]")) onToggleExpand(row.id);
+                  }}
+                  className={cn(
+                    SHEET_ROW,
+                    COLS,
+                    SHEET_CELLS,
+                    (!row.include || status?.kind === "skipped") && "opacity-60",
+                    selected ? "bg-primary/[0.14]! inset-ring-2 inset-ring-primary/60 group-focus-visible/grid:bg-primary/[0.2]!" : "hover:bg-muted/60!",
+                  )}
+                >
+                  {(selected || stripe) && <span aria-hidden className={cn("pointer-events-none absolute inset-y-0 left-0 w-[3px] border-0! p-0!", selected ? "bg-primary" : stripe)} />}
+                  <span role="gridcell" className="text-right text-[11px] text-muted-foreground tabular-nums">
+                    {numberOf(row.id)}
                   </span>
-                  {checkLabel && (
+                  <span role="gridcell" className={cn("text-xs whitespace-nowrap text-foreground tabular-nums", MID)}>
+                    {formatRowDate(row.date)}
+                  </span>
+                  <span role="gridcell" className="flex min-w-0 items-center">
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         onSelect(row.id);
-                        (onFixRow ?? onToggleExpand)(row.id);
+                        onToggleExpand(row.id);
                       }}
-                      title={`${checkLabel} — click to fix it`}
-                      aria-label={`${checkLabel} (row ${numberOf(row.id)})`}
-                      data-testid="row-check-label"
-                      className="inline-flex size-5 shrink-0 items-center justify-center rounded text-warning outline-none transition-colors hover:bg-warning/15 focus-visible:ring-2 focus-visible:ring-ring"
+                      title={narration ? `${shown.text}\nBank narration: ${narration}` : shown.text}
+                      aria-label={`Open details for row ${numberOf(row.id)}: ${shown.text}`}
+                      data-testid="row-description"
+                      className="flex min-w-0 flex-1 items-baseline gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
-                      <TriangleAlert className="size-3.5" aria-hidden />
-                      <span className="sr-only">{checkLabel}</span>
+                      <span className={cn("min-w-0 shrink truncate text-[13px] text-foreground", selected ? "font-semibold" : "font-medium")}>
+                        <span className="text-muted-foreground @min-[38rem]:hidden">{formatRowDate(row.date)} · </span>
+                        {shown.text || "No description"}
+                      </span>
+                      {narration && (
+                        <span className="hidden min-w-0 flex-1 truncate font-mono text-[10.5px] text-muted-foreground/80 @min-[48rem]:block" data-testid="row-narration">
+                          {narration}
+                        </span>
+                      )}
                     </button>
-                  )}
-                  {/* Narrow pane: the match state rides on the description's right edge. */}
-                  <span className={cn("flex max-w-[45%] min-w-0 shrink justify-end overflow-hidden", NARROW_ONLY)}>
-                    {meta ? (
-                      <Mark tone={meta.tone} icon={meta.icon} title={`${meta.label} — ${evidence}`}>
-                        {meta.short}
-                      </Mark>
-                    ) : accountMissing ? (
-                      <Mark tone={ACCOUNT_MISSING_META.tone} icon={ACCOUNT_MISSING_META.icon} title={evidence}>
-                        No account
-                      </Mark>
-                    ) : null}
                   </span>
-                </span>
-                <span role="gridcell" className="text-right whitespace-nowrap">
-                  <Money amount={row.amount} direction={row.direction} className="text-[13px]" />
-                </span>
-                <span role="gridcell" className={cn("truncate text-xs text-muted-foreground", TYPE_COL)} data-testid="row-type">
-                  {row.direction === "credit" ? "Credit" : row.direction === "debit" ? "Debit" : "—"}
-                </span>
-                <span role="gridcell" className={cn("min-w-0 px-0!", WIDE_ONLY)}>
-                  <span className="flex h-full min-w-0 items-center px-2">{matchCell}</span>
-                </span>
-                <span role="gridcell" className="min-w-0 px-1!">
-                  {match?.state === "excluded" || row.removedFromReview ? (
-                    <span className="flex items-center justify-between gap-1 px-1">
-                      <span className="truncate text-[12px] text-muted-foreground">{row.removedFromReview ? "Removed" : "Not imported"}</span>
-                      {actions && <QuickDecideMenu rowNumber={numberOf(row.id)} kind={null} actions={actions} onOpen={() => onSelect(row.id)} />}
-                    </span>
-                  ) : (
-                    <span className="flex min-w-0 items-center justify-between gap-1 px-1">
-                      <StatusChip status={status} />
-                      {actions && <QuickDecideMenu rowNumber={numberOf(row.id)} kind={decision?.kind ?? null} actions={actions} onOpen={() => onSelect(row.id)} />}
-                    </span>
-                  )}
-                </span>
-                <span role="gridcell" className="flex items-center justify-center gap-0.5 px-0!">
-                  {onRemove && (
+                  <span role="gridcell" className="text-right whitespace-nowrap">
+                    <Money amount={row.amount} direction={row.direction} className="text-[13px]" />
+                  </span>
+                  <span role="gridcell" className={cn("truncate text-xs text-muted-foreground", WIDE)} data-testid="row-type">
+                    {row.direction === "credit" ? "Credit" : row.direction === "debit" ? "Debit" : "—"}
+                  </span>
+                  <span role="gridcell" className={cn("min-w-0 px-1!", WIDE)}>
+                    {category && category.editable ? (
+                      <span className="relative flex h-full items-center">
+                        <select
+                          aria-label={`Category for row ${numberOf(row.id)}`}
+                          data-testid="row-category"
+                          data-auto={category.auto ? "true" : undefined}
+                          value={category.value ?? ""}
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          onChange={(e) => onCategory?.(row.id, e.target.value || null)}
+                          className={cn(
+                            "h-7 w-full min-w-0 cursor-pointer truncate rounded-md border bg-transparent pr-5 pl-1.5 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                            category.value ? "border-transparent text-foreground hover:border-border-strong/70" : category.needed ? "border-warning/60 text-warning" : "border-transparent text-muted-foreground hover:border-border-strong/70",
+                          )}
+                          title={category.auto ? `${category.value} — suggested from your history / the merchant. Change it if it's wrong.` : (category.value ?? "Choose a category")}
+                        >
+                          <option value="">{category.needed ? "Choose…" : "—"}</option>
+                          {category.options.map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
+                        {category.auto && category.value && <Sparkles aria-label="Suggested" className="pointer-events-none absolute right-1 size-3 text-primary-accent-text" />}
+                      </span>
+                    ) : (
+                      <span className="block truncate px-1 text-[12px] text-muted-foreground">{category?.value ?? "—"}</span>
+                    )}
+                  </span>
+                  <span role="gridcell" className={cn("min-w-0 px-0!", WIDE)}>
+                    <span className="flex h-full min-w-0 items-center px-2">{matchCell}</span>
+                  </span>
+                  <span role="gridcell" className={cn("min-w-0", MID)} title={status?.reason}>
+                    <StatusChip status={status} />
+                  </span>
+                  <span role="gridcell" className="flex min-w-0 items-center justify-end gap-0.5 px-1!">
+                    <span className="flex min-w-0 flex-1 items-center justify-start">{renderAction?.(row, status)}</span>
+                    {actions && <QuickDecideMenu rowNumber={numberOf(row.id)} kind={decision?.kind ?? null} actions={actions} onOpen={() => onSelect(row.id)} />}
                     <button
                       type="button"
-                      aria-label={`Delete row ${numberOf(row.id)} from this review`}
-                      title="Delete from this review — nothing in FlowFi changes (Undo available)"
-                      data-testid="row-delete"
+                      aria-expanded={expanded}
+                      aria-label={`${expanded ? "Collapse" : "Expand"} row ${numberOf(row.id)}`}
+                      title={expanded ? "Close details" : "Details"}
+                      data-testid="row-edit"
                       onClick={(e) => {
                         e.stopPropagation();
-                        onRemove(row.id);
+                        onToggleExpand(row.id);
                       }}
-                      className="grid size-6 place-items-center rounded-md text-muted-foreground hover:bg-danger/10 hover:text-danger focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                      className={cn(
+                        "grid size-6 shrink-0 place-items-center rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                        expanded ? "bg-primary/15 text-primary-accent-text" : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                      )}
                     >
-                      <Trash2 className="size-3.5" />
+                      <PencilLine className="size-3.5" />
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    aria-expanded={expanded}
-                    aria-label={`${expanded ? "Collapse" : "Expand"} row ${numberOf(row.id)}`}
-                    title={expanded ? "Close row details" : "Edit row details"}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onToggleExpand(row.id);
-                    }}
-                    className={cn(
-                      "grid size-6 place-items-center rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-                      expanded ? "bg-primary/15 text-primary-accent-text" : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-                    )}
-                  >
-                    <PencilLine className="size-3.5" />
-                  </button>
-                </span>
-              </div>
-              {inlineId === row.id && renderInline?.(row)}
+                  </span>
+                </div>
+                {inlineId === row.id && renderInline?.(row)}
               </Fragment>
             );
           })}
-          {/* The sheet ends where the statement ends — no filler rows; the rest of the pane stays quiet. */}
           {rows.length > 0 && (
             <p className="px-3 py-1.5 text-[11px] text-muted-foreground/70" data-testid="statement-end">
               End of statement · {rows.length} row{rows.length === 1 ? "" : "s"} shown

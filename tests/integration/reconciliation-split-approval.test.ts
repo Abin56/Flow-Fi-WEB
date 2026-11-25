@@ -461,3 +461,114 @@ describe("partial failure, retry and duplicate imports", () => {
     await w.consistent();
   });
 });
+
+/**
+ * 2026-11-25 — per-row and "Ready rows only" imports (the row's own Import and the global "Import N"). The same real
+ * repositories, rules and invariants as above: a scoped approval writes ONLY its rows, every other row stays exactly as
+ * it is (unresolved or not), and a row imported by itself is later found by its key — never written twice.
+ */
+describe("scoped import (row Import · Import N Ready rows)", () => {
+  const credit = (extra: Partial<RowDecision> = {}): Partial<RowDecision> => ({ kind: "import_new", category: "Salary", creditAs: "income", notOwnTransferAck: true, ...extra });
+  const scoped = async (w: World, s: DraftState, ids: string[]) => runApproval({ session: s, reviewed: (await w.review(s)).snapshot, repeatsAcknowledged: false, deps: w.baseDeps(), scope: new Set(ids) });
+  const seedSalary = async (w: World) =>
+    testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "users", UID, "categories", "cat-salary"), categoryToFirestore(category("cat-salary", "Salary", "income")));
+    });
+
+  it("a split row imported on its own: the account is debited once, Ravi's receivable is recorded once; the other rows are untouched", async () => {
+    const w = await world();
+    const rows = [
+      row("s", "UPI/612345678901/DR/DINNER PALACE/SBIN/dinnerpalace/UPI", 1_000, { referenceNumber: "612345678901" }),
+      row("j", "UPI/627632125367/DR/Jio Pr/YESB/paytm-jio/UPI", 299, { referenceNumber: "627632125367", importDescription: "Jio Mobile Recharge · UPI" }),
+      row("u", "UNDECIDED SHOP", 75),
+    ];
+    // A UPI payment to an unknown payee on a bank account needs the user's "paid to someone else" first (P0 gate).
+    const unconfirmed = w.session(rows, { s: asNew(customSplit(me("600"), person(w.ravi, "400"))), j: asNew() }, w.bank.id);
+    const refused = await scoped(w, unconfirmed, ["s"]);
+    expect(refused.status).toBe("stale");
+    if (refused.status === "stale") expect(refused.reasons[0]!.message).toMatch(/own account or card/);
+    expect(await w.liveTxns()).toHaveLength(0);
+
+    const s = w.session(rows, { s: { ...asNew(customSplit(me("600"), person(w.ravi, "400"))), notOwnTransferAck: true }, j: asNew() }, w.bank.id);
+    const before = await w.state();
+
+    const first = await scoped(w, s, ["s"]);
+    expect(first.status).toBe("complete");
+    if (first.status === "complete") expect(first.outcomes.map((o) => `${o.rowId}:${o.kind}`)).toEqual(["s:imported"]); // only the row asked for
+    expect(await w.balance(w.bank.id)).toBe(before.bank - 1_000); // debited exactly once, for the full amount
+    expect((await w.ledgerOf(w.ravi.id)).map((e) => e.amount)).toEqual([400]); // the receivable, once
+    expect(await w.personBalance(w.ravi.id)).toBe(400);
+    expect(await w.liveTxns()).toHaveLength(1); // the Jio row (Ready) and the undecided row were not written
+    await w.consistent();
+
+    // The same row's Import again (a second click, a refresh): already imported — nothing moves.
+    const afterFirst = await w.state();
+    const again = await scoped(w, s, ["s"]);
+    expect(again.status).toBe("complete");
+    if (again.status === "complete") expect(again.outcomes[0]!.kind).toBe("already_imported");
+    expect(await w.state()).toEqual(afterFirst);
+
+    // Then the Ready rows (the global Import): only Jio — the undecided row never blocks it and is never written.
+    const rest = await scoped(w, s, ["j"]);
+    expect(rest.status).toBe("complete");
+    expect(await w.balance(w.bank.id)).toBe(before.bank - 1_000 - 299);
+    const jio = (await w.liveTxns()).find((t) => t.amount === 299)!;
+    expect(jio.description).toBe("Jio Mobile Recharge · UPI"); // the clean description the user approved
+    expect(jio.notes).toContain("Bank narration: UPI/627632125367/DR/Jio Pr/YESB/paytm-jio/UPI"); // the raw narration + reference kept
+    expect(await w.liveTxns()).toHaveLength(2);
+    expect((await w.ledgerOf(w.ravi.id)).map((e) => e.amount)).toEqual([400]); // the split was not touched again
+    await w.consistent();
+  });
+
+  it("two ₹2,000 UPI credits on the same day with DIFFERENT references import one at a time — no stale stop, each credited once", async () => {
+    const w = await world();
+    await seedSalary(w);
+    const rows = [
+      row("m1", "UPI/627481159639/CR/MOHAN/BKID/mohankoda/UPI", 2_000, { direction: "credit", referenceNumber: "627481159639" }),
+      row("m2", "UPI/664081439342/CR/MOHAN/BKID/mohankoda/UPI", 2_000, { direction: "credit", referenceNumber: "664081439342" }),
+    ];
+    const s = w.session(rows, { m1: credit(), m2: credit() }, w.bank.id);
+    expect((await scoped(w, s, ["m1"])).status).toBe("complete");
+    // Row 1 is now a live FlowFi transaction with the same amount and day — its different reference proves row 2 is another one.
+    const second = await scoped(w, s, ["m2"]);
+    expect(second.status).toBe("complete");
+    expect(await w.balance(w.bank.id)).toBe(10_000 + 4_000);
+    expect(await w.liveTxns()).toHaveLength(2);
+    await w.consistent();
+  });
+
+  it("two identical rows WITHOUT references still need the user's 'separate purchases' even when imported one at a time", async () => {
+    const w = await world();
+    const rows = [row("t1", "TEA STALL", 20), row("t2", "TEA STALL", 20)];
+    const s = w.session(rows, { t1: asNew(), t2: asNew() }, w.bank.id);
+    expect((await scoped(w, s, ["t1"])).status).toBe("complete");
+    const blocked = await scoped(w, s, ["t2"]);
+    expect(blocked.status).toBe("stale");
+    if (blocked.status === "stale") expect(blocked.reasons.map((r) => r.code)).toContain("repeat_unacknowledged");
+    expect(await w.liveTxns()).toHaveLength(1);
+    const acknowledged = await runApproval({ session: s, reviewed: (await w.review(s)).snapshot, repeatsAcknowledged: true, deps: w.baseDeps(), scope: new Set(["t2"]) });
+    expect(acknowledged.status).toBe("complete");
+    expect(await w.balance(w.bank.id)).toBe(10_000 - 40);
+    await w.consistent();
+  });
+
+  it("a double click on a row's Import: the second run is refused while the first is in flight; the money posts once", async () => {
+    const w = await world();
+    const s = w.session([row("p", "DINNER FOR RAVI", 1_000)], { p: asNew(forPerson(w.ravi)) }, w.bank.id);
+    const { snapshot } = await w.review(s);
+    const run = () => runApproval({ session: s, reviewed: snapshot, repeatsAcknowledged: false, deps: w.baseDeps(), scope: new Set(["p"]) });
+    const [a, b] = await Promise.all([run(), run()]);
+    expect([a.status, b.status].sort()).toEqual(["busy", "complete"]);
+    expect(await w.balance(w.bank.id)).toBe(9_000);
+    expect(await w.personBalance(w.ravi.id)).toBe(1_000);
+    await w.consistent();
+  });
+
+  it("a scoped row that is not valid stops the approval — nothing is written", async () => {
+    const w = await world();
+    const s = w.session([row("c", "UPI/627481159639/CR/MOHAN/BKID/mohankoda/UPI", 2_000, { direction: "credit" })], { c: { kind: "import_new", category: "Salary" } }, w.bank.id); // no credit type
+    const result = await scoped(w, s, ["c"]);
+    expect(result.status).toBe("stale");
+    expect(await w.liveTxns()).toHaveLength(0);
+  });
+});

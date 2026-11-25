@@ -20,7 +20,7 @@ import { DRAFT_KEY_PREFIX, buildReconciliationDraft, saveReconciliationDraft } f
 import { APPROVAL_NOW, reconData, reconRow, reconSession, txn } from "../lib/test-fixtures";
 import type { Category } from "@/lib/models/category";
 import type { ReconRow, RowDecision } from "../lib/types";
-import { activeRowId, menuItem, openImportConfirm, pickedRecordId } from "./menu-test-utils";
+import { activeRowId, menuItem, openInlineReview, pickedRecordId, rowStatusOf, setRowCategory } from "./menu-test-utils";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
 
 function setViewport(width: number) {
@@ -224,7 +224,7 @@ describe("live match comparison", () => {
     expect(pickedRecordId()).toBe("t-z2");
     expect(screen.getAllByTestId("inline-compare")).toHaveLength(1); // one detailed comparison at a time
     fireEvent.click(screen.getByTestId("inline-keep-existing"));
-    expect(within(rowEl("r2")).getByTestId("decision-chip").textContent).toBe("Keep existing");
+    expect(within(rowEl("r2")).getByTestId("decision-chip").textContent).toBe("Already recorded");
     expect(JSON.parse(draft()).decisions.r2.linkedRecordId).toBe("t-z2");
     expect(screen.queryByTestId("inline-review")).toBeNull(); // deciding collapses the panel
   });
@@ -242,7 +242,7 @@ describe("Git-style resolution", () => {
     expect(readData).not.toHaveBeenCalled();
   });
 
-  it("Keep both: needs the explicit acknowledgement; same-day repeat rows can each be resolved", () => {
+  it("Keep both: one explicit click in the comparison; same-day repeat rows can each be resolved", () => {
     seed();
     renderStudio();
     select("r4");
@@ -250,50 +250,45 @@ describe("Git-style resolution", () => {
     select("r5");
     expect(rowEl("r5").dataset.state).toBe("conflict");
     expect(resolve("keep_existing").disabled).toBe(true); // one-to-one
-    openImportConfirm();
-    const submit = screen.getByTestId("import-confirm-submit") as HTMLButtonElement;
-    fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: "Food" } });
-    expect(submit.disabled).toBe(true); // category alone is not enough — the acknowledgement is required
-    fireEvent.click(screen.getByRole("checkbox", { name: "These are separate transactions" }));
-    fireEvent.click(submit);
-    expect(within(rowEl("r5")).getByTestId("decision-chip").textContent).toBe("Keep both");
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    openInlineReview("r5");
+    fireEvent.click(screen.getByTestId("inline-keep-both"));
+    expect(JSON.parse(draft()).decisions.r5).toMatchObject({ kind: "import_new", notSameAck: true });
+    // One earlier "Cafe One" is too thin a history to choose for the user — Food is only ranked first; the user picks it.
+    expect(rowStatusOf("r5")).toBe("fix");
+    setRowCategory("r5", "Food");
+    expect(rowStatusOf("r5")).toBe("ready");
     expect(JSON.parse(draft()).decisions.r5).toMatchObject({ kind: "import_new", notSameAck: true, category: "Food" });
   });
 
-  it("Import as transaction: opens the row's editor; a credit must be named refund or income; the acknowledgement is only asked when FlowFi has something similar", () => {
+  it("a credit is never assumed: its type is chosen on the row (or in the editor), then a category — no acknowledgement without a match", () => {
     seed();
     renderStudio();
     select("r7");
-    openImportConfirm();
-    expect(screen.getByTestId("row-editor-panel")).toBeTruthy(); // the editor (date · description · amount · category · notes · owner) is what opened
+    expect(rowStatusOf("r7")).toBe("fix");
+    fireEvent.click(resolve("import")); // "Edit details" opens the row's editor
+    expect(screen.getByTestId("row-editor-panel")).toBeTruthy();
     expect(screen.queryByRole("checkbox", { name: "These are separate transactions" })).toBeNull();
-    fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: "Salary" } });
-    const submit = screen.getByTestId("import-confirm-submit") as HTMLButtonElement;
-    expect(submit.disabled).toBe(true);
-    fireEvent.click(screen.getByRole("radio", { name: "Refund" }));
-    fireEvent.click(submit);
+    fireEvent.click(screen.getByTestId("credit-refund"));
+    expect(JSON.parse(draft()).decisions.r7).toMatchObject({ creditAs: "refund" });
+    fireEvent.click(screen.getByTestId("editor-close"));
+    setRowCategory("r7", "Salary");
+    expect(rowStatusOf("r7")).toBe("ready");
     expect(within(rowEl("r7")).getByTestId("decision-chip").textContent).toBe("Ready");
-    expect(JSON.parse(draft()).decisions.r7).toMatchObject({ kind: "import_new", category: "Salary", creditAs: "refund" });
+    expect(JSON.parse(draft()).decisions.r7).toMatchObject({ category: "Salary", creditAs: "refund" });
   });
 
-  it("the import confirmation works again on the next row after one was submitted (real pointer events)", async () => {
+  it("row choices work one after another with real pointer events (category on one row, credit type on the next)", async () => {
     seed();
     renderStudio();
     const user = userEvent.setup();
-    await user.click(rowEl("r6"));
-    await user.click(within(rowEl("r6")).getByTestId("quick-decide"));
-    await user.click(screen.getByTestId("resolve-import"));
-    await user.click(screen.getByTestId("import-as-transaction"));
-    await user.selectOptions(screen.getByLabelText("Category for import"), "Food");
-    await user.click(screen.getByTestId("import-confirm-submit"));
-    expect(screen.queryByTestId("import-confirm")).toBeNull();
-    expect(rowEl("r6").dataset.decision).toBe("import_new");
-    await waitFor(() => expect(screen.queryByTestId("row-editor-panel")).toBeNull()); // the editor closed after importing
-    await user.click(rowEl("r7"));
-    await user.click(within(rowEl("r7")).getByTestId("quick-decide"));
-    await user.click(screen.getByTestId("resolve-import"));
-    await user.click(screen.getByTestId("import-as-transaction"));
-    expect(screen.getByTestId("import-confirm")).toBeTruthy();
+    await user.selectOptions(within(rowEl("r6")).getByTestId("row-category"), "Food");
+    expect(rowStatusOf("r6")).toBe("ready");
+    await user.click(within(rowEl("r7")).getByTestId("row-credit-type"));
+    await user.click(screen.getByTestId("row-credit-type-refund"));
+    expect(JSON.parse(draft()).decisions.r7).toMatchObject({ creditAs: "refund" });
+    expect(rowStatusOf("r7")).toBe("fix"); // still needs its category
+    expect(within(rowEl("r7")).getByTestId("row-choose-category")).toBeTruthy();
   });
 
   it("Remove from review: the row leaves the list, counts follow, nothing is imported or deleted, and Undo restores it", () => {
@@ -385,7 +380,7 @@ describe("keyboard navigation", () => {
     fireEvent.keyDown(grid, { key: "n" });
     expect(screen.getByTestId("import-as-transaction")).toBeTruthy();
     expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByTestId("editor-close"));
   });
 });
 
@@ -449,7 +444,9 @@ describe("approval regression and zero writes", () => {
       select(id);
       fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "i" });
     }
-    // r6 (Bookstore, nothing similar on the card) is simply Ready.
+    // r6 (Bookstore, nothing similar on the card) needs only its category — then it is simply Ready.
+    expect(within(rowEl("r6")).getByTestId("decision-chip").dataset.status).toBe("fix");
+    setRowCategory("r6", "Food");
     expect(within(rowEl("r6")).getByTestId("decision-chip").dataset.status).toBe("ready");
     expect(readData).not.toHaveBeenCalled();
     expect(creates).not.toHaveBeenCalled();
@@ -475,26 +472,22 @@ describe("approval regression and zero writes", () => {
     } as unknown as TransactionRepository;
     const deps: ApprovalDeps = { readData: vi.fn(async () => DATA), repositories: commitRepositoriesFor(fakeRepo), now: () => APPROVAL_NOW };
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} approvalDeps={deps} />);
-    const importVia = (rowId: string, button: "import_new" | "keep_both", credit?: "Refund") => {
-      select(rowId);
-      openImportConfirm();
-      if (button === "keep_both") fireEvent.click(screen.getByRole("checkbox", { name: "These are separate transactions" }));
-      fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: credit ? "Salary" : "Food" } });
-      if (credit) fireEvent.click(screen.getByRole("radio", { name: credit }));
-      fireEvent.click(screen.getByTestId("import-confirm-submit"));
-    };
     for (const id of ["r1", "r2", "r3", "r4"]) {
       select(id);
       fireEvent.click(resolve("keep_existing"));
     }
-    importVia("r5", "keep_both");
-    importVia("r6", "import_new");
-    importVia("r7", "import_new", "Refund");
+    openInlineReview("r5");
+    fireEvent.click(screen.getByTestId("inline-keep-both"));
+    setRowCategory("r5", "Food");
+    setRowCategory("r6", "Food");
+    fireEvent.click(within(rowEl("r7")).getByTestId("row-credit-type"));
+    fireEvent.click(screen.getByTestId("row-credit-type-refund"));
+    setRowCategory("r7", "Salary");
+    expect(["r5", "r6", "r7"].map(rowStatusOf)).toEqual(["ready", "ready", "ready"]);
     fireEvent.click(screen.getByTestId("open-approval"));
-    const dialog = screen.getByTestId("approval-dialog");
-    await waitFor(() => expect(within(dialog).getByTestId("approval-result")).toBeTruthy());
-    const outcomes = within(dialog).getAllByTestId("approval-outcome").map((e) => `${e.dataset.rowId}:${e.dataset.outcome}`);
-    expect(outcomes).toEqual(expect.arrayContaining(["r5:imported", "r6:imported", "r7:imported", "r1:linked"]));
+    await waitFor(() => expect(rowStatusOf("r7")).toBe("imported"));
+    expect(["r5", "r6", "r7"].map(rowStatusOf)).toEqual(["imported", "imported", "imported"]);
+    expect(rowStatusOf("r1")).toBe("skipped"); // Already recorded — never written
     expect(fakeRepo.createTransaction).toHaveBeenCalledTimes(3);
   });
 });
@@ -524,8 +517,8 @@ describe("select → find possible matches → compare → decide (2026-11-18)",
     const { creates, readData } = renderStudio();
     select("r3"); // ₹1,299.00 vs FlowFi ₹1,299.50 — a possible match
     expect(rowEl("r3").dataset.state).toBe("near_amount");
-    expect(resolve("import").textContent).toMatch(/Import as transaction/);
-    expect(resolve("keep_existing").textContent).toMatch(/Keep existing/);
+    expect(resolve("import").textContent).toMatch(/Edit details/);
+    expect(resolve("keep_existing").textContent).toMatch(/Already recorded/);
     fireEvent.click(resolve("ignore_match"));
     expect(rowEl("r3").dataset.state).toBe("no_match");
     expect(rowEl("r3").dataset.decision).toBe(""); // nothing decided or dismissed — still under review

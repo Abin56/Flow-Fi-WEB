@@ -74,6 +74,8 @@ import { cn } from "@/lib/utils";
 import { DateInput } from "@/components/forms/date-input";
 import { PaymentSheet } from "@/features/loans/components/payment-sheet";
 import { PaymentIntentSwitch, type PaymentIntent } from "@/features/loans/components/payment-intent-switch";
+import { PaymentAwarenessPublisher } from "@/features/loans/components/payment-awareness";
+import type { AwarenessInput } from "@/features/loans/lib/payment-awareness";
 import { useWideBox } from "@/components/finance/use-wide-box";
 import { BulkHistoricalDialog } from "@/features/loans/components/bulk-historical-dialog";
 import { HistoricalPeopleReconcile, useHistoricalReconcile } from "@/features/loans/components/historical-people-reconcile";
@@ -804,20 +806,40 @@ export function RecordPaymentDialog({
     ) : null;
   const intentToolbar = target && (view !== "pay" || next != null) ? <PaymentIntentSwitch value={intentValue} onChange={switchIntent} lent={lent} isLoan={isLoan} singlePaymentLabel={loanDetail && !lent} disabled={modeLocked || saving || success} /> : undefined;
 
+  // Header awareness (display only): the very values above, read — nothing is computed or written for it. See payment-awareness.tsx.
+  const awarenessInput: AwarenessInput | null =
+    open && view !== "payMany"
+      ? {
+          earlier: earlier || view === "past",
+          directPayer: directPayer && earlier,
+          lent,
+          debitsAccount: fundsApply && view === "pay",
+          creditsAccount: lent && needsAccount && !earlier,
+          cardLabel: !needsAccount ? cardLabel : null,
+          account: payingAccount,
+          amount: view === "pay" ? planAmount : null,
+          payerName,
+          success,
+        }
+      : null;
+
   if ((view === "past" || view === "payMany") && target) {
     return (
-      <BulkHistoricalDialog
-        key={view}
-        target={target}
-        open={open}
-        onOpenChange={onOpenChange}
-        mode={view}
-        toolbar={intentToolbar}
-        instant={switched}
-        workspace={loanDetail}
-        onRecordOne={view === "past" ? recordOnePast : undefined}
-        preselectId={view === "past" && (initialView !== "past" || preselectInstallment) ? (preselectInstallment ? (target.installment?.id ?? anchor?.id ?? null) : (anchor?.id ?? null)) : null}
-      />
+      <>
+        <PaymentAwarenessPublisher input={awarenessInput} />
+        <BulkHistoricalDialog
+          key={view}
+          target={target}
+          open={open}
+          onOpenChange={onOpenChange}
+          mode={view}
+          toolbar={intentToolbar}
+          instant={switched}
+          workspace={loanDetail}
+          onRecordOne={view === "past" ? recordOnePast : undefined}
+          preselectId={view === "past" && (initialView !== "past" || preselectInstallment) ? (preselectInstallment ? (target.installment?.id ?? anchor?.id ?? null) : (anchor?.id ?? null)) : null}
+        />
+      </>
     );
   }
 
@@ -1257,6 +1279,8 @@ export function RecordPaymentDialog({
   );
 
   return (
+    <>
+    <PaymentAwarenessPublisher input={awarenessInput} />
     <PaymentSheet
       open={open}
       onOpenChange={onOpenChange}
@@ -1345,6 +1369,7 @@ export function RecordPaymentDialog({
         ))}
       </div>
     </PaymentSheet>
+    </>
   );
 }
 

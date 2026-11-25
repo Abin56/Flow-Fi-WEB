@@ -18,6 +18,7 @@ import { commitRepositoriesFor, type ApprovalDeps } from "../lib/approval-commit
 import { DRAFT_KEY_PREFIX, buildReconciliationDraft, saveReconciliationDraft } from "../lib/reconciliation-draft";
 import { APPROVAL_NOW, reconData, reconRow, reconSession, txn } from "../lib/test-fixtures";
 import type { ReconRow, RowDecision } from "../lib/types";
+import { menuItem, setRowCategory } from "./menu-test-utils";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
 
 beforeAll(() => {
@@ -120,38 +121,42 @@ describe("the four explicit decisions", () => {
     open("g1");
     fireEvent.click(screen.getByTestId("inline-keep-existing"));
     expect(draft().decisions.g1).toMatchObject({ kind: "link", linkedRecordId: "t-groc" });
-    expect(within(rowEl("g1")).getByTestId("decision-chip").textContent).toBe("Keep existing");
+    expect(within(rowEl("g1")).getByTestId("decision-chip").textContent).toBe("Already recorded");
     expect(creates).not.toHaveBeenCalled();
   });
 
-  it("Keep both (Import statement with a possible match): needs the explicit acknowledgement AND a category; FlowFi's record stays untouched", () => {
+  it("Keep both: one explicit click records 'these are separate'; the row then only needs its category; FlowFi's record stays untouched", () => {
+    seed();
+    const { creates } = renderStudio();
+    open("g1");
+    fireEvent.click(screen.getByTestId("inline-keep-both"));
+    expect(draft().decisions.g1).toMatchObject({ kind: "import_new", notSameAck: true });
+    if (rowEl("g1").dataset.status !== "ready") {
+      expect(rowEl("g1").dataset.status).toBe("fix"); // only the category is missing
+      setRowCategory("g1", "Food");
+    }
+    expect(rowEl("g1").dataset.status).toBe("ready");
+    expect(creates).not.toHaveBeenCalled(); // nothing is written until Import
+  });
+
+  it("Import as new sets the shown match aside for this row (Not this one) — the row then imports like any new row", () => {
     seed();
     const { creates } = renderStudio();
     open("g1");
     fireEvent.click(screen.getByTestId("inline-import"));
-    const form = screen.getByTestId("inline-import-form");
-    const submit = within(form).getByTestId("import-confirm-submit") as HTMLButtonElement;
-    expect(submit.disabled).toBe(true);
-    fireEvent.change(within(form).getByLabelText("Category for import"), { target: { value: "Food" } });
-    expect(submit.disabled).toBe(true); // the acknowledgement is still missing
-    fireEvent.click(within(form).getByRole("checkbox", { name: "These are separate transactions" }));
-    expect(submit.disabled).toBe(false);
-    fireEvent.click(submit);
-    expect(draft().decisions.g1).toMatchObject({ kind: "import_new", notSameAck: true, category: "Food" });
-    expect(within(rowEl("g1")).getByTestId("decision-chip").textContent).toBe("Keep both");
-    expect(creates).not.toHaveBeenCalled(); // final approval is the only writer
+    expect(draft().decisions.g1.rejectedRecordIds).toEqual(["t-groc"]);
+    expect(rowEl("g1").dataset.state).toBe("no_match");
+    expect(creates).not.toHaveBeenCalled();
   });
 
-  it("Import statement without a match needs no acknowledgement, only a category", () => {
+  it("a row without a match needs no acknowledgement — only a category, picked right in the row", () => {
     seed();
     renderStudio();
     open("g3");
-    fireEvent.click(screen.getByTestId("inline-import"));
-    const form = screen.getByTestId("inline-import-form");
-    expect(within(form).queryByRole("checkbox", { name: "These are separate transactions" })).toBeNull();
-    fireEvent.change(within(form).getByLabelText("Category for import"), { target: { value: "Food" } });
-    fireEvent.click(within(form).getByTestId("import-confirm-submit"));
-    expect(draft().decisions.g3).toMatchObject({ kind: "import_new", category: "Food" });
+    expect(screen.queryByTestId("inline-keep-both")).toBeNull();
+    setRowCategory("g3", "Food");
+    expect(draft().decisions.g3).toMatchObject({ category: "Food" });
+    expect(rowEl("g3").dataset.status).toBe("ready");
   });
 
   it("Review later leaves the row unresolved and not importable — final approval waits for it", () => {
@@ -170,7 +175,7 @@ describe("the four explicit decisions", () => {
     open("g1");
     fireEvent.click(screen.getByTestId("inline-not-a-match"));
     expect(rowEl("g1").dataset.state).toBe("no_match");
-    expect(rowEl("g1").dataset.decision).toBe("");
+    expect(draft().decisions.g1.kind ?? null).toBeNull(); // nothing decided by the user
     expect(draft().decisions.g1.rejectedRecordIds).toEqual(["t-groc"]);
     fireEvent.click(screen.getByTestId("undo-decision"));
     expect(rowEl("g1").dataset.state).not.toBe("no_match");
@@ -194,8 +199,8 @@ describe("editing a row invalidates a stale decision", () => {
     expect(rowEl("g1").dataset.decision).toBe("link");
     fireEvent.click(screen.getByRole("button", { name: `Expand row ${rowNo("g1")}` }));
     fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "310" } });
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
-    expect(rowEl("g1").dataset.decision).toBe("");
+    fireEvent.click(screen.getByTestId("editor-close"));
+    expect(rowEl("g1").dataset.decision).not.toBe("link"); // (₹310 no longer matches: the row may now simply be Ready)
     expect(draft().decisions.g1?.kind ?? null).toBeNull();
   });
 });
@@ -211,8 +216,8 @@ describe("summary and filters", () => {
     expect(n("rf-skipped")).toBe(1); // g3
     expect(n("rf-duplicate")).toBeGreaterThanOrEqual(1); // g1 vs the ₹300 grocery
     // Every row has exactly one status, so the counts add up to the captured rows.
-    expect(n("rf-duplicate") + n("rf-fix") + n("rf-ready") + n("rf-skipped")).toBe(4);
-    for (const id of ["rf-duplicate", "rf-fix", "rf-ready", "rf-skipped"]) {
+    expect(n("rf-duplicate") + n("rf-fix") + n("rf-ready") + n("rf-imported") + n("rf-skipped")).toBe(4);
+    for (const id of ["rf-duplicate", "rf-fix", "rf-ready", "rf-imported", "rf-skipped"]) {
       const expected = n(id);
       if (expected === 0) continue;
       fireEvent.click(within(strip).getByTestId(id));
@@ -226,15 +231,15 @@ describe("summary and filters", () => {
     fireEvent.click(within(rowEl("g1")).getByRole("button", { name: `Compare row ${rowNo("g1")}` }));
     fireEvent.click(screen.getByTestId("inline-keep-existing"));
     expect(n("rf-duplicate")).toBe(dupBefore - 1);
-    expect(n("rf-skipped")).toBe(2); // Keep existing is a skip of the import
+    expect(n("rf-skipped")).toBe(2); // Already recorded is a skip of the import
   });
 });
 
 describe("delete a captured row", () => {
-  it("the trash button on a row removes it from this review (counts follow, nothing written, Undo restores it)", () => {
+  it("Remove from review (the row's ⋯ menu) takes it out of this review (counts follow, nothing written, Undo restores it)", () => {
     seed();
     const { creates, readData } = renderStudio();
-    fireEvent.click(within(rowEl("g3")).getByTestId("row-delete"));
+    fireEvent.click(menuItem("remove", "g3"));
     expect(screen.getAllByTestId("recon-row").some((r) => r.dataset.rowId === "g3")).toBe(false);
     expect(screen.getAllByTestId("recon-row")).toHaveLength(3);
     expect(draft().rows.find((r: { id: string }) => r.id === "g3").include).toBe(false);

@@ -25,8 +25,17 @@ export function menuItem(id: string, rowId?: string): HTMLButtonElement {
   return screen.getByTestId(`resolve-${id}`) as HTMLButtonElement;
 }
 
-/** Import as transaction: menu → the row's editor → its "Import as transaction" button, which opens the confirmation. */
-export function openImportConfirm(rowId?: string) {
-  fireEvent.click(menuItem("import", rowId));
-  fireEvent.click(screen.getByTestId("import-as-transaction"));
+/** The row's category, picked right in the table (2026-11-25 — no confirmation popover). */
+export function setRowCategory(rowId: string, category: string) {
+  fireEvent.change(within(statementRow(rowId)).getByTestId("row-category"), { target: { value: category } });
 }
+
+/** Opens the inline comparison under a row (its "Possible match" chip). */
+export function openInlineReview(rowId: string) {
+  const row = statementRow(rowId);
+  fireEvent.click(row);
+  fireEvent.click(within(row).getByRole("button", { name: /^Compare row/ }));
+}
+
+/** The row's status (ready · duplicate · fix · imported · skipped · checking). */
+export const rowStatusOf = (rowId: string) => statementRow(rowId).dataset.status;

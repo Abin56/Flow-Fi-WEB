@@ -85,12 +85,18 @@ describe("parser safety — uncertain values are never silently guessed", () => 
     expect(parse("450.00 Dr\t05 Sep\tSWIGGY").rows[0].issues.map((i) => i.code)).toContain("year_assumed");
   });
 
-  it("a wrapped description keeps its merged-lines block in every layout", () => {
-    for (const text of ["05/09/2026 AMAZON PAY\nINDIA PRIVATE 1,299.00", "1,299.00 Dr\t05/09/2026\tAMAZON PAY\nINDIA PRIVATE"]) {
-      const rows = parse(text).rows;
-      expect(rows.length).toBeGreaterThan(0);
-      expect(rows.some((r) => blocking(r).includes("merged_lines") || r.amount == null || r.date == null)).toBe(true);
-    }
+  it("an amount pulled from a following line keeps its merged-lines block", () => {
+    const rows = parse("05/09/2026 AMAZON PAY\nINDIA PRIVATE 1,299.00").rows;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.some((r) => blocking(r).includes("merged_lines") || r.amount == null || r.date == null)).toBe(true);
+  });
+
+  it("a narration wrapped onto an amount-free line is joined with a note, not a blocking check (2026-11-25)", () => {
+    const [row] = parse("1,299.00 Dr\t05/09/2026\tAMAZON PAY\nINDIA PRIVATE").rows;
+    expect(row).toBeDefined();
+    expect(blocking(row!)).not.toContain("merged_lines");
+    expect(row!.amount).toBe(1299);
+    expect(row!.notes.some((n) => /continues on the next line/.test(n))).toBe(true);
   });
 });
 

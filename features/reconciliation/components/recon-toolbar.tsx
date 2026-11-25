@@ -18,7 +18,7 @@ export type ReconSort = "statement" | "date" | "amount" | "attention";
 export const FILTER_LABEL: Record<ReconFilter, string> = {
   all: "All",
   ready: "Ready",
-  duplicate: "Possible duplicates",
+  duplicate: "Possible match",
   fix: "Fix required",
   skipped: "Skipped",
   open: "Pending",
@@ -35,10 +35,11 @@ export const FILTER_LABEL: Record<ReconFilter, string> = {
 };
 
 export const FILTER_HINT: Partial<Record<ReconFilter, string>> = {
-  ready: "Valid rows that will be imported.",
-  duplicate: "FlowFi may already have these — decide for each: keep existing, import as new, or keep both.",
+  ready: "Valid rows that can be imported now.",
+  duplicate: "FlowFi may already have these — decide for each: already recorded, import as new, keep both or review later.",
   fix: "A value is missing or unreliable (or a rule blocks it) — fix it, or skip the row.",
-  skipped: "Not imported: skipped, kept existing, left for the Inbox or already imported.",
+  skipped: "Not imported: skipped, already recorded, left for the Inbox, or recorded elsewhere.",
+  imported: "Already FlowFi transactions — imported from this statement.",
   open: "Rows without a final decision yet — including “Review later”.",
   possible: "Any row with a FlowFi transaction that could be the same one (exact or similar).",
   decided: "Rows you have made a valid decision for.",

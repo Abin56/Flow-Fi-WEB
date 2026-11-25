@@ -16,7 +16,7 @@ import type { ReconciliationData } from "../lib/analyze";
 import { DRAFT_KEY_PREFIX, buildReconciliationDraft, saveReconciliationDraft } from "../lib/reconciliation-draft";
 import { APPROVAL_NOW, reconData, reconRow, reconSession, txn } from "../lib/test-fixtures";
 import type { ReconRow, RowDecision } from "../lib/types";
-import { menuItem, openImportConfirm } from "./menu-test-utils";
+import { menuItem, setRowCategory } from "./menu-test-utils";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
 
 function setViewport(width: number) {
@@ -81,7 +81,6 @@ const states = () => Object.fromEntries(screen.getAllByTestId("recon-row").map((
 /** Desktop: the full comparison (MatchPanel) opens in a drawer (key O); phones show it in the row's sheet. */
 const panel = () => screen.queryByTestId("match-panel") ?? (fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "o" }), fireEvent.click(screen.getByTestId("inline-full-details")), screen.getByTestId("match-panel"));
 const select = (id: string) => fireEvent.click(rowEl(id));
-const count = (key: string) => screen.getByTestId(`readiness-${key}`).querySelector("dd")!.textContent;
 
 function pick(name: string) {
   fireEvent.click(screen.getByTestId("account-picker"));
@@ -122,7 +121,7 @@ describe("statement account bar", () => {
     fireEvent.click(menuItem("keep_existing"));
     select("r2");
     fireEvent.keyDown(screen.getByRole("grid", { name: "Statement rows" }), { key: "i" });
-    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Keep existing");
+    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Already recorded");
 
     pick("SBI Savings");
     const dialog = screen.getByRole("dialog");
@@ -131,7 +130,9 @@ describe("statement account bar", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Change account" }));
 
     expect(screen.getByTestId("selected-account").textContent).toMatch(/SBI Savings/);
-    expect(within(rowEl("r1")).getByTestId("decision-chip").dataset.pending).toBe("true"); // stale "already recorded" withdrawn
+    // The stale "already recorded" is withdrawn; with nothing similar on the bank and Swiggy → Food, the row is simply Ready.
+    expect(rowEl("r1").dataset.decision).not.toBe("link");
+    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Ready");
     expect(within(rowEl("r2")).getByText("Skipped")).toBeTruthy(); // skip doesn't depend on the account
     expect(states()).toMatchObject({ r1: "no_match", r2: "exact_candidate" }); // the card's Swiggy no longer counts
   });
@@ -173,21 +174,23 @@ describe("duplicate comparison", () => {
 });
 
 describe("readiness summary", () => {
-  it("counts each outcome separately and never claims everything will be imported", () => {
+  it("counts each status separately, imports only the Ready rows, and never claims everything will be imported", () => {
     seed("acc-card", { r1: { kind: "link", linkedRecordId: "t-sw" }, r2: { kind: "ignore" }, r3: { kind: "import_new", category: "Food" } });
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
-    expect([count("included"), count("already-recorded"), count("add-new"), count("skipped"), count("undecided"), count("blocked")]).toEqual(["4", "1", "1", "1", "1", "1"]);
-    expect(screen.getByTestId("approval-hint").textContent).toMatch(/1 row still needs a decision/);
-    expect((screen.getByTestId("open-approval") as HTMLButtonElement).disabled).toBe(true);
+    const n = (key: string) => screen.getByTestId(`status-count-${key}`).querySelector("dd")!.textContent;
+    expect([n("ready"), n("fix"), n("skipped")]).toEqual(["1", "1", "3"]); // r3 · r5 (closed bill) · r1 kept, r2 skipped, r4 excluded
+    const button = screen.getByTestId("open-approval") as HTMLButtonElement;
+    expect(button.textContent).toBe("Import 1 transaction");
+    expect(button.disabled).toBe(false); // the blocked row no longer holds the Ready one back
+    expect(screen.getByTestId("approval-hint").textContent).toMatch(/the 1 row still to resolve stay/);
 
     select("r5"); // in a closed card bill → can't be added; skipping it resolves the review
     expect(within(panel()).getByTestId("import-blocked").textContent).toMatch(/Can't import/);
     fireEvent.click(within(panel()).getByRole("button", { name: "Skip this transaction" }));
     const hint = screen.getByTestId("approval-hint").textContent!;
-    expect(hint).toMatch(/Import adds 1 new transaction;/);
-    expect(hint).toMatch(/kept-existing, skipped and Inbox rows are never written/);
+    expect(hint).toMatch(/Import adds the 1 Ready row as new transactions\./);
     expect(hint).not.toMatch(/\ball\b/i);
-    expect(count("blocked")).toBe("0");
+    expect(n("skipped")).toBe("4");
   });
 });
 
@@ -203,15 +206,12 @@ describe("draft-only editor and zero writes", () => {
     fireEvent.change(screen.getByLabelText("Notes"), { target: { value: "checked with receipt" } });
     expect(sessionStorage.getItem(`${DRAFT_KEY_PREFIX}u1`)).toContain("checked with receipt");
     // The row sheet is modal: close it before going back to the dock.
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByTestId("editor-close"));
 
     // A full review pass — decisions, comparison, account change — still writes nothing.
     select("r1");
     fireEvent.click(menuItem("keep_existing"));
-    select("r3");
-    openImportConfirm();
-    fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: "Food" } });
-    fireEvent.click(screen.getByTestId("import-confirm-submit"));
+    setRowCategory("r3", "Food");
     expect(within(rowEl("r3")).getByTestId("decision-chip").textContent).toBe("Ready");
     pick("SBI Savings");
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Change account" }));

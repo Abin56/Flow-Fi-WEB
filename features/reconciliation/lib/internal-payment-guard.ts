@@ -18,6 +18,7 @@
 
 import type { Account } from "@/lib/models/account";
 import type { CreditCardProfile } from "@/lib/models/credit-card";
+import { merchantCategoryNames } from "@/lib/services/description-analyzer";
 import type { ReconRow } from "./types";
 
 /** One of the user's own accounts or cards other than the statement account — name and masked last four only. */
@@ -94,6 +95,10 @@ export function internalPaymentVerdict(row: Pick<ReconRow, "description" | "dire
   if (SELF_TRANSFER.some((re) => re.test(text))) {
     return { block: "This looks like a transfer between your own accounts. Record it from Transfer, or Keep existing — it can't be imported as an expense or income.", confirm: null };
   }
+  // A recognised everyday merchant with a known business (Jio, Swiggy, KSEB, IRCTC… — the shared analyzer's list, the
+  // ones that imply a category) can't be the user's own account or card, so its UPI line needs no confirmation.
+  // Merchants without one (Amazon — possibly a wallet top-up) still ask.
+  if (AMBIGUOUS_RAIL.test(text) && merchantCategoryNames(text) != null) return NONE;
   if (AMBIGUOUS_RAIL.test(text)) {
     return {
       block: null,

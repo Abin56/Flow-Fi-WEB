@@ -372,6 +372,15 @@ export function merchantCategoryNames(raw: string): string[] | null {
   return analyzeCached(raw).merchant?.categories ?? null;
 }
 
+/**
+ * The purpose words the recognised merchant understands (Jio → RECHARGE, PREPAID, PLAN, POSTPAID, BILL…), upper-case;
+ * empty when no merchant is recognised or it has none. Read-only — lets a caller expand a bank's truncated word
+ * ("Jio Pr" → PREPAID) only when it is an unambiguous prefix of one of THESE words, never a guess.
+ */
+export function merchantPurposeWords(raw: string): string[] {
+  return Object.keys(analyzeCached(raw).merchant?.byWord ?? {});
+}
+
 export interface MerchantCompletion {
   text: string;
   /** Category names the merchant implies (see `merchantCategoryNames`). */

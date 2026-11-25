@@ -558,6 +558,8 @@ interface DraftRow {
   cells: string[] | null;
   /** Built from more than one source line (wrapped description / amount on the next line). */
   mergedLines: boolean;
+  /** An amount came from a continuation line (not the dated line) — the only merge that could hide a second transaction. */
+  amountFromContinuation?: boolean;
   /** The text the amount tokens' indexes refer to (the line after its date). */
   rest: string;
   /** Source field order, when read with certainty (see `CaptureRow.sourceOrder`). */
@@ -692,6 +694,7 @@ export function parsePastedStatement(input: string, options: ParseOptions = {}):
       draft.description += " " + trimmed.slice(0, amountTokens[0]?.index ?? trimmed.length);
       draft.amountTokens = draft.amountTokens.concat(amountTokens);
       draft.mergedLines = true;
+      if (amountTokens.length > 0) draft.amountFromContinuation = true;
       return;
     }
 
@@ -768,8 +771,12 @@ function finalizeRow(
       });
     }
   }
-  if (draft.mergedLines && draft.amountTokens.length > 0) {
+  // Only a merge that pulled an AMOUNT from a following line can hide a second transaction. A dated line that already
+  // carries its amount, followed by amount-free lines, is the bank wrapping its own narration — said once, never a check.
+  if (draft.mergedLines && draft.amountTokens.length > 0 && draft.amountFromContinuation) {
     issues.push({ code: "merged_lines", message: `Built from ${draft.sourceLines.length} lines — check the extra line isn't a separate transaction.`, blocking: true });
+  } else if (draft.mergedLines && draft.amountTokens.length > 0) {
+    notes.push(`The description continues on ${draft.sourceLines.length - 1 === 1 ? "the next line" : `the next ${draft.sourceLines.length - 1} lines`} (no amount there) — joined into this row.`);
   }
 
   // --- description / kind / reference ---

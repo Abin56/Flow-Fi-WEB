@@ -41,11 +41,11 @@ afterEach(() => {
 });
 
 const ROWS: ReconRow[] = [
-  reconRow({ id: "a", day: [2026, 10, 24], description: "SHOP ONE", amount: 120 }),
+  reconRow({ id: "a", day: [2026, 10, 24], description: "SWIGGY BANGALORE", amount: 120 }), // Swiggy → the user's Food & Dining: Ready by default
   reconRow({ id: "b", day: [2026, 10, 24], description: "ZOMATO", amount: 300 }),
 ];
 const DATA: ReconciliationData = reconData({
-  categories: [{ id: "c-other", name: "Other", type: "both", isActive: true, deletedAt: null } as unknown as Category],
+  categories: [{ id: "c-other", name: "Other", type: "both", isActive: true, deletedAt: null } as unknown as Category, { id: "c-food", name: "Food & Dining", type: "expense", isActive: true, deletedAt: null } as unknown as Category],
   transactions: [txn({ id: "t-z", amount: 300, description: "Zomato", dateTime: new Date(2026, 9, 24, 13) })],
 });
 const sync = (over: Partial<RecordsSync> = {}): RecordsSync => ({ loading: [], failed: [], retry: vi.fn(), ...over });
@@ -141,7 +141,7 @@ describe("edits and decisions survive loading", () => {
     fireEvent.click(screen.getByRole("button", { name: "Expand row 1" }));
     fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "300" } }); // row a becomes ₹300 — same as the Zomato in FlowFi
     fireEvent.blur(screen.getByLabelText("Amount"));
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByTestId("editor-close"));
     expect(rowEl("a").textContent).toMatch(/300\.00/);
     view.rerender(<ReconciliationWorkspace uid="u1" data={DATA} sync={sync()} />);
     expect(rowEl("a").textContent).toMatch(/300\.00/); // the edit was not discarded by the arrival of the records

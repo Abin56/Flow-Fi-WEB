@@ -174,13 +174,14 @@ export function DecisionChip({ kind, keepBoth = false }: { kind: DecisionKind | 
 }
 
 /**
- * The row's single status — Ready · Possible duplicate · Fix required · Skipped (see lib/row-status.ts). Quiet text
+ * The row's single status — Ready · Possible match · Fix required · Imported · Skipped (see lib/row-status.ts). Quiet text
  * with a small mark, like the rest of the sheet. `data-pending` stays true for the two states that still need the user.
  */
 const STATUS_STYLE: Record<RowStatusKind, { tone: Tone; icon: LucideIcon }> = {
   ready: { tone: "success", icon: CheckCircle2 },
   duplicate: { tone: "primary", icon: Copy },
   fix: { tone: "warning", icon: TriangleAlert },
+  imported: { tone: "success", icon: CheckCircle2 },
   skipped: { tone: "muted", icon: EyeOff },
 };
 

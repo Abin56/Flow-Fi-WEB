@@ -7,7 +7,13 @@
  *
  *   candidates (a compact pick list when there is more than one)
  *   → ONE side-by-side comparison for the picked candidate (differences highlighted)
- *   → the explicit decision: Keep existing · Import statement (keep both) · Review later · Not a match
+ *   → the explicit decision (2026-11-25):
+ *       Already recorded  keep FlowFi's transaction, don't import this row
+ *       Import as new     it's a different transaction: the candidates shown are set aside ("not this one") for this row
+ *       Keep both         they are separate although alike: the candidate stays, and this row is imported too
+ *       Review later      leave it open
+ *     The decision is kept in the draft (closing the panel or the editor doesn't lose it). A material edit to the row's
+ *     date, amount or Debit/Credit withdraws it, and the final import re-checks FlowFi before writing.
  *
  * Everything is a view over the matcher's own evidence (`existingEntries`, `fieldDiffs`, `resolutionOptions`) — no new
  * matching rule lives here. Every button only records a draft decision; the final approval is still the only writer,
@@ -15,15 +21,12 @@
  */
 
 import Link from "next/link";
-import { useState } from "react";
-import { CheckCircle2, CircleHelp, Link2, Plus, X } from "lucide-react";
+import { CheckCircle2, CircleHelp, Copy, Link2, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatCurrencyPrecise } from "@/lib/format";
-import type { Category } from "@/lib/models/category";
-import { ownTransferConfirmFor, type RowGateContext } from "../lib/decisions";
+import type { RowGateContext } from "../lib/decisions";
 import { evidenceTags, fieldDiffs, resolutionOptions, REPLACE_UNSUPPORTED, type ExistingEntry } from "../lib/merge-studio";
 import type { ReconRow, RowDecision, RowMatch } from "../lib/types";
-import { ImportConfirm, type ImportPatch } from "./import-confirm";
 import { Mark, formatRowDate } from "./recon-ui";
 
 export interface InlineMatchReviewProps {
@@ -40,11 +43,12 @@ export interface InlineMatchReviewProps {
   accountName: (accountId: string) => string;
   statementAccount: string;
   captureSource: "text" | "ocr";
-  categories: Category[];
   /** Draft decisions — never writes. */
   onKeepExisting: (recordId: string) => void;
-  onKeepBoth: (patch: ImportPatch) => void;
-  onImportNew: (patch: ImportPatch) => void;
+  /** Both are real: keep the candidate, import this row too (the explicit "these are separate" acknowledgement). */
+  onKeepBoth: () => void;
+  /** A different transaction: set the shown candidates aside for this row, then it imports like any new row. */
+  onImportNew: () => void;
   onReviewLater: () => void;
   onNotThisOne: (recordId: string) => void;
   onClearDecision: () => void;
@@ -57,17 +61,14 @@ const ROLE_LABEL: Record<ExistingEntry["role"], string> = { imported: "Imported 
 
 export function InlineMatchReview(p: InlineMatchReviewProps) {
   const { row, match, decision, entries } = p;
-  const [importing, setImporting] = useState(false);
   const target = entries.find((e) => e.record.id === p.targetId) ?? entries[0] ?? null;
   const options = resolutionOptions({ row, match, decision, gate: p.gate, target });
   const option = (id: string) => options.find((o) => o.id === id)!;
   const keepExisting = option("keep_existing");
   const keepBoth = option("keep_both");
-  const importNew = option("import_new");
   const reviewLater = option("review_later");
   const possible = entries.length > 0;
-  /** With a possible match the import is "Keep both" (needs the explicit acknowledgement); without one it is a plain import. */
-  const importOption = possible ? keepBoth : importNew;
+  const keepBothOn = decision.kind === "import_new" && decision.notSameAck;
   const diffs = target
     ? fieldDiffs({ row, record: target.record, candidate: target.candidate, statementAccount: p.statementAccount, existingAccount: p.accountName(target.record.accountId ?? ""), captureSource: p.captureSource })
     : [];
@@ -179,28 +180,39 @@ export function InlineMatchReview(p: InlineMatchReviewProps) {
           <button
             type="button"
             disabled={!keepExisting.enabled}
-            title={keepExisting.reason ?? "It is already in FlowFi — this row won't be imported."}
+            title={keepExisting.reason ?? "FlowFi already has it — keep that one and don't import this row."}
             onClick={() => target && p.onKeepExisting(target.record.id)}
             aria-pressed={keepExisting.selected}
             data-testid="inline-keep-existing"
             className={cn(BTN, keepExisting.selected ? BTN_ON : BTN_PRIMARY)}
           >
-            <Link2 className="size-3.5" aria-hidden /> Keep existing
+            <Link2 className="size-3.5" aria-hidden /> Already recorded
           </button>
         )}
-        {!imported && (
-          <button
-            type="button"
-            disabled={!importOption.enabled}
-            title={importOption.reason ?? (possible ? "Both are real: FlowFi's transaction stays, and this statement row is added too." : "Add this statement row as a new transaction.")}
-            onClick={() => setImporting((v) => !v)}
-            aria-expanded={importing}
-            aria-pressed={importOption.selected}
-            data-testid="inline-import"
-            className={cn(BTN, importOption.selected ? BTN_ON : BTN_SECONDARY)}
-          >
-            <Plus className="size-3.5" aria-hidden /> {possible ? "Import statement (keep both)" : "Import statement"}
-          </button>
+        {!imported && possible && (
+          <>
+            <button
+              type="button"
+              disabled={!row.include}
+              title="A different transaction — FlowFi's suggestion is set aside for this row (Not this one), and the row imports like any new row once it is complete."
+              onClick={p.onImportNew}
+              data-testid="inline-import"
+              className={cn(BTN, BTN_SECONDARY)}
+            >
+              <Plus className="size-3.5" aria-hidden /> Import as new
+            </button>
+            <button
+              type="button"
+              disabled={!keepBoth.enabled}
+              title={keepBoth.reason ?? "They are separate transactions although alike — FlowFi's stays, and this row is imported too."}
+              onClick={p.onKeepBoth}
+              aria-pressed={keepBothOn}
+              data-testid="inline-keep-both"
+              className={cn(BTN, keepBothOn ? BTN_ON : BTN_SECONDARY)}
+            >
+              <Copy className="size-3.5" aria-hidden /> Keep both
+            </button>
+          </>
         )}
         <button type="button" disabled={!reviewLater.enabled} title="Leave it unresolved — final approval waits for it." onClick={p.onReviewLater} aria-pressed={reviewLater.selected} data-testid="inline-review-later" className={cn(BTN, reviewLater.selected ? BTN_ON : BTN_SECONDARY)}>
           <CircleHelp className="size-3.5" aria-hidden /> Review later
@@ -217,7 +229,7 @@ export function InlineMatchReview(p: InlineMatchReviewProps) {
         )}
         {decided && (
           <span className="inline-flex items-center gap-1 text-[11px] text-success" data-testid="inline-decided">
-            <CheckCircle2 className="size-3.5" aria-hidden /> Decision recorded — nothing is written until final approval.
+            <CheckCircle2 className="size-3.5" aria-hidden /> Decision kept — nothing is written until you import.
           </span>
         )}
         <Link href="/transactions" title={REPLACE_UNSUPPORTED} className="ml-auto text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
@@ -225,24 +237,6 @@ export function InlineMatchReview(p: InlineMatchReviewProps) {
         </Link>
       </div>
 
-      {importing && !imported && (
-        <div className="mt-2 max-w-md rounded-md border border-border/70 bg-card p-3" data-testid="inline-import-form">
-          <ImportConfirm
-            row={row}
-            decision={decision}
-            categories={p.categories}
-            needsAck={possible}
-            ownTransferConfirm={ownTransferConfirmFor(row, p.gate)}
-            label={possible ? "Keep both — import statement" : "Import statement"}
-            onCancel={() => setImporting(false)}
-            onConfirm={(patch) => {
-              setImporting(false);
-              if (possible) p.onKeepBoth(patch);
-              else p.onImportNew(patch);
-            }}
-          />
-        </div>
-      )}
       <p className="sr-only">{formatRowDate(row.date)}</p>
     </div>
   );

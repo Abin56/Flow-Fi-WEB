@@ -15,7 +15,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { Account } from "@/lib/models/account";
 import type { ReconciliationData } from "../lib/analyze";
-import { runApproval, takeSnapshot, classifyDuplicateWarnings, type ApprovalDeps, type ApprovalRunResult, type ApprovalSnapshot, type StaleReason } from "../lib/approval-commit";
+import { runApproval, takeSnapshot, classifyDuplicateWarnings, type ApprovalDeps, type ApprovalRunResult, type ApprovalSnapshot, type RowOutcome, type StaleReason } from "../lib/approval-commit";
 import { changedEvidence, stagedRecordsForImport, type ApprovalPlan, type PlanRow } from "../lib/approval-plan";
 import type { DraftState } from "../lib/reconciliation-draft";
 
@@ -32,9 +32,15 @@ export interface ApprovalInputs {
   dataReady: boolean;
   /** Test seam; the app builds its own from the signed-in user. */
   deps?: ApprovalDeps;
+  /**
+   * A one-click import (row Import / global Import N) that finished with every chosen row imported: the screen shows a
+   * compact summary instead of the result dialog. Not called for a partial run, a stale review or an unavailable server
+   * - those keep the dialog, with the reasons and Retry.
+   */
+  onComplete?: (outcomes: RowOutcome[]) => void;
 }
 
-export function useReconciliationApproval({ uid, session, plan, account, liveData, dataReady, deps }: ApprovalInputs) {
+export function useReconciliationApproval({ uid, session, plan, account, liveData, dataReady, deps, onComplete }: ApprovalInputs) {
   const [stage, setStage] = useState<ApprovalStage>("closed");
   const [snapshot, setSnapshot] = useState<ApprovalSnapshot | null>(null);
   const [confirmed, setConfirmed] = useState(true);
@@ -47,8 +53,17 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
   const [staleReasons, setStaleReasons] = useState<StaleReason[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const busyRef = useRef(false);
+  /** The rows the current / last one-click import covers - a retry or "Try again" re-runs exactly these (null = whole review). */
+  const scopeRef = useRef<string[] | null>(null);
+  /** The same scope, for rendering (the ref is what the click path reads synchronously). */
+  const [scope, setScope] = useState<string[] | null>(null);
+  /** Rows whose import is running right now (the row's own spinner; a second click is ignored). */
+  const [running, setRunning] = useState<string[]>([]);
 
+  // 2026-11-25: importing no longer waits for EVERY row to be resolved - each import covers the rows that are Ready (or
+  // one row), and the rest stay in the review. The whole-review summary (open) keeps its old rule.
   const canOpen = dataReady && !!uid && !!session && !!plan && !!account && plan.complete;
+  const canImport = dataReady && !!uid && !!session && !!plan && !!account && plan.counts.newImports > 0;
 
   const take = useCallback(() => {
     if (!session || !plan || !account) return null;
@@ -57,6 +72,8 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
 
   const open = useCallback(() => {
     if (!canOpen || busyRef.current) return;
+    scopeRef.current = null;
+    setScope(null);
     const next = take();
     if (!next) return;
     setSnapshot(next);
@@ -95,28 +112,37 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
   // Rows that look like repeats of each other in this very import — the user must say they're separate purchases.
   const repeatRowIds = useMemo(() => {
     if (stage !== "review" || !snapshot || !session || !plan || !session.accountId) return [] as string[];
-    const importIds = new Set(plan.rows.filter((r) => r.status === "import").map((r) => r.rowId));
+    const importIds = new Set(plan.rows.filter((r) => r.status === "import" && (scope == null || scope.includes(r.rowId))).map((r) => r.rowId));
     const staged = stagedRecordsForImport(session.rows, session.decisions, importIds);
     const rowNumber = (rowId: string) => session.rows.findIndex((r) => r.id === rowId) + 1;
     return classifyDuplicateWarnings(staged, liveData, session.accountId, snapshot.sessionId, snapshot, session, rowNumber).repeatRowIds;
-  }, [stage, snapshot, session, plan, liveData]);
+  }, [stage, snapshot, session, plan, liveData, scope]);
 
   // The Import button is the user's explicit confirmation (2026-11-24) — there is no separate "I confirm" tick any more.
   // What stays: the repeated-rows acknowledgement, and the server re-check inside `runApproval`.
-  const canApprove = stage === "review" && !!plan && plan.complete && plan.counts.newImports > 0 && !liveChanged && (repeatRowIds.length === 0 || repeatsAck);
+  const scopedImports = plan ? plan.rows.filter((r) => r.status === "import" && (scope == null || scope.includes(r.rowId))).length : 0;
+  const canApprove = stage === "review" && !!plan && (direct ? scopedImports > 0 : plan.complete && plan.counts.newImports > 0) && !liveChanged && (repeatRowIds.length === 0 || repeatsAck);
 
   /** Runs the approval for `reviewed` (the snapshot the user is importing). Ignored while one is already running. */
   const run = useCallback(
     async (reviewed: ApprovalSnapshot, acknowledged: boolean) => {
       if (busyRef.current || !session || !uid) return;
       busyRef.current = true;
+      const scope = scopeRef.current;
       setRowsAtApproval(plan?.rows ?? []);
+      setRunning(scope ?? plan?.rows.filter((r) => r.status === "import").map((r) => r.rowId) ?? []);
       setStage("checking");
       try {
         const approvalDeps = deps ?? (await import("../lib/approval-app-deps")).createApprovalDeps(uid);
-        const outcome = await runApproval({ session, reviewed, repeatsAcknowledged: acknowledged, deps: approvalDeps, onStage: setStage });
+        const outcome = await runApproval({ session, reviewed, repeatsAcknowledged: acknowledged, deps: approvalDeps, onStage: setStage, scope: scope ? new Set(scope) : null });
         switch (outcome.status) {
           case "complete":
+            setResult(outcome);
+            if (scope && onComplete) {
+              onComplete(outcome.outcomes);
+              setStage("closed");
+            } else setStage("result");
+            break;
           case "partial":
             setResult(outcome);
             setStage("result");
@@ -138,9 +164,10 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
         setStage("unavailable");
       } finally {
         busyRef.current = false;
+        setRunning([]);
       }
     },
-    [session, uid, deps, plan],
+    [session, uid, deps, plan, onComplete],
   );
 
   /**
@@ -148,8 +175,17 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
    * re-read, evidence diff, duplicate checks and keyed writes all still run inside `runApproval`). The summary dialog only
    * appears when the user's own acknowledgement is genuinely needed (identical rows in this import) or FlowFi moved.
    */
-  const importNow = useCallback(async () => {
-    if (!canOpen || busyRef.current || !session || !plan || plan.counts.newImports === 0) return;
+  const importNow = useCallback(async (rowIds?: string[]) => {
+    if (busyRef.current || !session || !plan || !canImport) return;
+    // A fresh click names its rows; "Try again" / "Retry" (no argument) re-runs the rows of the last one-click import -
+    // rows that landed are "already imported" by then, so only the failed ones are written.
+    if (rowIds) {
+      scopeRef.current = rowIds;
+      setScope(rowIds);
+    }
+    const scope = scopeRef.current;
+    const ready = plan.rows.filter((r) => r.status === "import" && (scope == null || scope.includes(r.rowId)));
+    if (ready.length === 0) return;
     const next = take();
     if (!next) return;
     setSnapshot(next);
@@ -159,7 +195,7 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
     setStaleReasons([]);
     setMessage(null);
     setDirect(true);
-    const importIds = new Set(plan.rows.filter((r) => r.status === "import").map((r) => r.rowId));
+    const importIds = new Set(ready.map((r) => r.rowId));
     const staged = stagedRecordsForImport(session.rows, session.decisions, importIds);
     const rowNumber = (rowId: string) => session.rows.findIndex((r) => r.id === rowId) + 1;
     const repeats = session.accountId ? classifyDuplicateWarnings(staged, liveData, session.accountId, next.sessionId, next, session, rowNumber).repeatRowIds : [];
@@ -168,14 +204,14 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
       return;
     }
     await run(next, false);
-  }, [canOpen, session, plan, take, liveData, run]);
+  }, [canImport, session, plan, take, liveData, run]);
 
   const approve = useCallback(async () => {
     if (!canApprove || !snapshot) return;
     await run(snapshot, repeatsAck);
   }, [canApprove, snapshot, repeatsAck, run]);
 
-  return { stage, open, close, refresh, approve, importNow, direct, canOpen, canApprove, confirmed, setConfirmed, repeatsAck, setRepeatsAck, repeatRowIds, liveChanged, result, rowsAtApproval, staleReasons, message, isBusy: stage === "checking" || stage === "importing" };
+  return { stage, open, close, refresh, approve, importNow, direct, canOpen, canImport, running, canApprove, confirmed, setConfirmed, repeatsAck, setRepeatsAck, repeatRowIds, liveChanged, result, rowsAtApproval, staleReasons, message, isBusy: stage === "checking" || stage === "importing" };
 }
 
 export type ReconciliationApproval = ReturnType<typeof useReconciliationApproval>;

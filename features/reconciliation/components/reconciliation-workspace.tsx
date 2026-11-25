@@ -26,8 +26,7 @@ import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/finance/confirm-dialog";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { SHEET_BUTTON, TransactionSheet } from "@/components/finance/transaction-sheet";
-import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
+import { TransactionSheet } from "@/components/finance/transaction-sheet";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { isComplete, openIssues, reviewTotals, type ReviewTotals } from "@/features/smart-capture/lib/capture-review";
@@ -39,7 +38,10 @@ import { sourceLabel, type RecordsSync } from "../hooks/use-reconciliation-data"
 import { consumePendingHandoff, declinePendingHandoff, getHandoffState, releaseReconciliationScreenshot, screenshotFor, subscribeHandoff } from "../lib/capture-handoff";
 import { buildCycleResolver } from "../lib/card-cycle-status";
 import { applyBulkLink, attentionFieldOf, bulkLinkEligible, decisionErrors, decisionFor, importBlockReasons, ownTransferConfirmFor, rejectCandidate, reviewSummary, rowCheckLabel, setDecision, valueIssues, type RowGateContext } from "../lib/decisions";
-import { bulkImportPlan, merchantCategoryIndex } from "../lib/bulk-import";
+import { merchantCategoryIndex } from "../lib/bulk-import";
+import { buildDescriptionHistory } from "@/lib/services/description-analyzer";
+import { buildCategoryHistory } from "@/lib/services/category-intelligence";
+import { effectiveDescription, intelForRows } from "../lib/row-intelligence";
 import { diffDecisions, pushHistory, undoLast, type HistoryEntry } from "../lib/decision-history";
 import { calendarDayIndex } from "../lib/amounts-and-days";
 import {
@@ -59,23 +61,23 @@ import type { MatchState, ReconRow, RowDecision, RowMatch } from "../lib/types";
 import { ApprovalDialog } from "./approval-dialog";
 import { InlineMatchReview } from "./inline-match-review";
 import { MobileExistingList, MobileSheetSwitch, type MobileTab } from "./recon-mobile-compare";
-import { ImportConfirm, type ImportPatch } from "./import-confirm";
 import { MatchPanel } from "./match-panel";
 import type { QuickAction } from "./recon-decision-menu";
 import { ReconAccountBar, type AccountOption, type AccountSuggestionView } from "./recon-header";
-import type { RowAccountHint } from "./recon-table";
+import type { RowAccountHint, RowCategoryView } from "./recon-table";
+import { RowAction } from "./recon-row-action";
 import { ReconIntake } from "./recon-intake";
 import { ReconMobileList } from "./recon-mobile-list";
-import { categoriesForDirection, ReconRowEditor, ReconRowSheet } from "./recon-row-editor";
-import { BulkImportDialog, Count, Figure, ReviewImportSummary, type SummaryCounts } from "./review-import-summary";
+import { categoriesForDirection, creditChoicePatch, ReconRowEditor, ReconRowSheet, type CreditChoice } from "./recon-row-editor";
+import { Count, Figure, ReviewImportSummary, type SummaryCounts } from "./review-import-summary";
 import { autoReadyDecisions, withAutoReady } from "../lib/auto-ready";
-import { rowStatus, type RowStatus } from "../lib/row-status";
+import { rowStatus, type RowStatus, type StatusCounts } from "../lib/row-status";
 import { ReviewToolbar } from "./review-toolbar";
 import { ReconTable } from "./recon-table";
 import { ReconToolbar, type ReconFilter, type ReconSort } from "./recon-toolbar";
 import { toast } from "@/store/toast-store";
 import { readSelectedRow, selectionKey, writeSelectedRow } from "../lib/selected-row";
-import { DECISION_META, KEEP_BOTH_LABEL, SHEET_TITLE_BAR, STATE_META, accountIdentity, accountLabel, decisionShort, pendingLabelFor } from "./recon-ui";
+import { DECISION_META, KEEP_BOTH_LABEL, SHEET_TITLE_BAR, STATE_META, accountIdentity, accountLabel } from "./recon-ui";
 
 export type { ReconciliationData };
 
@@ -127,11 +129,11 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   /** The row's editor sheet (desktop). It always shows the selected row, so moving the selection moves it too. */
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
+  /** Rows imported in this tab — shown as Imported at once, before FlowFi's live data catches up (view only). */
+  const [justImported, setJustImported] = useState<ReadonlySet<string>>(() => new Set());
   /** The row most recently removed from the review (so Z / Undo can put it back); any later decision supersedes it. */
   const [lastRemoved, setLastRemoved] = useState<string | null>(null);
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
-  const [bulkImportOpen, setBulkImportOpen] = useState(false);
   const [lastBulk, setLastBulk] = useState<{ id: string; count: number } | null>(null);
   const [pendingAccount, setPendingAccount] = useState<string | null>(null);
   const [discardOpen, setDiscardOpen] = useState(false);
@@ -250,13 +252,24 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   /** The user's own decisions (what is saved in the draft). */
   const userDecisions = useMemo(() => session?.decisions ?? {}, [session]);
   const categoryIndex = useMemo(() => merchantCategoryIndex(data.transactions, data.categories), [data.transactions, data.categories]);
+  // Description + category intelligence (row-intelligence.ts): one pass per review, histories built once per snapshot.
+  const descriptionHistory = useMemo(() => buildDescriptionHistory(data.transactions), [data.transactions]);
+  const categoryHistory = useMemo(() => buildCategoryHistory(data.transactions), [data.transactions]);
+  const intel = useMemo(
+    () => intelForRows(rows, { categories: data.categories, descriptionHistory, categoryHistory, merchantIndex: categoryIndex }),
+    [rows, data.categories, descriptionHistory, categoryHistory, categoryIndex],
+  );
+  const descriptionOf = useCallback((row: ReconRow) => {
+    const text = effectiveDescription(row, intel.get(row.id));
+    return { text, auto: !row.importDescription?.trim() && text !== row.description };
+  }, [intel]);
   // Card bills decide the closed-bill rule only; until they have loaded no row is called Ready (or imported).
   const billsState = account?.type === "card" ? (sync.bills ?? "ready") : "ready";
   const statusReady = matchStatus === "ready" && billsState === "ready";
   /** Clean rows with no possible match are Ready by default — derived, never saved; an explicit decision always wins. */
   const autoDecisions = useMemo(
-    () => (session && accountId && statusReady ? autoReadyDecisions({ rows, matches, decisions: userDecisions, gate, categoryIndex, categories: data.categories }) : {}),
-    [session, accountId, statusReady, rows, matches, userDecisions, gate, categoryIndex, data.categories],
+    () => (session && accountId && statusReady ? autoReadyDecisions({ rows, matches, decisions: userDecisions, gate, intel }) : {}),
+    [session, accountId, statusReady, rows, matches, userDecisions, gate, intel],
   );
   const decisions = useMemo(() => withAutoReady(userDecisions, autoDecisions), [userDecisions, autoDecisions]);
   /** Removes the derived default rows from a decisions map before it is saved, so only the user's own choices are stored. */
@@ -265,12 +278,23 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     for (const k of Object.keys(autoDecisions)) if (out[k] === autoDecisions[k]) delete out[k];
     return out;
   };
-  const approvalSession = useMemo(() => (session ? { ...session, decisions } : null), [session, decisions]);
+  // The approval imports exactly what the table shows: the effective decisions, and each row's shown description baked in
+  // as its import description (the bank narration itself stays the row's description, for matching and the notes).
+  const approvalSession = useMemo(
+    () => (session ? { ...session, decisions, rows: session.rows.map((r) => { const text = effectiveDescription(r, intel.get(r.id)); return text !== r.description ? { ...r, importDescription: text } : r; }) } : null),
+    [session, decisions, intel],
+  );
   const numberOf = useCallback((rowId: string) => rows.findIndex((r) => r.id === rowId) + 1, [rows]);
   const summary = useMemo(() => (session && statusReady ? reviewSummary(rows, matches, decisions, gate) : null), [session, statusReady, rows, matches, decisions, gate]);
   const readiness = useMemo(() => (session && statusReady ? readinessCounts(rows, matches, decisions, gate) : null), [session, statusReady, rows, matches, decisions, gate]);
   const plan = useMemo(() => (session && accountId && statusReady ? buildApprovalPlan({ rows, matches, decisions, gate }) : null), [session, accountId, statusReady, rows, matches, decisions, gate]);
-  const approval = useReconciliationApproval({ uid, session: approvalSession, plan, account, liveData: data, dataReady: statusReady, deps: approvalDeps });
+  const [importSummary, setImportSummary] = useState<{ imported: number; at: number } | null>(null);
+  const onImported = useCallback((outcomes: { rowId: string; kind: string }[]) => {
+    const done = outcomes.filter((o) => o.kind === "imported" || o.kind === "already_imported").map((o) => o.rowId);
+    setJustImported((prev) => new Set([...prev, ...done]));
+    setImportSummary({ imported: done.length, at: Date.now() });
+  }, []);
+  const approval = useReconciliationApproval({ uid, session: approvalSession, plan, account, liveData: data, dataReady: statusReady, deps: approvalDeps, onComplete: onImported });
   const period = useMemo(() => {
     const dates = rows.filter((r) => r.include && r.date).map((r) => r.date!.getTime());
     return dates.length ? { from: new Date(Math.min(...dates)), to: new Date(Math.max(...dates)) } : null;
@@ -280,11 +304,13 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   const statusFor = useCallback(
     (row: ReconRow): RowStatus | null => {
       if (matchStatus !== "ready") return null;
+      // Imported in this tab: Imported at once — FlowFi's live data confirms it moments later (already_imported).
+      if (justImported.has(row.id) && matches.get(row.id)?.state !== "already_imported") return { kind: "imported", label: "Imported", reason: "Imported just now.", next: null };
       const st = rowStatus(row, matches.get(row.id), decisions, gate(row));
       // Ready / Possible duplicate / Fix required could still change with the card bills; "skipped" cannot.
       return statusReady || st?.kind === "skipped" ? st : null;
     },
-    [matchStatus, statusReady, matches, decisions, gate],
+    [matchStatus, statusReady, matches, decisions, gate, justImported],
   );
 
   const filterOf = useCallback(
@@ -314,7 +340,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
       }
       const st = statusFor(row);
       if (st) out.push(st.kind);
-      return out;
+      return [...new Set(out)];
     },
     [matches, decisions, gate, statusFor],
   );
@@ -329,18 +355,26 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     }).length;
     return { included: included.length, possibleDuplicates, toCheck: included.filter((r) => rowCheckLabel(r) != null).length, willImport: readiness?.proposedNew ?? 0 };
   }, [rows, matches, readiness]);
-  const bulkPlan = useMemo(
-    () => (session && accountId && matchStatus === "ready" ? bulkImportPlan(rows, matches, decisions, gate, categoryIndex) : { rows: [], creditsLeft: 0 }),
-    [session, accountId, matchStatus, rows, matches, decisions, gate, categoryIndex],
-  );
-  const rowsById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
-  const expenseCategoryNames = useMemo(() => categoriesForDirection(data.categories, "debit").map((c) => c.name), [data.categories]);
 
   const counts = useMemo(() => {
     const c = { all: 0, ready: 0, duplicate: 0, fix: 0, skipped: 0, open: 0, possible: 0, exact: 0, near: 0, multiple: 0, no_match: 0, in_inbox: 0, conflict: 0, imported: 0, decided: 0, excluded: 0 } satisfies Record<ReconFilter, number>;
     for (const row of rows) for (const f of filterOf(row)) c[f]++;
     return c;
   }, [rows, filterOf]);
+
+  const statusTotals: StatusCounts = useMemo(() => ({ captured: rows.length, ready: counts.ready, duplicate: counts.duplicate, fix: counts.fix, imported: counts.imported, skipped: counts.skipped }), [rows.length, counts]);
+  // After a one-click import: ONE compact line — "2 imported · 1 skipped · 1 needs attention" — instead of a dialog.
+  const totalsRef = useRef(statusTotals);
+  useEffect(() => {
+    totalsRef.current = statusTotals;
+  });
+  useEffect(() => {
+    if (!importSummary) return;
+    const t = totalsRef.current;
+    const attention = t.duplicate + t.fix;
+    const parts = [`${importSummary.imported} imported`, `${t.skipped} skipped`, `${attention} need${attention === 1 ? "s" : ""} attention`];
+    toast.success(parts.join(" · "), attention > 0 ? "The rest stay here — fix them and import later." : "Every row in this statement is handled.");
+  }, [importSummary]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase().replace(/[,₹\s]/g, "");
@@ -484,12 +518,12 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   // ---- draft decisions, with Undo ----
   const remember = (label: string, next: Record<string, RowDecision>, rowIds: string[]) => {
     setLastRemoved(null);
-    setHistory((h) => pushHistory(h, { id: `h_${Date.now()}_${h.length}`, label, changes: diffDecisions(decisions, next, rowIds) }));
+    setHistory((h) => pushHistory(h, { id: `h_${Date.now()}_${h.length}`, label, changes: diffDecisions(userDecisions, next, rowIds) }));
     setUndoNotice(null);
   };
   /** Every decision made on this screen goes through here: one draft change, remembered for Undo. Never a write. */
   const decide = (rowId: string, patch: Partial<RowDecision>, label?: string) => {
-    remember(label ?? `${patch.kind ? DECISION_META[patch.kind].short : "Change"} · row ${numberOf(rowId)}`, setDecision(decisions, rowId, patch), [rowId]);
+    remember(label ?? `${patch.kind ? DECISION_META[patch.kind].short : "Change"} · row ${numberOf(rowId)}`, setDecision(userDecisions, rowId, patch), [rowId]);
     s.decide(rowId, patch);
     if (patch.kind !== undefined) setInlineId((id) => (id === rowId ? null : id));
     if (patch.kind && autoNext && isDesktop && rowId === activeId && !inspectorOpen && !label?.startsWith("Details")) advanceAfter(rowId, patch.kind);
@@ -526,7 +560,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     setSelectedId(rowId);
   };
   const reject = (rowId: string, recordId: string) => {
-    remember(`Not this one · row ${numberOf(rowId)}`, rejectCandidate(decisions, rowId, recordId), [rowId]);
+    remember(`Not this one · row ${numberOf(rowId)}`, rejectCandidate(userDecisions, rowId, recordId), [rowId]);
     s.reject(rowId, recordId);
   };
   const undo = () => {
@@ -534,7 +568,8 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
       restoreToReview(lastRemoved);
       return;
     }
-    const result = undoLast(history, decisions);
+    // Undo works on the user's OWN decisions — the derived Ready defaults are recomputed, never "restored".
+    const result = undoLast(history, userDecisions);
     if (!result.entry) return;
     setHistory(result.stack);
     if (result.restored > 0) s.replaceDecisions(userOnly(result.decisions));
@@ -562,7 +597,15 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   // ---- actions ----
   const select = (rowId: string) => setSelectedId(rowId);
   /** Close the row's sheet (Done, X, Escape, a click outside it). Edits are already in the draft — nothing to discard. */
-  const closeRowSheet = () => setInspectorOpen(false);
+  const closeRowSheet = () => {
+    setInspectorOpen(false);
+    // Back to the same row: it stays selected, scrolled into view, and the grid has the keyboard again.
+    window.setTimeout(() => {
+      const id = activeId;
+      if (id) document.getElementById(`recon-row-${id}`)?.scrollIntoView?.({ block: "nearest" });
+      gridRef.current?.focus({ preventScroll: true });
+    }, 220);
+  };
   /**
    * A row's warning / "Fix details": open its editor, and once the sheet has slid in put the cursor on the value that needs
    * attention (date, amount or Debit/Credit). View state only — the editor's own confirm rules are unchanged.
@@ -614,8 +657,6 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
 
   /** Keep existing: the row is already in FlowFi as `recordId` — a draft Link, nothing written, ever. */
   const keepExisting = (row: ReconRow, recordId: string) => decide(row.id, { kind: "link", linkedRecordId: recordId }, `Keep existing · row ${numberOf(row.id)}`);
-  const importRow = (row: ReconRow, match: RowMatch, patch: ImportPatch) =>
-    decide(row.id, { kind: "import_new", notSameAck: patch.notSameAck, category: patch.category, creditAs: patch.creditAs, notOwnTransferAck: patch.notOwnTransferAck }, `${hasPossibleMatch(match) ? KEEP_BOTH_LABEL : "Import new"} · row ${numberOf(row.id)}`);
 
   /** The FlowFi record "Keep existing" would use for `row`: the picked one for the row in focus, else the matcher's own target. */
   const keepTargetFor = (row: ReconRow, match: RowMatch): string | null => {
@@ -638,8 +679,8 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
         return;
       }
       case "import_new": {
-        // A financial rule (closed bill, own-card payment…) blocks Import outright — a value that needs fixing does not: it is fixed in the editor.
-        if (importBlockReasons(row, match, gate(row)).some((r) => !valueIssues(row).includes(r))) return;
+        // A financial rule (closed bill, own-card payment…) blocks Import itself — but the details always open (that is where a date gets fixed).
+        if (!isDesktop && importBlockReasons(row, match, gate(row)).some((r) => !valueIssues(row).includes(r))) return;
         // Import as transaction: the row's editor opens (date, description, amount, category, notes, Mine / Someone else's /
         // Split) with the import button in its footer — the decision itself is only recorded from there.
         if (isDesktop) {
@@ -669,21 +710,23 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     if (!match || match.state === "excluded" || !row.include) return null;
     const decision = decisionFor(decisions, row.id);
     const out: QuickAction[] = [];
-    if (keepTargetFor(row, match)) out.push({ id: "keep_existing", kind: "link", label: "Keep existing", hint: "It's already in FlowFi, so this row won't be imported.", onSelect: () => quickDecide(row, match, "link") });
+    if (keepTargetFor(row, match)) out.push({ id: "keep_existing", kind: "link", label: "Already recorded", hint: "It's already in FlowFi, so this row won't be imported.", onSelect: () => quickDecide(row, match, "link") });
     else if (match.candidates.length > 0 || match.pendingSms.length > 0) {
       // Shown but disabled, with the reason — never a silent gap (the picked transaction can't be this row, or is already kept).
       const reason = row.id === activeId && target?.viewOnly ? target.viewOnly.message : "No FlowFi transaction is left to keep for this row (it may already be kept by another row).";
-      out.push({ id: "keep_existing", kind: "link", label: "Keep existing", hint: reason, disabledReason: reason, onSelect: () => undefined });
+      out.push({ id: "keep_existing", kind: "link", label: "Already recorded", hint: reason, disabledReason: reason, onSelect: () => undefined });
     }
     // Import is blocked only by financial rules (closed bill…); a value that needs fixing is fixed in the editor it opens.
     const ruleBlock = importBlockReasons(row, match, gate(row)).filter((r) => !valueIssues(row).includes(r))[0];
-    out.push({ id: "import", kind: "import_new", label: "Import as transaction", hint: "Opens the details to confirm, then adds it when you give final approval.", disabledReason: ruleBlock, onSelect: () => quickDecide(row, match, "import_new") });
+    // Editing is never blocked — changing the date is how a row in a closed bill gets out of it. The rule itself is shown on the row.
+    out.push({ id: "import", kind: "import_new", label: "Edit details", hint: ruleBlock ?? "Description, category, date, amount, who it's for.", onSelect: () => quickDecide(row, match, "import_new") });
+    out.push({ id: "skip", kind: "ignore", label: "Skip — don't import", hint: "Leaves this row out of the import. Nothing in FlowFi changes.", onSelect: () => quickDecide(row, match, "ignore") });
     out.push({ id: "review_later", kind: "investigate", label: DECISION_META.investigate.label, hint: "Keeps the row open — final approval waits for it.", onSelect: () => quickDecide(row, match, "investigate") });
     if (match.candidates.length > 0 && keepTargetFor(row, match)) {
       out.push({ id: "ignore_match", kind: null, label: "Not a match — ignore", hint: "Drops this FlowFi suggestion for the row. Nothing is imported or deleted.", onSelect: () => ignoreSuggestion(row) });
     }
     if (match.pendingSms.length > 0) out.push({ id: "inbox", kind: "inbox", label: DECISION_META.inbox.label, hint: "Leaves it to the Transaction Inbox.", onSelect: () => decide(row.id, { kind: "inbox" }) });
-    out.push({ id: "details", kind: null, label: "View details", hint: "Edit the captured values, or compare with FlowFi.", onSelect: () => (isDesktop ? fixRow(row.id) : compare(row.id)) });
+    if (!isDesktop) out.push({ id: "details", kind: null, label: "View details", hint: "Edit the captured values, or compare with FlowFi.", onSelect: () => compare(row.id) });
     if (decision.kind) out.push({ id: "clear", kind: null, label: "Clear my decision", hint: "Puts the row back to needs review.", onSelect: () => quickDecide(row, match, "clear") });
     out.push({ id: "remove", kind: null, label: "Remove from review", hint: "Takes this row out of the review. Nothing in FlowFi changes.", danger: true, onSelect: () => removeFromReview(row) });
     return out;
@@ -696,14 +739,49 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     setRecordPick(null);
   };
 
-  /** Records the bulk "Import new" as ordinary draft decisions — one Undo step. */
-  function applyBulkImport(choices: { rowId: string; category: string }[]) {
-    let next = decisions;
-    for (const c of choices) next = setDecision(next, c.rowId, { kind: "import_new", category: c.category, notSameAck: false });
-    remember(`Import new · ${choices.length} row${choices.length === 1 ? "" : "s"}`, next, choices.map((c) => c.rowId));
-    s.replaceDecisions(userOnly(next));
-    setBulkImportOpen(false);
-  }
+  // ---- row-level choices (draft only, undoable) and the row's own Import (the explicit write) ----
+  /** The category picked in the row or the editor. Never decides the row on its own — a clean row becomes Ready from it. */
+  const setCategory = (rowId: string, category: string | null) => decide(rowId, { category }, `Details · row ${numberOf(rowId)}`);
+  const setCreditType = (rowId: string, choice: CreditChoice) => decide(rowId, creditChoicePatch(choice, decisionFor(userDecisions, rowId)), `Details · row ${numberOf(rowId)}`);
+  const setRecipient = (rowId: string, choice: "someone_else" | "own_account") =>
+    decide(rowId, choice === "own_account" ? { kind: "ignore", skipReason: "transfer" } : { notOwnTransferAck: true }, `Details · row ${numberOf(rowId)}`);
+  /** Points at the row's category picker (or opens the details where the column is hidden). */
+  const focusCategory = (rowId: string) => {
+    setSelectedId(rowId);
+    const select = document.querySelector<HTMLSelectElement>(`#recon-row-${CSS.escape(rowId)} [data-testid="row-category"]`);
+    if (select && select.offsetParent !== null) {
+      select.focus();
+      try {
+        (select as HTMLSelectElement & { showPicker?: () => void }).showPicker?.();
+      } catch {
+        /* showPicker needs a user gesture in some browsers — focus is enough */
+      }
+    } else fixRow(rowId);
+  };
+  /** Import exactly these rows now — every server re-check still runs, and each row is written once through its own key. */
+  const importRows = (rowIds: string[]) => {
+    if (rowIds.length === 0 || approval.isBusy) return;
+    void approval.importNow(rowIds);
+  };
+  // Rows imported in this tab are done even before FlowFi's live data shows them (their keyed write would only replay).
+  const readyRowIds = useMemo(() => (plan ? plan.rows.filter((r) => r.status === "import" && !justImported.has(r.rowId)).map((r) => r.rowId) : []), [plan, justImported]);
+  /** Inline review: "Keep both" — separate transactions although alike. The row keeps its category / credit choices. */
+  const keepBoth = (row: ReconRow) => {
+    const current = decisionFor(decisions, row.id);
+    decide(row.id, { kind: "import_new", notSameAck: true, category: current.category ?? intel.get(row.id)?.category ?? null }, `${KEEP_BOTH_LABEL} · row ${numberOf(row.id)}`);
+  };
+  /** Inline review: "Import as new" — every candidate shown is set aside for this row ("Not this one"), in one Undo step. */
+  const importAsNew = (row: ReconRow) => {
+    const match = matches.get(row.id);
+    if (!match) return;
+    const ids = [...match.candidates, ...match.pendingSms].map((c) => c.recordId);
+    let next = userDecisions;
+    for (const id of ids) next = rejectCandidate(next, row.id, id);
+    remember(`Import as new · row ${numberOf(row.id)}`, next, [row.id]);
+    for (const id of ids) s.reject(row.id, id);
+    setRecordPick(null);
+    setInlineId(null);
+  };
 
   /** The next row whose captured values still need a check or a correction — opened in its editor. */
   function goToNextCheck() {
@@ -823,7 +901,6 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
   const inlineFor = (row: ReconRow) => {
     const match = matches.get(row.id);
     if (!match || !accountId || row.id !== activeId) return null;
-    const keepBoth = (patch: ImportPatch) => importRow(row, match, patch);
     return (
       <InlineMatchReview
         row={row}
@@ -837,10 +914,9 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
         accountName={accountName}
         statementAccount={statementAccount}
         captureSource={session?.source ?? "text"}
-        categories={data.categories}
         onKeepExisting={(recordId) => keepExisting(row, recordId)}
-        onKeepBoth={keepBoth}
-        onImportNew={keepBoth}
+        onKeepBoth={() => keepBoth(row)}
+        onImportNew={() => importAsNew(row)}
         onReviewLater={() => quickDecide(row, match, "investigate")}
         onNotThisOne={(recordId) => {
           reject(row.id, recordId);
@@ -884,58 +960,20 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
       row={row}
       decision={decisionFor(decisions, row.id)}
       categories={data.categories}
+      intel={intel.get(row.id)}
+      shownDescription={descriptionOf(row)}
+      onImportDescription={(text) => s.setImportDescription(row.id, text)}
       onPatch={(patch) => s.patchRow(row.id, patch)}
       onConfirmRow={() => s.confirmRow(row.id)}
       onConfirmField={(field) => s.confirmField(row.id, field)}
       onDecide={(patch) => decide(row.id, patch, `Details · row ${numberOf(row.id)}`)}
+      ownTransferConfirm={ownTransferConfirmFor(row, gate(row))}
+      status={statusFor(row)}
       accountLabel={accountId ? accountName(accountId) : null}
       screenshot={screenshot}
       people={data.people}
     />
   );
-  /**
-   * "Import as transaction" in the row editor's footer: the confirmation (acknowledgement when FlowFi has something similar,
-   * category, refund/income, own-account check) opens from the button. It records the same draft decision as before — the
-   * final approval is still the only thing that writes a transaction (keyed, exactly once).
-   */
-  const importSlotFor = (row: ReconRow, match: RowMatch) => {
-    const blocked = importBlockReasons(row, match, gate(row))[0] ?? null;
-    const decision = decisionFor(decisions, row.id);
-    const done = decision.kind === "import_new";
-    return (
-      <Popover open={importOpen && !blocked} onOpenChange={(o) => setImportOpen(o && !blocked)}>
-        <PopoverAnchor asChild>
-          <button
-            type="button"
-            disabled={!!blocked}
-            onClick={() => setImportOpen(true)}
-            title={blocked ?? "Record this row as a new transaction (added at final approval)"}
-            data-testid="import-as-transaction"
-            className={cn(SHEET_BUTTON.primary, "h-9 px-4 disabled:opacity-50")}
-          >
-            {done ? "✓ Importing as new" : "Import as transaction"}
-          </button>
-        </PopoverAnchor>
-        <PopoverContent side="top" align="end" className="z-[80] w-80 p-3">
-          <ImportConfirm
-            row={row}
-            decision={decision}
-            categories={data.categories}
-            needsAck={hasPossibleMatch(match)}
-            ownTransferConfirm={ownTransferConfirmFor(row, gate(row))}
-            label="Import as transaction"
-            onCancel={() => setImportOpen(false)}
-            onConfirm={(patch) => {
-              setImportOpen(false);
-              importRow(row, match, patch);
-              setInspectorOpen(false);
-              if (autoNext) advanceAfter(row.id, "import_new");
-            }}
-          />
-        </PopoverContent>
-      </Popover>
-    );
-  };
   /** The desktop editor sheet for the selected row. Its arrows move the selection, like J/K — they never decide or save. */
   const rowSheetFor = (row: ReconRow) => {
     const at = visible.findIndex((r) => r.id === row.id);
@@ -944,21 +982,62 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
       if (next) setSelectedId(next.id);
     };
     const match = matches.get(row.id);
-    const kind = decisionFor(decisions, row.id).kind;
+    const status = statusFor(row);
+    const offerImport = !!match && match.state !== "excluded" && match.state !== "already_imported" && row.include && status?.kind !== "skipped" && status?.kind !== "imported";
     return (
       <ReconRowSheet
         open={inspectorOpen}
         row={row}
         rowNumber={numberOf(row.id)}
-        stateLabel={!match ? null : kind ? decisionShort(kind, hasPossibleMatch(match)) : pendingLabelFor(hasPossibleMatch(match))}
+        title={descriptionOf(row).text}
+        status={status}
         nav={at >= 0 ? { position: at + 1, total: visible.length, onPrev: at > 0 ? () => go(-1) : undefined, onNext: at < visible.length - 1 ? () => go(1) : undefined } : undefined}
         onClose={closeRowSheet}
-        onCompare={match ? compareFromSheet : undefined}
-        importSlot={match && match.state !== "excluded" && row.include ? importSlotFor(row, match) : undefined}
+        onReviewMatch={match && hasPossibleMatch(match) && status?.kind !== "imported" ? () => compareFromSheet(row.id) : undefined}
+        importAction={
+          offerImport
+            ? {
+                enabled: status?.kind === "ready" && approval.canImport && !approval.isBusy,
+                running: approval.running.includes(row.id),
+                reason: status?.kind === "ready" ? null : (status?.reason ?? "Not ready to import yet."),
+                onImport: () => importRows([row.id]),
+              }
+            : null
+        }
       >
         {editorFor(row)}
       </ReconRowSheet>
     );
+  };
+  const renderAction = (row: ReconRow, status: RowStatus | null) => (
+    <RowAction
+      row={row}
+      rowNumber={numberOf(row.id)}
+      status={status}
+      running={approval.running.includes(row.id)}
+      busy={approval.isBusy || !approval.canImport}
+      h={{
+        onImport: () => importRows([row.id]),
+        onReview: () => compare(row.id),
+        onFix: () => fixRow(row.id),
+        onCategory: () => focusCategory(row.id),
+        onCreditType: (choice) => setCreditType(row.id, choice),
+        onRecipient: (choice) => setRecipient(row.id, choice),
+      }}
+    />
+  );
+  const categoryOf = (row: ReconRow): RowCategoryView | null => {
+    if (!row.direction) return null;
+    const status = statusFor(row);
+    const d = decisionFor(decisions, row.id);
+    const rowIntel = intel.get(row.id);
+    const value = d.category ?? rowIntel?.category ?? null;
+    const ranked = rowIntel?.ranked ?? [];
+    const names = categoriesForDirection(data.categories, row.direction).map((c) => c.name);
+    const options = [...ranked.filter((n) => names.includes(n)), ...names.filter((n) => !ranked.includes(n))];
+    if (value && !options.includes(value)) options.unshift(value);
+    const done = status?.kind === "imported" || status?.kind === "skipped";
+    return { value, auto: d.category == null && rowIntel?.category != null, options, editable: !done && row.include, needed: status?.next === "category" };
   };
 
   const noticeText =
@@ -1010,8 +1089,8 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
           onSort={setSort}
           summary={session && accountId && matchStatus === "ready" ? summaryCounts : null}
           onNextCheck={goToNextCheck}
-          bulkImportCount={bulkPlan.rows.length}
-          onBulkImport={() => setBulkImportOpen(true)}
+          bulkImportCount={0}
+          onBulkImport={() => undefined}
           bulkLinkCount={bulkPairs.length}
           onBulkLink={() => setBulkConfirmOpen(true)}
           undoBulkCount={lastBulk?.count ?? 0}
@@ -1166,7 +1245,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
           )}
 
           {!isDesktop && accountId && matchStatus === "ready" && (
-            <ReviewImportSummary totals={moneyTotals} counts={summaryCounts} bulkCount={bulkPlan.rows.length} onBulk={() => setBulkImportOpen(true)} onNextCheck={goToNextCheck} />
+            <ReviewImportSummary totals={moneyTotals} counts={summaryCounts} bulkCount={0} onBulk={() => undefined} onNextCheck={goToNextCheck} />
           )}
 
           {undoNotice && (
@@ -1199,7 +1278,6 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
                       setInlineId(null);
                       setInspectorOpen(!closing);
                     }}
-                    onFixRow={fixRow}
                     onCompare={compare}
                     pendingLabel={pendingLabel}
                     onKeyDown={onGridKeyDown}
@@ -1207,10 +1285,10 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
                     accountMissing={accountMissing && recordsReady}
                     accountHintOf={accountHintOf}
                     statusOf={statusFor}
-                    onRemove={(id) => {
-                      const r = rowsById.get(id);
-                      if (r) removeFromReview(r);
-                    }}
+                    descriptionOf={descriptionOf}
+                    categoryOf={categoryOf}
+                    onCategory={setCategory}
+                    renderAction={renderAction}
                     inlineId={inlineOpenId}
                     renderInline={inlineFor}
                     header={
@@ -1260,9 +1338,11 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
             rowsCount={rows.length}
             summary={summary}
             readiness={readiness}
-            canApprove={approval.canOpen}
+            canApprove={approval.canImport && !approval.isBusy}
+            importCount={readyRowIds.length}
+            statusCounts={statusReady ? statusTotals : null}
             hasAccount={!!accountId}
-            onApprove={() => void approval.importNow()}
+            onApprove={() => importRows(readyRowIds)}
             onNextOpen={goToNextOpen}
             onUndo={undo}
             undoLabel={lastRemoved ? `Removed row ${numberOf(lastRemoved)}` : (history.at(-1)?.label ?? null)}
@@ -1336,15 +1416,6 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
           resetView();
         }}
       />
-      <BulkImportDialog
-        open={bulkImportOpen}
-        onOpenChange={setBulkImportOpen}
-        plan={bulkPlan}
-        rowsById={rowsById}
-        numberOf={numberOf}
-        categoryNames={expenseCategoryNames}
-        onApply={applyBulkImport}
-      />
       <ConfirmDialog
         open={bulkConfirmOpen}
         onOpenChange={setBulkConfirmOpen}
@@ -1353,7 +1424,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
         confirmLabel="Keep existing"
         onConfirm={() => {
           const id = `bulk_${Date.now()}`;
-          remember(`Keep existing · ${bulkPairs.length} exact`, applyBulkLink(decisions, bulkPairs, id), bulkPairs.map((pair) => pair.rowId));
+          remember(`Keep existing · ${bulkPairs.length} exact`, applyBulkLink(userDecisions, bulkPairs, id), bulkPairs.map((pair) => pair.rowId));
           s.bulkLink(bulkPairs, id);
           setLastBulk({ id, count: bulkPairs.length });
           setBulkConfirmOpen(false);
@@ -1427,6 +1498,8 @@ function ReadinessBar({
   summary,
   readiness,
   canApprove,
+  importCount = 0,
+  statusCounts = null,
   hasAccount,
   onApprove,
   onNextOpen,
@@ -1446,6 +1519,10 @@ function ReadinessBar({
   summary: ReturnType<typeof reviewSummary> | null;
   readiness: ReadinessCounts | null;
   canApprove: boolean;
+  /** Rows Ready to import right now (the global Import's count). */
+  importCount?: number;
+  /** One status per row — the bar's counts (Ready · Possible match · Fix required · Imported · Skipped). */
+  statusCounts?: StatusCounts | null;
   hasAccount: boolean;
   onApprove: () => void;
   onNextOpen: () => void;
@@ -1467,17 +1544,17 @@ function ReadinessBar({
         { key: "blocked", label: "Blocked by rules", value: readiness.blocked, tone: readiness.blocked > 0 ? "danger" : "default" },
       ]
     : [];
-  const open = readiness ? readiness.unresolved + readiness.reviewLater : 0;
+  const open = statusCounts ? statusCounts.duplicate + statusCounts.fix : readiness ? readiness.unresolved + readiness.reviewLater : 0;
   const percent = summary && summary.included > 0 ? Math.round((summary.decided / summary.included) * 100) : 0;
   const hint = !hasAccount
     ? "Choose the statement account to start checking for matches. Nothing is written while you review."
     : !readiness
       ? "Waiting for your FlowFi records before anything can be compared."
-      : canApprove
-        ? readiness.proposedNew > 0
-          ? `Import adds ${readiness.proposedNew} new transaction${readiness.proposedNew === 1 ? "" : "s"}; kept-existing, skipped and Inbox rows are never written. Every row is re-checked against FlowFi first.`
-          : "Nothing to import — kept-existing, skipped and Inbox rows are never written."
-        : `${open} row${open === 1 ? "" : "s"} still need${open === 1 ? "s" : ""} a decision before importing. Nothing is written to FlowFi while you review.`;
+      : importCount > 0
+        ? `Import adds the ${importCount} Ready row${importCount === 1 ? "" : "s"} as new transactions${open > 0 ? `; the ${open} row${open === 1 ? "" : "s"} still to resolve stay here` : ""}. Each row is re-checked against FlowFi first and never written twice.`
+        : open > 0
+          ? `${open} row${open === 1 ? "" : "s"} still need${open === 1 ? "s" : ""} attention before importing. Nothing is written to FlowFi while you review.`
+          : "Nothing to import — already recorded, skipped and Inbox rows are never written.";
   const HintIcon = canApprove ? CheckCircle2 : Info;
 
   if (desktop) {
@@ -1491,7 +1568,7 @@ function ReadinessBar({
                 <span className="tabular-nums" data-testid="progress-count">
                   {summary.decided}/{summary.included}
                 </span>{" "}
-                reviewed
+                handled
               </>
             ) : (
               `${rowsCount} rows captured`
@@ -1530,7 +1607,25 @@ function ReadinessBar({
             )}
           </section>
         )}
-        {items.length > 0 && (
+        {statusCounts && (
+          <dl className="hidden min-w-0 flex-1 items-center gap-x-3 overflow-hidden text-[11px] whitespace-nowrap xl:flex" data-testid="status-counts">
+            {(
+              [
+                ["ready", "Ready", statusCounts.ready, "primary"],
+                ["duplicate", "Possible match", statusCounts.duplicate, "default"],
+                ["fix", "Fix required", statusCounts.fix, "warning"],
+                ["imported", "Imported", statusCounts.imported, "success"],
+                ["skipped", "Skipped", statusCounts.skipped, "default"],
+              ] as const
+            ).map(([key, label, value, tone]) => (
+              <div key={key} className={cn("flex items-baseline gap-1 text-muted-foreground", STAT_TONE[value === 0 ? "default" : tone], value === 0 && "hidden")} data-testid={`status-count-${key}`}>
+                <dt>{label}</dt>
+                <dd className="text-xs font-semibold tabular-nums">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        {!statusCounts && items.length > 0 && (
           <dl className="hidden min-w-0 flex-1 items-center gap-x-3 overflow-hidden text-[11px] whitespace-nowrap xl:flex" data-testid="readiness-counts">
             {items.map((i) => (
               <div
@@ -1570,8 +1665,8 @@ function ReadinessBar({
                 <ArrowDownToLine className="size-3.5" /> Next to resolve
               </ClayButton>
             )}
-            <ClayButton size="sm" className="h-7 px-2.5 text-xs" variant={canApprove ? "primary" : "secondary"} onClick={onApprove} disabled={!canApprove || !readiness || readiness.proposedNew === 0} data-testid="open-approval" title={hint}>
-              {`Import ${readiness?.proposedNew ?? 0} transaction${readiness?.proposedNew === 1 ? "" : "s"}`}
+            <ClayButton size="sm" className="h-7 px-2.5 text-xs" variant={canApprove && importCount > 0 ? "primary" : "secondary"} onClick={onApprove} disabled={!canApprove || !readiness || importCount === 0} data-testid="open-approval" title={hint}>
+              {`Import ${importCount} transaction${importCount === 1 ? "" : "s"}`}
             </ClayButton>
           </div>
         )}
@@ -1638,8 +1733,8 @@ function ReadinessBar({
                 <span className="hidden sm:inline">Next undecided</span>
               </ClayButton>
             )}
-            <ClayButton size="sm" variant={canApprove ? "primary" : "secondary"} onClick={onApprove} disabled={!canApprove || !readiness || readiness.proposedNew === 0} data-testid="open-approval">
-              {`Import ${readiness?.proposedNew ?? 0} transaction${readiness?.proposedNew === 1 ? "" : "s"}`}
+            <ClayButton size="sm" variant={canApprove && importCount > 0 ? "primary" : "secondary"} onClick={onApprove} disabled={!canApprove || !readiness || importCount === 0} data-testid="open-approval">
+              {`Import ${importCount} transaction${importCount === 1 ? "" : "s"}`}
             </ClayButton>
           </div>
         )}
@@ -1703,9 +1798,10 @@ function handoffNoticeText(rows: ReconRow[]): string {
 function ReviewFilterStrip({ filter, onFilter, captured, counts, checking }: { filter: ReconFilter; onFilter: (f: ReconFilter) => void; captured: number; counts: Record<ReconFilter, number>; checking: boolean }) {
   const items: { key: ReconFilter; label: string; value: number; testId: string }[] = [
     { key: "all", label: "All", value: captured, testId: "rf-all" },
-    { key: "duplicate", label: "Possible duplicates", value: counts.duplicate, testId: "rf-duplicate" },
-    { key: "fix", label: "Fix required", value: counts.fix, testId: "rf-fix" },
     { key: "ready", label: "Ready", value: counts.ready, testId: "rf-ready" },
+    { key: "duplicate", label: "Possible match", value: counts.duplicate, testId: "rf-duplicate" },
+    { key: "fix", label: "Fix required", value: counts.fix, testId: "rf-fix" },
+    { key: "imported", label: "Imported", value: counts.imported, testId: "rf-imported" },
     { key: "skipped", label: "Skipped", value: counts.skipped, testId: "rf-skipped" },
   ];
   return (

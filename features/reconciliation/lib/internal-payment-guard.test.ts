@@ -50,7 +50,7 @@ describe("bank-side internal payments are BLOCKED", () => {
 });
 
 describe("ambiguous rails need the explicit confirmation — never a blanket block", () => {
-  it.each(["NEFT-RENT-MR SHARMA OCT", "NEFT DR LANDLORD RENT", "IMPS P2A 445566778899 RAMESH KUMAR", "UPI/ZOMATO/zomato@hdfc", "RTGS ACME SUPPLIERS PVT LTD", "NACH DR SIP MUTUAL FUND"])("%s", (text) => {
+  it.each(["NEFT-RENT-MR SHARMA OCT", "NEFT DR LANDLORD RENT", "IMPS P2A 445566778899 RAMESH KUMAR", "UPI/RAHUL K/rahulk@okaxis", "RTGS ACME SUPPLIERS PVT LTD", "NACH DR SIP MUTUAL FUND"])("%s", (text) => {
     const v = internalPaymentVerdict(debit(text), bank);
     expect(v.block).toBeNull();
     expect(v.confirm).toMatch(/went to someone else/);
@@ -61,9 +61,16 @@ describe("ambiguous rails need the explicit confirmation — never a blanket blo
   });
 
   it("a 4-digit run inside a long reference number is not an owned-account mention", () => {
-    const v = internalPaymentVerdict(debit("UPI/998149810001/SWIGGY"), bank);
+    const v = internalPaymentVerdict(debit("UPI/998149810001/RAHUL K"), bank);
     expect(v.block).toBeNull();
     expect(v.confirm).not.toBeNull();
+  });
+
+  it("a recognised everyday merchant over UPI needs no confirmation (2026-11-25) — one without a known business still does", () => {
+    for (const text of ["UPI/ZOMATO/zomato@hdfc", "UPI/627632125367/DR/Jio Pr/YESB/paytm-jio/UPI", "UPI/998149810001/SWIGGY"]) expect(internalPaymentVerdict(debit(text), bank)).toEqual({ block: null, confirm: null });
+    expect(internalPaymentVerdict(debit("UPI/AMAZON PAY/amazonpay@apl"), bank).confirm).not.toBeNull();
+    // A merchant name never lifts a BLOCK: a card bill / own account named still stops the import.
+    expect(internalPaymentVerdict(debit("UPI/CRED/SWIGGY credit card bill pay"), bank).block).not.toBeNull();
   });
 });
 

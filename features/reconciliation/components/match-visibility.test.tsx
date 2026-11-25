@@ -132,9 +132,11 @@ describe("detected matches are visible on open", () => {
     open();
     expect(within(rowEl("r2")).getByRole("button", { name: "Compare row 2" }).textContent).toBe("Possible match");
     expect(within(rowEl("r1")).getByRole("button", { name: "Compare row 1" }).textContent).toBe("No match");
-    // One status per row: a possible match is a Possible duplicate; a clean row with no match is simply Ready.
-    expect(within(rowEl("r2")).getByTestId("decision-chip").textContent).toBe("Possible duplicate");
-    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Ready");
+    // One status per row: a possible match is a Possible match; a clean row with no match needs only a reliable
+    // category — BOOKSTORE has none (no history, no known merchant), so it asks instead of guessing "Other".
+    expect(within(rowEl("r2")).getByTestId("decision-chip").textContent).toBe("Possible match");
+    expect(within(rowEl("r1")).getByTestId("decision-chip").textContent).toBe("Fix required");
+    expect(within(rowEl("r1")).getByTestId("row-choose-category")).toBeTruthy();
     expect(screen.queryByText("Undecided")).toBeNull();
     expect(screen.queryByText("Needs review")).toBeNull();
   });

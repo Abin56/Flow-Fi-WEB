@@ -91,19 +91,31 @@ function mount(data = baseData()) {
   return { fake, deps, data, view, rerender: () => view.rerender(<ReconciliationWorkspace uid="u1" data={live()} approvalDeps={deps} />) };
 }
 
-// "Import N transactions" is the one confirmation: there is no summary screen or tick-box in between (2026-11-24).
+// "Import N transactions" is the one confirmation: there is no summary screen or tick-box in between (2026-11-24). Since
+// 2026-11-25 it imports the rows that are Ready — the rest stay in the review — and a finished import shows Imported on
+// its rows (plus a one-line summary) instead of a result dialog.
 const importNow = () => fireEvent.click(screen.getByTestId("open-approval"));
 const dialog = () => screen.getByTestId("approval-dialog");
+const rowEl = (rowId: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === rowId)!;
+const statusOf = (rowId: string) => rowEl(rowId)?.dataset.status;
 
 describe("Import — one click, nothing written before it", () => {
-  it("opening Reconciliation writes nothing; Import is disabled until every row is resolved, and says how many it will import", async () => {
+  it("opening Reconciliation writes nothing; Import covers the Ready rows only, and the rest stay for later", async () => {
     seed({ e1: { kind: "import_new", category: "Food" } });
     const { fake } = mount();
-    expect((screen.getByTestId("open-approval") as HTMLButtonElement).disabled).toBe(true);
+    const button = screen.getByTestId("open-approval") as HTMLButtonElement;
     expect(fake.creates).toBe(0);
+    expect(button.disabled).toBe(false);
+    expect(button.textContent).toBe("Import 1 transaction"); // e1 only — the others are not Ready
+    importNow();
+    await waitFor(() => expect(statusOf("e1")).toBe("imported"));
+    expect(fake.creates).toBe(1);
+    expect([...fake.store.values()].map((t) => t.description)).toEqual(["CAFE ONE"]);
+    expect(statusOf("rf")).toBe("fix"); // the credit still needs its type — untouched
+    expect(screen.queryByTestId("approval-dialog")).toBeNull();
   });
 
-  it("the button names the count; clicking it imports directly (no summary screen, no confirmation tick) and shows a compact result", async () => {
+  it("the button names the count; clicking it imports directly (no summary screen, no confirmation tick); rows read Imported", async () => {
     seed();
     const { fake } = mount();
     const button = screen.getByTestId("open-approval") as HTMLButtonElement;
@@ -111,15 +123,25 @@ describe("Import — one click, nothing written before it", () => {
     expect(button.textContent).toBe("Import 3 transactions");
     expect(fake.creates).toBe(0);
     importNow();
-    await waitFor(() => expect(screen.getByTestId("approval-result").dataset.status).toBe("complete"));
+    await waitFor(() => expect(statusOf("e1")).toBe("imported"));
     expect(screen.queryByTestId("approval-confirm")).toBeNull(); // no confirmation step existed
-    expect(screen.queryByTestId("approval-submit")).toBeNull();
-    expect(screen.getByTestId("approval-result").textContent).toMatch(/Imported 3 transactions/);
-    expect(dialog().textContent).toMatch(/1 kept existing · 1 skipped/);
+    expect(screen.queryByTestId("approval-dialog")).toBeNull();
     expect(fake.creates).toBe(3);
     expect(fake.balanceEffect()).toBe(-90 - 250 + 300);
-    const outcomes = screen.getAllByTestId("approval-outcome").map((o) => [o.dataset.rowId, o.dataset.outcome]);
-    expect(outcomes).toEqual([["e1", "imported"], ["e2", "imported"], ["rf", "imported"], ["lk", "linked"], ["ig", "ignored"]]);
+    expect(["e1", "e2", "rf"].map(statusOf)).toEqual(["imported", "imported", "imported"]);
+    expect(statusOf("lk")).toBe("skipped"); // Already recorded — never written
+    expect(statusOf("ig")).toBe("skipped");
+  });
+
+  it("a row's own Import imports exactly that row", async () => {
+    seed();
+    const { fake } = mount();
+    fireEvent.click(within(rowEl("e2")).getByTestId("row-import"));
+    await waitFor(() => expect(statusOf("e2")).toBe("imported"));
+    expect(fake.creates).toBe(1);
+    expect([...fake.store.values()].map((t) => t.description)).toEqual(["BOOKSTORE"]);
+    expect(statusOf("e1")).toBe("ready");
+    expect((screen.getByTestId("open-approval") as HTMLButtonElement).textContent).toBe("Import 2 transactions");
   });
 
   it("a failed row is never shown as success: precise outcome, retry imports only the failed row", async () => {
@@ -128,17 +150,16 @@ describe("Import — one click, nothing written before it", () => {
     fake.failFor.add("BOOKSTORE");
     importNow();
     await waitFor(() => expect(screen.getByTestId("approval-result").dataset.status).toBe("partial"));
-    expect(screen.getByTestId("approval-result").textContent).toMatch(/4 of 5 rows done — 1 needs a retry/);
-    expect(screen.getByTestId("approval-result").textContent).not.toMatch(/Imported 3/);
+    expect(screen.getByTestId("approval-result").textContent).toMatch(/2 of 3 rows done — 1 needs a retry/);
     const kinds = Object.fromEntries(screen.getAllByTestId("approval-outcome").map((o) => [o.dataset.rowId, o.dataset.outcome]));
-    expect(kinds).toMatchObject({ e1: "imported", e2: "failed", rf: "imported", lk: "linked", ig: "ignored" });
+    expect(kinds).toEqual({ e1: "imported", e2: "failed", rf: "imported" }); // only the rows this import covered
     expect(screen.queryByTestId("approval-clear")).toBeNull(); // "Clear this review" only appears after a complete run
     expect(fake.store.size).toBe(2);
 
     fake.failFor.clear();
     rerender(); // the live data catches up: the two imported rows are now seen as already imported
     fireEvent.click(screen.getByTestId("approval-retry"));
-    await waitFor(() => expect(screen.getByTestId("approval-result").dataset.status).toBe("complete"));
+    await waitFor(() => expect(statusOf("e2")).toBe("imported"));
     expect(fake.store.size).toBe(3);
     expect(fake.creates).toBe(4); // 3 first run (one failed) + exactly one retry
   });
@@ -171,8 +192,18 @@ describe("Import — one click, nothing written before it", () => {
     const button = screen.getByTestId("open-approval");
     fireEvent.click(button);
     fireEvent.click(button);
-    await waitFor(() => expect(screen.getByTestId("approval-result").dataset.status).toBe("complete"));
+    await waitFor(() => expect(statusOf("e1")).toBe("imported"));
     expect(fake.creates).toBe(3);
+  });
+
+  it("a double click on a row's Import imports it once", async () => {
+    seed();
+    const { fake } = mount();
+    const button = within(rowEl("e1")).getByTestId("row-import");
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(statusOf("e1")).toBe("imported"));
+    expect(fake.creates).toBe(1);
   });
 
   it("identical rows in one import still need the user's own 'these are separate purchases' before anything is written", async () => {
@@ -187,8 +218,30 @@ describe("Import — one click, nothing written before it", () => {
     fireEvent.click(within(within(dialog()).getByTestId("approval-repeats")).getByRole("checkbox"));
     expect(submit.disabled).toBe(false);
     fireEvent.click(submit);
-    await waitFor(() => expect(screen.getByTestId("approval-result").dataset.status).toBe("complete"));
+    await waitFor(() => expect(statusOf("a2")).toBe("imported"));
     expect(fake.creates).toBe(2);
+  });
+
+  it("two same-day, same-amount UPI credits with DIFFERENT references import one by one, without a repeat question, each exactly once", async () => {
+    const rows = [
+      reconRow({ id: "m1", day: OCT_24, description: "UPI/627481159639/CR/MOHAN/BKID/mohankoda/UPI", amount: 2000, direction: "credit", referenceNumber: "627481159639" }),
+      reconRow({ id: "m2", day: OCT_24, description: "UPI/664081439342/CR/MOHAN/BKID/mohankoda/UPI", amount: 2000, direction: "credit", referenceNumber: "664081439342" }),
+    ];
+    const credit = { kind: "import_new" as const, category: "Salary", creditAs: "income" as const, notOwnTransferAck: true };
+    seed({ m1: credit, m2: credit }, rows);
+    const { fake, rerender } = mount();
+    expect(statusOf("m1")).toBe("ready");
+    expect(statusOf("m2")).toBe("ready");
+    fireEvent.click(within(rowEl("m1")).getByTestId("row-import"));
+    await waitFor(() => expect(statusOf("m1")).toBe("imported"));
+    rerender(); // row 1 is now a live FlowFi transaction — it must not hold row 2 back
+    fireEvent.click(within(rowEl("m2")).getByTestId("row-import"));
+    await waitFor(() => expect(statusOf("m2")).toBe("imported"));
+    expect(screen.queryByTestId("approval-dialog")).toBeNull();
+    expect(fake.creates).toBe(2);
+    const saved = [...fake.store.values()];
+    expect(saved.map((t) => t.description)).toEqual(["Received from Mohan · UPI", "Received from Mohan · UPI"]);
+    expect(fake.balanceEffect()).toBe(4000);
   });
 
   it("a review with nothing to import has no Import to press — FlowFi stays exactly as it is", async () => {

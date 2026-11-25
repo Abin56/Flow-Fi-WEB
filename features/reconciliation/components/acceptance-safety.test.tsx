@@ -17,7 +17,7 @@ import { commitRepositoriesFor, type ApprovalDeps } from "../lib/approval-commit
 import { buildReconciliationDraft, saveReconciliationDraft } from "../lib/reconciliation-draft";
 import { APPROVAL_NOW, reconData, reconRow, reconSession, txn } from "../lib/test-fixtures";
 import type { ReconRow, RowDecision } from "../lib/types";
-import { menuItem, openImportConfirm } from "./menu-test-utils";
+import { menuItem, openInlineReview, rowStatusOf, setRowCategory } from "./menu-test-utils";
 import { ReconciliationWorkspace } from "./reconciliation-workspace";
 
 beforeAll(() => {
@@ -66,22 +66,19 @@ function fakeRepository() {
   return { repo, store };
 }
 
-/** Decides every row through the dock: keep, keep, keep both (acknowledged), import new. */
+/** Decides every row on the sheet: Already recorded, Already recorded, Keep both (inline, explicit), and a plain import (category picked on the row). */
 function decideThroughDock() {
   const rowEl = (id: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === id)!;
   fireEvent.click(rowEl("r1"));
   fireEvent.click(menuItem("keep_existing"));
   fireEvent.click(rowEl("r2"));
   fireEvent.click(menuItem("keep_existing"));
-  fireEvent.click(rowEl("r3"));
-  openImportConfirm();
-  fireEvent.click(screen.getByRole("checkbox", { name: "These are separate transactions" }));
-  fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: "Food" } });
-  fireEvent.click(screen.getByTestId("import-confirm-submit"));
-  fireEvent.click(rowEl("r4"));
-  openImportConfirm();
-  fireEvent.change(screen.getByLabelText("Category for import"), { target: { value: "Food" } });
-  fireEvent.click(screen.getByTestId("import-confirm-submit"));
+  openInlineReview("r3");
+  fireEvent.click(screen.getByTestId("inline-keep-both"));
+  setRowCategory("r3", "Food");
+  setRowCategory("r4", "Food");
+  expect(rowStatusOf("r3")).toBe("ready");
+  expect(rowStatusOf("r4")).toBe("ready");
 }
 
 async function approveAgainst(serverData: ReconciliationData) {
@@ -92,10 +89,10 @@ async function approveAgainst(serverData: ReconciliationData) {
   render(<ReconciliationWorkspace uid="u1" data={DATA} sync={{ loading: [], failed: [], retry: vi.fn() }} approvalDeps={deps} />);
   decideThroughDock();
   fireEvent.click(screen.getByTestId("open-approval"));
-  const dialog = screen.getByTestId("approval-dialog");
+  const dialog = screen.queryByTestId("approval-dialog");
   // Identical rows in this import need the user's own acknowledgement first — shown compactly, then Import.
-  const repeats = await waitFor(() => within(dialog).queryByTestId("approval-repeats") ?? undefined, { timeout: 500 }).catch(() => undefined);
-  if (repeats) {
+  const repeats = dialog ? await waitFor(() => within(dialog).queryByTestId("approval-repeats") ?? undefined, { timeout: 500 }).catch(() => undefined) : undefined;
+  if (repeats && dialog) {
     fireEvent.click(within(repeats).getByRole("checkbox"));
     fireEvent.click(within(dialog).getByTestId("approval-submit"));
   }
@@ -110,29 +107,44 @@ describe("final approval rechecks fresh data for dock-made decisions", () => {
     const unrelated = txn({ id: "t-other", amount: 999, description: "Rent", accountId: "acc-bank", dateTime: at(20) });
     const before = JSON.stringify([SWIGGY, CAFE]);
     const { repo } = await approveAgainst(withTransactions([SWIGGY, CAFE, BANK, unrelated]));
-    const dialog = screen.getByTestId("approval-dialog");
-    await waitFor(() => expect(within(dialog).getByTestId("approval-result")).toBeTruthy());
-    const outcomes = within(dialog).getAllByTestId("approval-outcome").map((e) => `${e.dataset.rowId}:${e.dataset.outcome}`);
-    expect(outcomes.sort()).toEqual(["r1:linked", "r2:linked", "r3:imported", "r4:imported"]);
+    await waitFor(() => expect(rowStatusOf("r4")).toBe("imported"));
+    expect(rowStatusOf("r3")).toBe("imported");
+    expect(rowStatusOf("r1")).toBe("skipped"); // Already recorded — never written
+    expect(rowStatusOf("r2")).toBe("skipped");
     expect(repo.createTransaction).toHaveBeenCalledTimes(2);
     // The kept transactions were never touched: the fake repository has no update/delete at all, and the data is unchanged.
     expect(JSON.stringify([SWIGGY, CAFE])).toBe(before);
   });
 
+  // Changes to a row being IMPORTED: the whole import stops, nothing is written.
   const STALE: [string, ReconciliationData][] = [
-    ["stale candidate — the kept Swiggy was deleted in another tab", withTransactions([CAFE, BANK], { trashedTransactions: [{ ...SWIGGY, deletedAt: at(25) }] })],
-    ["changed amount — the kept Swiggy was edited to ₹600", withTransactions([{ ...SWIGGY, amount: 600 }, CAFE, BANK])],
-    ["changed account — the kept Swiggy was moved to the bank account", withTransactions([{ ...SWIGGY, accountId: "acc-bank" }, CAFE, BANK])],
     ["concurrent transaction — a Bookstore ₹250 arrived on the card (SMS sync) after Import new was chosen", withTransactions([SWIGGY, CAFE, BANK, txn({ id: "t-new", amount: 250, description: "Bookstore", source: "sms", dateTime: at(24, 18) })])],
     ["concurrent transaction — a second Cafe One arrived, so Keep both's acknowledgement no longer covers the evidence", withTransactions([SWIGGY, CAFE, BANK, txn({ id: "t-cafe2", amount: 90, description: "Cafe One", dateTime: at(24, 19) })])],
   ];
   for (const [name, server] of STALE) {
     it(`${name}: stopped, nothing written`, async () => {
       const { repo } = await approveAgainst(server);
-      const dialog = screen.getByTestId("approval-dialog");
+      const dialog = await waitFor(() => screen.getByTestId("approval-dialog"));
       await waitFor(() => expect(within(dialog).getByTestId("approval-stale-note")).toBeTruthy());
       expect(within(dialog).getByTestId("approval-stale-note").textContent).toMatch(/Nothing was imported/);
       expect(repo.createTransaction).not.toHaveBeenCalled();
+    });
+  }
+
+  // Changes to a row marked Already recorded (2026-11-25, per-row import): that row is not part of the import, so it is
+  // never written — and it no longer holds back the Ready rows, which are re-checked on their own evidence.
+  const KEPT_ROW_CHANGED: [string, ReconciliationData][] = [
+    ["the kept Swiggy was deleted in another tab", withTransactions([CAFE, BANK], { trashedTransactions: [{ ...SWIGGY, deletedAt: at(25) }] })],
+    ["the kept Swiggy was edited to ₹600", withTransactions([{ ...SWIGGY, amount: 600 }, CAFE, BANK])],
+    ["the kept Swiggy was moved to the bank account", withTransactions([{ ...SWIGGY, accountId: "acc-bank" }, CAFE, BANK])],
+  ];
+  for (const [name, server] of KEPT_ROW_CHANGED) {
+    it(`${name}: only the two Ready rows are written; the kept row never is`, async () => {
+      const { repo } = await approveAgainst(server);
+      await waitFor(() => expect(repo.createTransaction).toHaveBeenCalledTimes(2));
+      const written = repo.createTransaction.mock.calls.map((c) => (c[0] as { description: string }).description).sort();
+      expect(written).toEqual(["BOOKSTORE", "CAFE ONE"]);
+      expect(written).not.toContain("SWIGGY");
     });
   }
 });

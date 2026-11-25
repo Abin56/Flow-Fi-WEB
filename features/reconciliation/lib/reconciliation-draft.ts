@@ -48,6 +48,7 @@ interface StoredRow {
   captureExcluded?: boolean;
   removedFromReview?: boolean;
   captureBaseline?: string;
+  importDescription?: string;
   issues: StoredIssue[];
 }
 
@@ -129,6 +130,7 @@ function toStoredRow(row: ReconRow): StoredRow {
     ...(row.captureExcluded ? { captureExcluded: true } : {}),
     ...(row.removedFromReview ? { removedFromReview: true } : {}),
     ...(row.captureBaseline ? { captureBaseline: row.captureBaseline } : {}),
+    ...(row.importDescription ? { importDescription: row.importDescription } : {}),
     issues: row.issues.map((i) => ({ code: i.code, blocking: i.blocking, ...(i.strict ? { strict: true } : {}), ...(i.confirmOnly ? { confirmOnly: true } : {}), ...(i.field ? { field: i.field } : {}) })),
   };
 }
@@ -166,6 +168,7 @@ function fromStoredRow(s: StoredRow, index: number): ReconRow {
     captureExcluded: s.captureExcluded === true,
     ...(s.removedFromReview === true ? { removedFromReview: true } : {}),
     ...(typeof s.captureBaseline === "string" ? { captureBaseline: s.captureBaseline } : {}),
+    ...(typeof s.importDescription === "string" && s.importDescription.trim() ? { importDescription: s.importDescription } : {}),
   };
 }
 

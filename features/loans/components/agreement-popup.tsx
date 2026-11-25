@@ -5,6 +5,7 @@ import { CheckCircle2, ChevronRight } from "lucide-react";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { InlineHostSlot, StackBase, useInlineLayerId, useStackBase } from "@/components/finance/stack-layer";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { PaymentAwareness } from "@/features/loans/components/payment-awareness";
 import { AmountDisplay, InstallmentProgress, LE_RADIUS, Money, dueLabel, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
 import { cn } from "@/lib/utils";
 
@@ -339,6 +340,8 @@ function AgreementPage({
           </div>
           <p className="truncate text-xs text-muted-foreground">{facts}</p>
         </div>
+        {/* Payment awareness: read-only, fed by the open Record Payment dialog; empty (but reserved) otherwise. */}
+        <PaymentAwareness className="min-w-[11rem] flex-1 basis-0 self-center" />
         <FooterLayout.Provider value="page">{footer}</FooterLayout.Provider>
       </header>
 

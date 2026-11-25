@@ -1,25 +1,27 @@
 "use client";
 
 /**
- * The draft editor for one statement row — inside the row's sheet on desktop (`ReconRowSheet`), and the Details
- * tab of the row's sheet on phones. Its layout follows its own width (container queries), so the same
- * fields fold from one dense band into two columns without the page knowing.
+ * The row editor (2026-11-25) — the one place to see and change everything about a captured statement row, opened from
+ * the row (description click, ✎, Enter or double-click) as the full-width top sheet over the table.
  *
- * Captured values — date, description, amount, Charge/Credit — are editable (D6) through Smart Capture's own patch
- * rules, and any change must be re-confirmed. OCR checks are settled here too: what's unclear is said once, beside
- * the row's strip of the original screenshot, with ONE confirmation (`confirmRowValues`) — a value that has to be
- * picked (dropped decimal point, several amounts) gets its candidates instead. Category and notes are draft fields used only by the final approval;
- * the account is the review's statement account (read-only). Person and Split assign the expense (draft intent; the final approval writes it through the
- * statement-import engine's keyed, all-or-nothing split write). Nothing here writes to FlowFi or touches an existing transaction.
+ *   Description · Category                       ← what the user reads first; FlowFi pre-fills both when reliable
+ *   Date · Amount · Type · Account                ← the captured values; an unclear OCR read says so under its field,
+ *                                                   with its own "Looks right" — the only confirmation left
+ *   What is this credit? / Who is it for?         ← the financial meaning: never guessed
+ *   More: notes · include · the bank's narration
+ *
+ * Every change is accepted as it is made and kept in this tab's draft — there is no separate Save and no "re-confirm
+ * the amount" after an unrelated edit. Close just closes. Import (footer) imports THIS row now, through the same keyed,
+ * server-re-checked approval as every other import. Nothing here writes to FlowFi on its own.
  */
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, ArrowDownLeft, ArrowUpRight, CheckCircle2, GitCompareArrows, Landmark, Lock, ScanLine, Shapes, ShieldCheck, Users } from "lucide-react";
+import { AlertTriangle, ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronDown, GitCompareArrows, Landmark, Loader2, Lock, ScanLine, Shapes, ShieldCheck, Sparkles, Undo2, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SHEET_AMOUNT_TONE, SHEET_BUTTON, SHEET_FIELD, SheetAvatar, SheetNav, SheetPicker, SheetRail, SheetRailBlock, SheetSection, TransactionSheet, type SheetPickerOption } from "@/components/finance/transaction-sheet";
 import { categoryIconFor } from "@/features/transactions/hooks/use-transactions-data";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { ClayButton } from "@/components/clay/clay-button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { DateInput } from "@/components/forms/date-input";
 import { Switch } from "@/components/ui/switch";
@@ -28,12 +30,14 @@ import { currentIssues, openIssues, rowConfirmPlan, type RowPatch } from "@/feat
 import type { CaptureField, CaptureIssue } from "@/features/smart-capture/lib/parse-pasted-statement";
 import { RowZoom } from "@/features/smart-capture/components/ocr-source-view";
 import type { OcrCapture } from "@/features/smart-capture/components/capture-input";
-import { canConfirmRowValues } from "../lib/decisions";
 import type { Category } from "@/lib/models/category";
 import type { Person } from "@/lib/models/person";
-import { ReconOwnershipEditor } from "./recon-ownership-editor";
+import { canConfirmRowValues } from "../lib/decisions";
+import type { RowIntel } from "../lib/row-intelligence";
+import type { RowStatus } from "../lib/row-status";
 import type { ReconRow, RowDecision } from "../lib/types";
-import { formatRowDate } from "./recon-ui";
+import { ReconOwnershipEditor } from "./recon-ownership-editor";
+import { StatusChip, formatRowDate } from "./recon-ui";
 
 function toDateInput(date: Date | null): string {
   if (!date) return "";
@@ -81,6 +85,17 @@ function CommitInput({ value, onCommit, label, className, inputMode, type = "tex
     // A date that is half-typed reads as "" — keep the saved date rather than clearing it.
     if (draft !== value && !(type === "date" && draft === "")) onCommit(draft);
   };
+  const keys = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commit();
+    }
+    if (e.key === "Escape") {
+      reverting.current = true;
+      setDraft(value);
+    }
+    e.stopPropagation();
+  };
   if (type === "date") {
     return (
       <DateInput
@@ -91,17 +106,7 @@ function CommitInput({ value, onCommit, label, className, inputMode, type = "tex
           setDraft(e.target.value);
         }}
         onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            commit();
-          }
-          if (e.key === "Escape") {
-            reverting.current = true;
-            setDraft(value);
-          }
-          e.stopPropagation();
-        }}
+        onKeyDown={keys}
         className={cn(FIELD, className)}
       />
     );
@@ -117,23 +122,13 @@ function CommitInput({ value, onCommit, label, className, inputMode, type = "tex
         setDraft(e.target.value);
       }}
       onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          commit();
-        }
-        if (e.key === "Escape") {
-          reverting.current = true;
-          setDraft(value);
-        }
-        e.stopPropagation();
-      }}
+      onKeyDown={keys}
       className={cn(FIELD, className)}
     />
   );
 }
 
-/** The one confirmation names what it accepts: "Confirm ₹452.00 · Charge", or the plain row check. */
+/** The row-level confirmation names what it accepts: "Confirm ₹452.00 · Charge", or the plain image check. */
 export function confirmActionLabel(row: ReconRow): string {
   const fields = rowConfirmPlan(row)?.fields ?? [];
   if (fields.length === 0) return row.source === "ocr" && !row.needsReconfirm ? "Row matches the image" : "Values are correct";
@@ -168,47 +163,83 @@ const NOTE_TARGET: Partial<Record<CaptureIssue["code"], NoteTarget>> = {
   low_confidence_direction: "type",
   direction_inferred: "type",
 };
+const FIELD_OF: Record<Exclude<NoteTarget, "row">, CaptureField> = { date: "date", amount: "amount", type: "direction" };
 
 type Note = { tone: "warning" | "info"; text: string };
 
 /** A short note under its own field: a warning while the value needs action, a quiet line otherwise. */
-function FieldNotes({ notes, testId }: { notes: Note[]; testId?: string }) {
-  if (notes.length === 0) return null;
+function FieldNotes({ notes, testId, action }: { notes: Note[]; testId?: string; action?: React.ReactNode }) {
+  if (notes.length === 0 && !action) return null;
   return (
-    <ul className="flex flex-col gap-0.5" data-testid={testId}>
-      {notes.map((n) => (
-        <li key={n.text} className={cn("flex items-start gap-1.5 text-[11.5px] leading-snug font-medium", n.tone === "warning" ? "text-[oklch(0.5_0.12_70)] dark:text-warning" : "text-foreground/72")}>
-          {n.tone === "warning" ? <AlertTriangle className="mt-px size-3.5 shrink-0" aria-hidden /> : <ShieldCheck className="mt-px size-3.5 shrink-0" aria-hidden />}
-          <span className="min-w-0">{n.text}</span>
-        </li>
-      ))}
-    </ul>
+    <div className="flex flex-col gap-1" data-testid={testId}>
+      <ul className="flex flex-col gap-0.5">
+        {notes.map((n) => (
+          <li key={n.text} className={cn("flex items-start gap-1.5 text-[11.5px] leading-snug font-medium", n.tone === "warning" ? "text-[oklch(0.5_0.12_70)] dark:text-warning" : "text-foreground/72")}>
+            {n.tone === "warning" ? <AlertTriangle className="mt-px size-3.5 shrink-0" aria-hidden /> : <ShieldCheck className="mt-px size-3.5 shrink-0" aria-hidden />}
+            <span className="min-w-0">{n.text}</span>
+          </li>
+        ))}
+      </ul>
+      {action}
+    </div>
   );
 }
 
 const money = (n: number) => `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+/** What a credit is — the user's choice, never inferred. The last two are recorded elsewhere, so nothing is imported here. */
+export type CreditChoice = "income" | "refund" | "people" | "transfer";
+export const CREDIT_CHOICES: { id: CreditChoice; label: string; hint: string }[] = [
+  { id: "income", label: "Income", hint: "Money you earned or received for good — salary, a gift, a sale." },
+  { id: "refund", label: "Refund", hint: "Money back for something you paid for." },
+  { id: "people", label: "From a person I lent to", hint: "A repayment or reimbursement — record it in People so it is counted once. Not imported here." },
+  { id: "transfer", label: "From my own account", hint: "Money moved between your own accounts — record it as a Transfer. Not imported here." },
+];
+export function creditChoiceOf(decision: RowDecision): CreditChoice | null {
+  if (decision.kind === "ignore" && decision.skipReason) return decision.skipReason;
+  return decision.creditAs ?? null;
+}
+/** The draft patch a credit choice makes. Income / Refund also say "from someone else" — the own-account option sits right beside them. */
+export function creditChoicePatch(choice: CreditChoice, decision: RowDecision): Partial<RowDecision> {
+  if (choice === "people" || choice === "transfer") return { kind: "ignore", skipReason: choice };
+  return { ...(decision.kind === "ignore" ? { kind: null } : {}), creditAs: choice, notOwnTransferAck: true, skipReason: null };
+}
+
 export function ReconRowEditor({
   row,
   decision,
   categories,
+  intel,
+  shownDescription,
+  onImportDescription,
   onPatch,
   onConfirmRow,
   onConfirmField,
   onDecide,
+  ownTransferConfirm = null,
   accountLabel = null,
   screenshot = null,
   people = [],
+  status = null,
 }: {
   row: ReconRow;
   decision: RowDecision;
   categories: Category[];
+  /** FlowFi's suggestions for the row (clean description, reliable category, ranked alternatives). */
+  intel?: RowIntel;
+  /** The description shown — the user's own, or FlowFi's wording — and whether it is FlowFi's. */
+  shownDescription?: { text: string; auto: boolean };
+  /** Sets the description the transaction is imported with; null = back to FlowFi's wording. */
+  onImportDescription?: (text: string | null) => void;
   /** The capture's screenshot (this tab only) — the row's strip is shown beside the details. */
   screenshot?: OcrCapture | null;
   /** The statement account ("HDFC Millennia •••• 4821") — read-only here; it's chosen once for the whole review. */
   accountLabel?: string | null;
   /** The user's People — who a person / split expense can be assigned to. */
   people?: Pick<Person, "id" | "name">[];
+  /** The "not to/from my own account" question this row's rail needs (null = none). */
+  ownTransferConfirm?: string | null;
+  status?: RowStatus | null;
   onPatch: (patch: RowPatch) => void;
   onConfirmRow: () => void;
   onConfirmField: (field: CaptureField) => void;
@@ -217,7 +248,6 @@ export function ReconRowEditor({
   const open = openIssues(row);
   const informational = currentIssues(row).filter((i) => !i.blocking);
   const options = categoriesForDirection(categories, row.direction);
-  const flagged = open.length > 0 || row.needsReconfirm;
   const unique = (list: CaptureIssue[]) => list.filter((i, n) => list.findIndex((o) => o.code === i.code) === n);
   const pickers = unique(open.filter((i) => i.code === "decimal_missing" || i.code === "multiple_amounts"));
   const specific = unique(open.filter((i) => i.code !== "ocr_unverified" && !pickers.includes(i)));
@@ -237,54 +267,97 @@ export function ReconRowEditor({
   const amountNotes = notesFor("amount");
   const typeNotes = notesFor("type");
   const rowNotes = notesFor("row");
-  const dateBlocked = open.some((i) => NOTE_TARGET[i.code] === "date");
-  const amountBlocked = open.some((i) => NOTE_TARGET[i.code] === "amount");
-  const typeBlocked = open.some((i) => NOTE_TARGET[i.code] === "type");
-  const canConfirm = canConfirmRowValues(row);
-  const categoryOptions: SheetPickerOption[] = options.map((c) => {
+  const blockedAt = (target: NoteTarget) => open.some((i) => NOTE_TARGET[i.code] === target);
+  // A strict (unclear OCR) issue on ONE field: that field gets its own "Looks right" — accepted the moment it's clicked,
+  // or the moment the user types a corrected value. Nothing else on the row is asked again.
+  const strictOn = (target: Exclude<NoteTarget, "row">) => open.some((i) => i.strict && i.field === FIELD_OF[target] && !i.confirmOnly) && (target === "date" ? row.date != null : target === "amount" ? row.amount != null : row.direction != null);
+  const looksRight = (target: Exclude<NoteTarget, "row">) =>
+    strictOn(target) ? (
+      <button type="button" data-testid={`confirm-${FIELD_OF[target]}`} onClick={() => onConfirmField(FIELD_OF[target])} className="inline-flex h-7 w-fit items-center gap-1.5 rounded-md border border-border-strong bg-card px-2 text-[12px] font-semibold text-foreground shadow-e1 hover:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+        <CheckCircle2 className="size-3.5 text-[oklch(0.44_0.13_149)] dark:text-success" aria-hidden />
+        {target === "date" ? `${formatRowDate(row.date)} looks right` : target === "amount" ? `${money(row.amount!)} looks right` : `${row.direction === "credit" ? "Credit" : "Debit"} looks right`}
+      </button>
+    ) : null;
+  // A row-level check (compare with the image, a joined line, a possible repeat) — one button, only when no field is still open.
+  const rowLevel = canConfirmRowValues(row) && !(["date", "amount", "type"] as const).some((t) => strictOn(t));
+  const ranked = new Set(intel?.ranked ?? []);
+  const categoryOptions: SheetPickerOption[] = [...options].sort((a, b) => Number(ranked.has(b.name)) - Number(ranked.has(a.name))).map((c) => {
     const CategoryIcon = categoryIconFor(c.iconKey);
     return { value: c.name, label: c.name, icon: <CategoryIcon className="size-4" strokeWidth={2} /> };
   });
+  const categoryValue = decision.category ?? intel?.category ?? null;
+  const categoryAuto = decision.category == null && intel?.category != null;
+  const shown = shownDescription ?? { text: row.description, auto: false };
+  const narration = shown.text !== row.description ? row.description : null;
   const showEvidence = screenshot != null && row.ocr != null;
-  const checkedLabel = row.confirmed || row.confirmedFields.length > 0 ? "Values checked" : row.source === "ocr" ? "Read clearly" : "Values checked";
+  const creditChoice = creditChoiceOf(decision);
+  const importable = !(decision.kind === "ignore" && decision.skipReason);
 
   return (
     <div className="@container" data-testid="row-editor">
       <div className={cn("grid items-start gap-x-3 gap-y-3", showEvidence && "@min-[56rem]:grid-cols-[minmax(0,1fr)_minmax(240px,300px)]")}>
-        <SheetSection
-          compact
-          title="Row details"
-          hint="Editable — re-confirm after a change"
-          role="group"
-          aside={
-            !flagged ? (
-              <span className="inline-flex shrink-0 items-center gap-1 text-[11.5px] font-semibold text-[oklch(0.44_0.13_149)] dark:text-success">
-                <CheckCircle2 className="size-3.5" aria-hidden /> {checkedLabel}
-              </span>
-            ) : undefined
-          }
-        >
+        <SheetSection compact title="Transaction" aside={status ? <StatusChip status={status} /> : undefined} role="group">
           <div className="grid grid-cols-2 gap-x-3 gap-y-3 @min-[44rem]:grid-cols-12">
-            <label className={cn(LABEL, "@min-[44rem]:col-span-4")}>
+            <div className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-7")}>
+              <label className="flex flex-col gap-1">
+                <span className="flex items-center gap-1.5">
+                  Description
+                  {shown.auto && (
+                    <span className="inline-flex items-center gap-1 text-[10.5px] font-medium text-primary-accent-text" title="Worded by FlowFi from the bank narration — edit it freely; your words are kept.">
+                      <Sparkles className="size-3" aria-hidden /> auto
+                    </span>
+                  )}
+                </span>
+                <CommitInput label="Description" value={shown.text} onCommit={(v) => onImportDescription?.(v.trim() && v.trim() !== (intel?.description?.text ?? row.description) ? v : null)} />
+              </label>
+              {narration && (
+                <p className="flex min-w-0 items-center gap-1.5 text-[11px] font-normal text-foreground/60" data-testid="editor-narration">
+                  <span className="shrink-0">Bank:</span>
+                  <span className="min-w-0 truncate font-mono text-foreground/75" title={narration}>
+                    {narration}
+                  </span>
+                  {!shown.auto && intel?.description && (
+                    <button type="button" onClick={() => onImportDescription?.(null)} className="inline-flex shrink-0 items-center gap-1 font-medium text-primary-accent-text hover:underline" data-testid="description-reset">
+                      <Undo2 className="size-3" aria-hidden /> FlowFi wording
+                    </button>
+                  )}
+                </p>
+              )}
+              <FieldNotes notes={rowNotes} testId="row-notes" />
+            </div>
+            <div className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-5")}>
+              <span className="flex items-center gap-1.5">
+                Category
+                {categoryAuto && (
+                  <span className="inline-flex items-center gap-1 text-[10.5px] font-medium text-primary-accent-text" title={intel?.categoryBasis === "history" ? "From your own earlier transactions with this payee." : "From what this merchant sells."}>
+                    <Sparkles className="size-3" aria-hidden /> suggested
+                  </span>
+                )}
+              </span>
+              <SheetPicker compact value={categoryValue} onValueChange={(v) => onDecide({ category: v })} options={categoryOptions} placeholder={options.length ? "Choose a category" : "No categories for this type"} emptyIcon={<Shapes className="size-4" />} ariaLabel="Category" />
+              {!categoryValue && importable && <span className="text-[11.5px] font-medium text-[oklch(0.5_0.12_70)] dark:text-warning">Needed to import</span>}
+            </div>
+
+            <label className={cn(LABEL, "@min-[44rem]:col-span-3")}>
               Date
-              <CommitInput type="date" label="Date" value={toDateInput(row.date)} onCommit={(v) => onPatch({ date: fromDateInput(v) })} className={cn(dateBlocked && "border-warning")} />
-              <FieldNotes notes={dateNotes} testId="date-notes" />
+              <CommitInput type="date" label="Date" value={toDateInput(row.date)} onCommit={(v) => onPatch({ date: fromDateInput(v) })} className={cn(blockedAt("date") && "border-warning")} />
+              <FieldNotes notes={dateNotes} testId="date-notes" action={looksRight("date")} />
             </label>
-            <div className={cn(LABEL, "@min-[44rem]:col-span-4")}>
+            <div className={cn(LABEL, "@min-[44rem]:col-span-3")}>
               <label className="flex flex-col gap-1">
                 Amount (₹)
                 <CommitInput
                   label="Amount"
                   inputMode="decimal"
                   value={row.amount == null ? "" : row.amount.toFixed(2)}
-                  className={cn("text-right font-semibold tabular-nums", amountBlocked && "border-warning")}
+                  className={cn("text-right font-semibold tabular-nums", blockedAt("amount") && "border-warning")}
                   onCommit={(v) => {
                     const n = Number(v.replace(/[,\s₹]/g, ""));
                     onPatch({ amount: v.trim() === "" || !Number.isFinite(n) ? null : n });
                   }}
                 />
               </label>
-              <FieldNotes notes={amountNotes} testId="amount-notes" />
+              <FieldNotes notes={amountNotes} testId="amount-notes" action={looksRight("amount")} />
               {pickers.map((issue) => (
                 <div key={issue.code} className="flex flex-col gap-1.5" data-testid="amount-picker">
                   <FieldNotes notes={[{ tone: "warning", text: issue.message }]} />
@@ -301,17 +374,17 @@ export function ReconRowEditor({
                       </button>
                     ))}
                     {issue.confirmOnly && issue.field && (
-                      <ClayButton size="sm" variant="secondary" disabled={row.amount == null} onClick={() => onConfirmField(issue.field!)}>
+                      <button type="button" disabled={row.amount == null} onClick={() => onConfirmField(issue.field!)} className={cn(SHEET_BUTTON.secondary, "h-7 px-2.5 text-xs")}>
                         {row.amount != null ? `Confirm ${money(row.amount)}` : "Confirm amount"}
-                      </ClayButton>
+                      </button>
                     )}
                   </span>
                 </div>
               ))}
             </div>
-            <div className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-4")}>
+            <div className={cn(LABEL, "@min-[44rem]:col-span-3")}>
               Type
-              <div role="radiogroup" aria-label="Debit or credit" className={cn("grid h-10 grid-cols-2 rounded-[10px] bg-secondary p-1 ring-1 ring-inset", typeBlocked ? "ring-warning" : "ring-border-strong/60")}>
+              <div role="radiogroup" aria-label="Debit or credit" className={cn("grid h-10 grid-cols-2 rounded-[10px] bg-secondary p-1 ring-1 ring-inset", blockedAt("type") ? "ring-warning" : "ring-border-strong/60")}>
                 {(["debit", "credit"] as const).map((d) => (
                   <button
                     key={d}
@@ -329,69 +402,59 @@ export function ReconRowEditor({
                   </button>
                 ))}
               </div>
-              <FieldNotes notes={typeNotes} testId="type-notes" />
+              <FieldNotes notes={typeNotes} testId="type-notes" action={looksRight("type")} />
             </div>
-
-            <label className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-6")}>
-              Merchant / description
-              <CommitInput label="Description" value={row.description} onCommit={(v) => onPatch({ description: v })} />
-              <FieldNotes notes={rowNotes} testId="row-notes" />
-            </label>
-            <div className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-6")}>
-              Category
-              <SheetPicker
-                compact
-                value={decision.category}
-                onValueChange={(v) => onDecide({ category: v })}
-                options={categoryOptions}
-                placeholder={options.length ? "Choose a category" : "No categories for this type"}
-                emptyIcon={<Shapes className="size-4" />}
-                ariaLabel="Category"
-              />
-              {!decision.category && <span className="text-[11.5px] font-medium text-foreground/72">Needed to import as new</span>}
-            </div>
-
-            <div className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-4")}>
+            <div className={cn(LABEL, "@min-[44rem]:col-span-3")}>
               Account
-              <div className="flex h-10 items-center gap-2.5 rounded-[10px] border border-border bg-secondary/60 px-3" data-testid="editor-account" title="From the statement — chosen once for the whole review">
-                <span className="grid size-7 shrink-0 place-items-center rounded-[8px] bg-card text-foreground/72 shadow-e1">
-                  <Landmark className="size-3.5" aria-hidden />
-                </span>
-                <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{accountLabel ?? "Choose the statement account first"}</span>
-                <Lock className="size-3.5 shrink-0 text-foreground/55" aria-hidden />
-              </div>
-            </div>
-            <label className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-5")}>
-              Notes
-              <Textarea
-                aria-label="Notes"
-                value={decision.notes}
-                onChange={(e) => onDecide({ notes: e.target.value })}
-                onKeyDown={(e) => e.stopPropagation()}
-                rows={1}
-                className={cn(SHEET_FIELD, "h-10 min-h-10 resize-none py-2")}
-                placeholder="Optional"
-              />
-            </label>
-            <div className={cn(LABEL, "col-span-2 @min-[44rem]:col-span-3")}>
-              In this import
-              <div className="flex h-10 items-center justify-between gap-2 rounded-[10px] border border-border-strong bg-card px-3 shadow-e1">
-                <span className="truncate text-[13px] font-semibold text-foreground" title={row.captureExcluded ? "Excluded in Smart Capture — change it there" : undefined}>
-                  {row.captureExcluded ? "Excluded" : row.include ? "Included" : "Left out"}
-                </span>
-                {row.captureExcluded ? (
-                  // Smart Capture's exclusion stands — re-including (and the OCR checks that would need) happens there.
-                  <span className="sr-only" data-testid="capture-excluded">
-                    Excluded in Smart Capture
-                  </span>
-                ) : (
-                  <Switch checked={row.include} onCheckedChange={(v) => onPatch({ include: v })} aria-label="Include this row" />
-                )}
+              <div className="flex h-10 items-center gap-2 rounded-[10px] border border-border bg-secondary/60 px-2.5" data-testid="editor-account" title="From the statement — chosen once for the whole review">
+                <Landmark className="size-3.5 shrink-0 text-foreground/65" aria-hidden />
+                <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-foreground">{accountLabel ?? "Choose the statement account first"}</span>
+                <Lock className="size-3 shrink-0 text-foreground/50" aria-hidden />
               </div>
             </div>
           </div>
 
-          {/* Who the expense is for — mine, a person's, or split between people. Draft intent only; the final approval writes it. */}
+          {rowLevel && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg bg-warning/[0.08] px-2.5 py-1.5" data-testid="row-check">
+              <AlertTriangle className="size-3.5 shrink-0 text-[oklch(0.5_0.12_70)] dark:text-warning" aria-hidden />
+              <span className="min-w-0 flex-1 text-[12px] font-medium text-foreground/80">{rowNotes.length === 0 ? "Read from a screenshot — compare it with the image once." : "Check this once against the statement."}</span>
+              <button type="button" data-testid="confirm-row" className={cn(SHEET_BUTTON.secondary, "h-7 px-2.5 text-[12px]")} onClick={onConfirmRow}>
+                <CheckCircle2 className="size-3.5 text-[oklch(0.44_0.13_149)] dark:text-success" /> {confirmActionLabel(row)}
+              </button>
+            </div>
+          )}
+
+          {/* The financial meaning — never guessed: what a credit is, whether a UPI/NEFT line went to someone else, who an expense is for. */}
+          {!row.captureExcluded && row.direction === "credit" && (
+            <div className="flex flex-col gap-1.5 border-t border-border-subtle pt-2.5" data-testid="editor-credit-type">
+              <span className="text-[12px] font-semibold text-foreground/80">What is this credit?</span>
+              <div role="radiogroup" aria-label="What is this credit?" className="flex flex-wrap gap-1.5">
+                {CREDIT_CHOICES.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={creditChoice === c.id}
+                    title={c.hint}
+                    data-testid={`credit-${c.id}`}
+                    onClick={() => onDecide(creditChoicePatch(c.id, decision))}
+                    className={cn("h-8 rounded-lg border px-3 text-[12.5px] font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none", creditChoice === c.id ? "border-primary bg-primary/15 text-foreground" : "border-border-strong/70 bg-card text-foreground/80 hover:bg-secondary/60")}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+              {creditChoice && <p className="text-[11.5px] text-foreground/65">{CREDIT_CHOICES.find((c) => c.id === creditChoice)!.hint}</p>}
+            </div>
+          )}
+          {!row.captureExcluded && row.direction === "debit" && ownTransferConfirm && (
+            <label className="flex items-start gap-2 border-t border-border-subtle pt-2.5 text-[12px] text-foreground/85" data-testid="own-transfer-confirm">
+              <Checkbox checked={decision.notOwnTransferAck === true} onCheckedChange={(v) => onDecide({ notOwnTransferAck: v === true })} aria-label="Paid to someone else — not my own account or card" />
+              <span>
+                <span className="font-semibold">Paid to someone else</span> — not to my own account or card. <span className="text-foreground/60">If it was, record it as a Transfer instead.</span>
+              </span>
+            </label>
+          )}
           <div className="flex flex-col gap-2 border-t border-border-subtle pt-2.5" data-testid="editor-ownership">
             {row.direction === "debit" && !row.captureExcluded ? (
               <ReconOwnershipEditor row={row} ownership={decision.ownership} people={people} onChange={(ownership) => onDecide({ ownership })} />
@@ -402,14 +465,43 @@ export function ReconRowEditor({
               </p>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            {row.needsReconfirm && <p className="min-w-0 flex-1 basis-52 text-[11.5px] font-medium text-[oklch(0.5_0.12_70)] dark:text-warning">You changed this row — confirm the values are correct.</p>}
-            {flagged && canConfirm && (
-              <button type="button" data-testid="confirm-row" className={cn(SHEET_BUTTON.secondary, "ml-auto h-9")} onClick={onConfirmRow}>
-                <CheckCircle2 className="size-4 text-[oklch(0.44_0.13_149)] dark:text-success" /> {confirmActionLabel(row)}
-              </button>
-            )}
-          </div>
+
+          <details className="group rounded-lg border border-border-subtle" data-testid="editor-more">
+            <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2.5 py-1.5 text-[12px] font-semibold text-foreground/75 select-none hover:text-foreground">
+              <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" aria-hidden /> More — notes, include, bank details
+            </summary>
+            <div className="grid grid-cols-1 gap-3 border-t border-border-subtle p-2.5 @min-[44rem]:grid-cols-12">
+              <label className={cn(LABEL, "@min-[44rem]:col-span-7")}>
+                Notes
+                <Textarea aria-label="Notes" value={decision.notes} onChange={(e) => onDecide({ notes: e.target.value })} onKeyDown={(e) => e.stopPropagation()} rows={1} className={cn(SHEET_FIELD, "h-10 min-h-10 resize-none py-2")} placeholder="Optional" />
+              </label>
+              <div className={cn(LABEL, "@min-[44rem]:col-span-5")}>
+                In this import
+                <div className="flex h-10 items-center justify-between gap-2 rounded-[10px] border border-border-strong bg-card px-3 shadow-e1">
+                  <span className="truncate text-[13px] font-semibold text-foreground" title={row.captureExcluded ? "Excluded in Smart Capture — change it there" : undefined}>
+                    {row.captureExcluded ? "Excluded" : row.include ? "Included" : "Left out"}
+                  </span>
+                  {row.captureExcluded ? (
+                    <span className="sr-only" data-testid="capture-excluded">
+                      Excluded in Smart Capture
+                    </span>
+                  ) : (
+                    <Switch checked={row.include} onCheckedChange={(v) => onPatch({ include: v })} aria-label="Include this row" />
+                  )}
+                </div>
+              </div>
+              <p className="text-[11px] text-foreground/60 @min-[44rem]:col-span-12">
+                Bank narration: <span className="font-mono break-all text-foreground/80">{row.description}</span>
+                {row.referenceNumber ? (
+                  <>
+                    {" "}
+                    · Reference <span className="font-mono text-foreground/80">{row.referenceNumber}</span>
+                  </>
+                ) : null}
+                . It is kept with the imported transaction for checking later.
+              </p>
+            </div>
+          </details>
         </SheetSection>
 
         {showEvidence && row.ocr && (
@@ -418,9 +510,11 @@ export function ReconRowEditor({
               <div className="flex flex-col gap-1" data-testid="editor-evidence">
                 <p className="text-[11px] font-medium text-foreground/72">{row.ocr.flaggedBoxes?.length ? "Unclear values outlined" : "As read from your screenshot"}</p>
                 <RowZoom capture={screenshot!} box={row.ocr.box} flagged={row.ocr.flaggedBoxes ?? []} />
-                <p className="text-[11px] text-foreground/60">
-                  Text as read: <span className="font-mono break-all text-foreground/80">{row.sourceText.replace(/\t/g, "  ")}</span>
-                </p>
+                {row.sourceText && (
+                  <p className="text-[11px] text-foreground/60">
+                    Text as read: <span className="font-mono break-all text-foreground/80">{row.sourceText.replace(/\t/g, "  ")}</span>
+                  </p>
+                )}
               </div>
             </SheetRailBlock>
           </SheetRail>
@@ -432,33 +526,33 @@ export function ReconRowEditor({
 
 /**
  * The desktop row editor: a full-width sheet dropping down from the top of the viewport (rendered in a portal, never
- * inside either table's scroll container), so the lower part of both the New Statement and Existing FlowFi sheets —
- * with the selected row — stays in view. While it is open it is the only workspace in use (it is modal); the comparison
- * dock below keeps its own open/collapsed state. Opening, closing or moving only changes what is shown — every edit is
- * committed field by field as it is made (draft only), so there is nothing to discard and nothing reaches FlowFi.
+ * inside the table's scroll container), so the lower part of the statement — with the selected row — stays in view.
+ * Every edit is already in the draft as it is made: Close only closes. Import imports this row now.
  */
 export function ReconRowSheet({
   open,
   row,
   rowNumber,
   nav,
-  stateLabel,
+  title,
+  status = null,
   onClose,
-  onCompare,
-  importSlot,
+  onReviewMatch,
+  importAction = null,
   children,
 }: {
   open: boolean;
   row: ReconRow;
   rowNumber: number;
   nav?: { position: number; total: number; onPrev?: () => void; onNext?: () => void };
-  /** The row's review state in words ("Needs review", "Keep existing" …). */
-  stateLabel?: string | null;
+  /** The description shown in the header (clean wording or the user's own). */
+  title?: string;
+  status?: RowStatus | null;
   onClose: () => void;
-  /** Present when the row has been compared with FlowFi. */
-  onCompare?: (rowId: string) => void;
-  /** The "Import as transaction" button (with its confirmation) — present while the row can still be imported. */
-  importSlot?: React.ReactNode;
+  /** Present when FlowFi has a possible match for the row — opens the comparison under the row. */
+  onReviewMatch?: () => void;
+  /** This row's own Import (null = not offered, e.g. already imported or skipped). */
+  importAction?: { enabled: boolean; running: boolean; reason: string | null; onImport: () => void } | null;
   children: React.ReactNode;
 }) {
   /** J / K move between rows when no field or menu has focus — like the statement grid. Moving never decides anything. */
@@ -472,6 +566,8 @@ export function ReconRowSheet({
   }
   const tone = row.direction === "credit" ? SHEET_AMOUNT_TONE.credit : row.direction === "debit" ? SHEET_AMOUNT_TONE.debit : SHEET_AMOUNT_TONE.unknown;
   const sign = row.direction === "credit" ? "+" : row.direction === "debit" ? "−" : "";
+  const heading = title || row.description || "No description";
+  const imported = status?.kind === "imported";
   return (
     <TransactionSheet
       open={open}
@@ -486,13 +582,10 @@ export function ReconRowSheet({
           <div className="flex min-w-0 flex-1 basis-64 items-center gap-3">
             <SheetAvatar compact tone={row.direction === "credit" ? "credit" : row.direction === "debit" ? "debit" : "neutral"}>#{rowNumber}</SheetAvatar>
             <div className="min-w-0">
-              <p className="text-[10.5px] font-semibold tracking-[0.1em] whitespace-nowrap text-hero-foreground/68 uppercase">Statement row {rowNumber} · draft</p>
-              <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
-                <DialogTitle className="max-w-full truncate font-heading text-[17px] leading-tight font-bold tracking-tight text-hero-foreground" title={row.description}>
-                  {row.description || "No description"}
-                </DialogTitle>
-                {stateLabel && <span className="shrink-0 rounded-full bg-white/10 px-2 py-px text-[11px] font-semibold text-hero-foreground ring-1 ring-white/12">{stateLabel}</span>}
-              </div>
+              <p className="text-[10.5px] font-semibold tracking-[0.1em] whitespace-nowrap text-hero-foreground/68 uppercase">Statement row {rowNumber}</p>
+              <DialogTitle className="max-w-full truncate font-heading text-[17px] leading-tight font-bold tracking-tight text-hero-foreground" title={heading}>
+                {heading}
+              </DialogTitle>
               <DialogDescription className="mt-0.5 text-[12px] text-hero-foreground/70 tabular-nums">{formatRowDate(row.date, true)}</DialogDescription>
             </div>
           </div>
@@ -503,27 +596,37 @@ export function ReconRowSheet({
             >
               {row.amount == null ? "₹ —" : `${sign}₹${row.amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
             </p>
-            {nav && (
-              <SheetNav compact label="Move between rows" position={`${nav.position} / ${nav.total}`} prevLabel="Previous row" nextLabel="Next row" onPrev={nav.onPrev} onNext={nav.onNext} />
-            )}
+            {nav && <SheetNav compact label="Move between rows" position={`${nav.position} / ${nav.total}`} prevLabel="Previous row" nextLabel="Next row" onPrev={nav.onPrev} onNext={nav.onNext} />}
           </div>
         </div>
       }
       footer={
         <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2 px-3 py-2 sm:px-5">
-          <p className="mr-auto flex min-w-0 basis-64 items-center gap-2 text-[12px] text-foreground/72">
+          <p className="mr-auto flex min-w-0 basis-64 items-center gap-2 text-[12px] text-foreground/72" data-testid="editor-save-note">
             <ShieldCheck className="size-4 shrink-0 text-[oklch(0.44_0.13_149)] dark:text-success" aria-hidden />
-            Draft only — nothing is saved to FlowFi until final approval.
+            {imported ? "Imported — this row is a FlowFi transaction now." : status && status.kind !== "ready" && importAction ? status.reason : "Changes are kept as you go. Nothing is in FlowFi until you import."}
           </p>
-          {onCompare && (
-            <button type="button" onClick={() => onCompare(row.id)} className={cn(SHEET_BUTTON.secondary, "h-9")}>
-              <GitCompareArrows className="size-4" /> Compare with FlowFi
+          {onReviewMatch && (
+            <button type="button" onClick={onReviewMatch} className={cn(SHEET_BUTTON.secondary, "h-9")} data-testid="editor-review-match">
+              <GitCompareArrows className="size-4" /> Review match
             </button>
           )}
-          {importSlot}
-          <button type="button" onClick={onClose} className={cn(importSlot ? SHEET_BUTTON.secondary : SHEET_BUTTON.primary, "h-9 px-6")}>
-            Done
+          <button type="button" onClick={onClose} className={cn(importAction ? SHEET_BUTTON.secondary : SHEET_BUTTON.primary, "h-9 px-5")} data-testid="editor-close">
+            Close
           </button>
+          {importAction && (
+            <button
+              type="button"
+              disabled={!importAction.enabled || importAction.running}
+              onClick={importAction.onImport}
+              title={importAction.reason ?? "Import this row now — FlowFi is re-checked first, and it is never written twice."}
+              data-testid="import-as-transaction"
+              className={cn(SHEET_BUTTON.primary, "h-9 px-5 disabled:opacity-50")}
+            >
+              {importAction.running ? <Loader2 className="size-4 animate-spin" /> : null}
+              {importAction.running ? "Importing…" : "Import now"}
+            </button>
+          )}
         </div>
       }
     >

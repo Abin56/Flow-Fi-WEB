@@ -34,6 +34,12 @@ export interface ReconRow extends ReviewRow {
    * and decision; a changed one is replaced and its decision cleared — never silently.
    */
   captureBaseline?: string;
+  /**
+   * The description the user typed for the imported transaction (2026-11-25). Absent = the clean wording FlowFi derives
+   * from the narration (row-intelligence.ts), else the narration itself. `description` stays the bank's own narration:
+   * matching, references and duplicate checks compare it, and the import keeps it in the transaction's notes.
+   */
+  importDescription?: string | null;
 }
 
 /** Where an existing record came from, read from its id/`source`/notes — `unknown` is never assumed to be manual. */
@@ -118,7 +124,7 @@ export type MatchState =
   | "already_imported"
   | "excluded";
 
-export type RowNoteKind = "other_account" | "shared_limit_sibling" | "deleted_similar" | "unassigned_sms" | "possible_repeat" | "reference_elsewhere";
+export type RowNoteKind = "other_account" | "shared_limit_sibling" | "deleted_similar" | "unassigned_sms" | "possible_repeat" | "reference_elsewhere" | "different_reference";
 
 export interface RowNote {
   kind: RowNoteKind;
@@ -193,6 +199,12 @@ export interface RowDecision {
   notOwnTransferAck?: boolean;
   /** Import as new on a Charge: assigned to a person or split between people. Absent = the user's own expense. */
   ownership?: RowOwnership | null;
+  /**
+   * Why a Skip was chosen when it means "recorded elsewhere" (2026-11-25): money from a person belongs in People
+   * (Record payment), money from the user's own account is a Transfer. Nothing is written here for either — the row is
+   * left out of this import so the same cash is never recorded twice. Absent = a plain Skip.
+   */
+  skipReason?: "people" | "transfer" | null;
 }
 
 /** Card-bill status of a row's date on the statement card (D10). */

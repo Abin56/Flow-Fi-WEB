@@ -20,7 +20,7 @@ import { FOCUS_TOGGLE_TESTID } from "../hooks/use-focus-mode";
 import { FILTER_HINT, FILTER_LABEL, SHORTCUTS, SORT_LABEL, type ReconFilter, type ReconSort } from "./recon-toolbar";
 import { Count, type SummaryCounts } from "./review-import-summary";
 
-const FILTER_ORDER: ReconFilter[] = ["all", "duplicate", "fix", "ready", "skipped", "excluded"];
+const FILTER_ORDER: ReconFilter[] = ["all", "ready", "duplicate", "fix", "imported", "skipped", "excluded"];
 
 function Divider() {
   return <span aria-hidden className="h-5 w-px shrink-0 bg-border" />;
