@@ -360,6 +360,12 @@ function ExpenseTable({ rows, isMine }: { rows: MonthCycleExpenseRow[]; isMine: 
                           Split{isMine ? " · your share" : ""}
                         </span>
                       )}
+                      {row.paidFor && (
+                        <span className="inline-flex h-[18px] items-center gap-1 rounded-[4px] border border-purple/35 bg-purple/12 px-1.5 text-[10.5px] font-semibold text-purple">
+                          <Users className="size-2.5" />
+                          For {row.paidFor}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>

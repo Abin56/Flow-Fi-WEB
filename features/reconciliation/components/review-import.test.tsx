@@ -153,7 +153,7 @@ describe("Review & Import", () => {
 
   it("excluding a row updates the totals at once; including it again restores them", () => {
     open();
-    fireEvent.click(screen.getByRole("button", { name: /Expand row 4/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Edit row 4/ }));
     fireEvent.click(screen.getByRole("switch", { name: "Include this row" }));
     expect(value("total-debits")).toBe("1362.00");
     fireEvent.click(screen.getByRole("switch", { name: "Include this row" }));

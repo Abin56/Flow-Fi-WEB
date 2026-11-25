@@ -1171,3 +1171,23 @@ html[data-nav-thumb-drag] .nav-scroll {
   .animate-pair-travel { animation: pair-travel 2.8s cubic-bezier(0.45, 0, 0.25, 1) infinite; }
   .animate-pair-halo { animation: pair-halo 2.8s ease-out infinite; }
 }
+
+/* Loan & EMI header — payment awareness (presentation only; see features/loans/components/payment-awareness.tsx).
+   Every animation runs a fixed number of times and settles — nothing loops. Reduced motion is covered by the global
+   override above (durations collapse to ~0), and the information is always also in the text. */
+@keyframes pa-coin {
+  0% { left: 0; opacity: 0; transform: translateY(-50%) scale(0.5); }
+  15% { opacity: 1; transform: translateY(-50%) scale(1); }
+  85% { opacity: 1; transform: translateY(-50%) scale(1); }
+  100% { left: calc(100% - 12px); opacity: 0; transform: translateY(-50%) scale(0.5); }
+}
+@keyframes pa-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes pa-ring-out { 0% { opacity: 0.8; transform: scale(1); } 100% { opacity: 0; transform: scale(1.14, 1.5); } }
+@keyframes pa-pop { 0% { transform: scale(0.4); opacity: 0; } 60% { transform: scale(1.25); opacity: 1; } 100% { transform: scale(1); } }
+@keyframes pa-sheen { from { transform: translateX(-130%) skewX(-18deg); } to { transform: translateX(330%) skewX(-18deg); } }
+@keyframes pa-march { from { background-position: 0 0; } to { background-position: 16px 0; } }
+@keyframes pa-arrive {
+  0%, 78% { transform: scale(1); box-shadow: 0 0 0 0 transparent; }
+  90% { transform: scale(1.18); box-shadow: 0 0 0 5px color-mix(in oklab, currentColor 22%, transparent); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 transparent; }
+}

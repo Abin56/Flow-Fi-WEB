@@ -17,8 +17,9 @@
  * adds the browser's own fullscreen on top (see use-focus-mode.ts). Both are view-only.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
+import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { ArrowDownToLine, ArrowLeft, ChevronsDown, CheckCircle2, Expand, GitCompareArrows, History, Info, Loader2, Maximize2, Minimize2, RefreshCw, Shrink, Trash2, TriangleAlert, Undo2, X } from "lucide-react";
 import { HeaderAction, WorkspaceHeader } from "@/features/smart-capture/components/workspace-header";
 import { ClayButton } from "@/components/clay/clay-button";
@@ -35,7 +36,8 @@ import { FOCUS_TOGGLE_TESTID, useFocusMode } from "../hooks/use-focus-mode";
 import { useReconciliationApproval } from "../hooks/use-reconciliation-approval";
 import { useReconciliationSession } from "../hooks/use-reconciliation-session";
 import { sourceLabel, type RecordsSync } from "../hooks/use-reconciliation-data";
-import { consumePendingHandoff, declinePendingHandoff, getHandoffState, releaseReconciliationScreenshot, screenshotFor, subscribeHandoff } from "../lib/capture-handoff";
+import { clearDraft } from "@/features/smart-capture/lib/capture-draft";
+import { clearCaptureSnapshot, consumePendingHandoff, declinePendingHandoff, getHandoffState, releaseReconciliationScreenshot, screenshotFor, subscribeHandoff } from "../lib/capture-handoff";
 import { buildCycleResolver } from "../lib/card-cycle-status";
 import { applyBulkLink, attentionFieldOf, bulkLinkEligible, decisionErrors, decisionFor, importBlockReasons, ownTransferConfirmFor, rejectCandidate, reviewSummary, rowCheckLabel, setDecision, valueIssues, type RowGateContext } from "../lib/decisions";
 import { merchantCategoryIndex } from "../lib/bulk-import";
@@ -364,6 +366,10 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
 
   const statusTotals: StatusCounts = useMemo(() => ({ captured: rows.length, ready: counts.ready, duplicate: counts.duplicate, fix: counts.fix, imported: counts.imported, skipped: counts.skipped }), [rows.length, counts]);
   // After a one-click import: ONE compact line — "2 imported · 1 skipped · 1 needs attention" — instead of a dialog.
+  // The app router when there is one (null in isolated renders) — never throws outside the app.
+  const router = useContext(AppRouterContext);
+  /** Finished review (everything imported or skipped): clear only THIS capture's review state, then a clean Smart Capture. */
+  const completeReviewRef = useRef<() => void>(() => {});
   const totalsRef = useRef(statusTotals);
   useEffect(() => {
     totalsRef.current = statusTotals;
@@ -373,7 +379,9 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     const t = totalsRef.current;
     const attention = t.duplicate + t.fix;
     const parts = [`${importSummary.imported} imported`, `${t.skipped} skipped`, `${attention} need${attention === 1 ? "s" : ""} attention`];
-    toast.success(parts.join(" · "), attention > 0 ? "The rest stay here — fix them and import later." : "Every row in this statement is handled.");
+    const finished = attention === 0 && t.ready === 0 && t.imported > 0;
+    toast.success(parts.join(" · "), finished ? "Every row in this statement is handled — starting a clean capture." : attention > 0 ? "The rest stay here — fix them and import later." : "The rest of this review is ready to import.");
+    if (finished) completeReviewRef.current();
   }, [importSummary]);
 
   const visible = useMemo(() => {
@@ -594,6 +602,18 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
     setUndoNotice(null);
   };
 
+  useEffect(() => {
+    completeReviewRef.current = () => {
+      s.discard();
+      releaseReconciliationScreenshot();
+      clearCaptureSnapshot();
+      // The capture studio's own draft belongs to this finished capture — unless a different capture is waiting.
+      if (!getHandoffState().pending) clearDraft();
+      resetView();
+      setJustImported(new Set());
+      router?.push("/smart-capture");
+    };
+  });
   // ---- actions ----
   const select = (rowId: string) => setSelectedId(rowId);
   /** Close the row's sheet (Done, X, Escape, a click outside it). Edits are already in the draft — nothing to discard. */
@@ -1155,26 +1175,23 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
         </Notice>
       )}
 
-      {handoffConflict && pending && (
-        <section role="alertdialog" aria-labelledby="handoff-conflict-title" className="surface-primary flex flex-col gap-3 rounded-3xl border border-warning/40 p-4" data-testid="handoff-conflict">
-          <div>
-            <h2 id="handoff-conflict-title" className="text-sm font-semibold text-foreground">
-              A different capture is waiting
-            </h2>
-            <p className="mt-0.5 text-sm text-muted-foreground">
-              Smart Capture sent {pending.rows.filter((r) => r.include).length} new rows, but you already have a review in progress here. Nothing has been replaced.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <ClayButton size="sm" variant="secondary" onClick={() => declinePendingHandoff()}>
-              Keep my current review
-            </ClayButton>
-            <ClayButton size="sm" onClick={() => setReplaceOpen(true)}>
-              Review the new capture instead
-            </ClayButton>
-          </div>
-        </section>
-      )}
+      {handoffConflict && pending && (() => {
+        const n = pending.rows.filter((r) => r.include).length;
+        return (
+          <section role="status" className="flex shrink-0 items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 text-xs" data-testid="handoff-conflict" title="Your current review and its decisions are kept until you choose.">
+            <Info className="size-3.5 shrink-0 text-warning" />
+            <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+              New capture available · {n} {n === 1 ? "transaction" : "transactions"}
+            </span>
+            <button type="button" onClick={() => declinePendingHandoff()} className="inline-flex h-6 shrink-0 items-center rounded-md px-2 font-medium text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+              Keep current
+            </button>
+            <button type="button" onClick={() => setReplaceOpen(true)} className="inline-flex h-6 shrink-0 items-center rounded-md bg-foreground px-2 font-medium text-background hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+              Review new
+            </button>
+          </section>
+        );
+      })()}
 
       {session && accountId && (matchStatus === "loading" || (matchStatus === "ready" && billsState === "loading")) && (
         <div role="status" data-testid="records-loading" data-phase={slowLoading ? "slow" : "loading"} className="flex shrink-0 items-center gap-2 rounded-lg bg-muted/60 px-3 py-1 text-xs text-muted-foreground">
@@ -1289,6 +1306,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
                     categoryOf={categoryOf}
                     onCategory={setCategory}
                     renderAction={renderAction}
+                    onRemove={removeFromReview}
                     inlineId={inlineOpenId}
                     renderInline={inlineFor}
                     header={
@@ -1340,6 +1358,7 @@ export function ReconciliationWorkspace({ uid, data, sync = SYNCED, approvalDeps
             readiness={readiness}
             canApprove={approval.canImport && !approval.isBusy}
             importCount={readyRowIds.length}
+            progressLabel={approval.stage === "checking" ? "Checking…" : approval.stage === "importing" ? (approval.progress ? `Importing ${Math.min(approval.progress.done + 1, approval.progress.total)} of ${approval.progress.total}` : "Importing…") : null}
             statusCounts={statusReady ? statusTotals : null}
             hasAccount={!!accountId}
             onApprove={() => importRows(readyRowIds)}
@@ -1499,6 +1518,7 @@ function ReadinessBar({
   readiness,
   canApprove,
   importCount = 0,
+  progressLabel = null,
   statusCounts = null,
   hasAccount,
   onApprove,
@@ -1521,6 +1541,8 @@ function ReadinessBar({
   canApprove: boolean;
   /** Rows Ready to import right now (the global Import's count). */
   importCount?: number;
+  /** "Checking…" / "Importing 2 of 5" while an import runs (real counts); null otherwise. */
+  progressLabel?: string | null;
   /** One status per row — the bar's counts (Ready · Possible match · Fix required · Imported · Skipped). */
   statusCounts?: StatusCounts | null;
   hasAccount: boolean;
@@ -1665,8 +1687,14 @@ function ReadinessBar({
                 <ArrowDownToLine className="size-3.5" /> Next to resolve
               </ClayButton>
             )}
-            <ClayButton size="sm" className="h-7 px-2.5 text-xs" variant={canApprove && importCount > 0 ? "primary" : "secondary"} onClick={onApprove} disabled={!canApprove || !readiness || importCount === 0} data-testid="open-approval" title={hint}>
-              {`Import ${importCount} transaction${importCount === 1 ? "" : "s"}`}
+            <ClayButton size="sm" className="h-7 px-2.5 text-xs" variant={canApprove && importCount > 0 ? "primary" : "secondary"} onClick={onApprove} disabled={!!progressLabel || !canApprove || !readiness || importCount === 0} data-testid="open-approval" title={hint} aria-busy={!!progressLabel}>
+              {progressLabel ? (
+                <>
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden /> {progressLabel}
+                </>
+              ) : (
+                `Import ${importCount} transaction${importCount === 1 ? "" : "s"}`
+              )}
             </ClayButton>
           </div>
         )}
@@ -1733,8 +1761,14 @@ function ReadinessBar({
                 <span className="hidden sm:inline">Next undecided</span>
               </ClayButton>
             )}
-            <ClayButton size="sm" variant={canApprove && importCount > 0 ? "primary" : "secondary"} onClick={onApprove} disabled={!canApprove || !readiness || importCount === 0} data-testid="open-approval">
-              {`Import ${importCount} transaction${importCount === 1 ? "" : "s"}`}
+            <ClayButton size="sm" variant={canApprove && importCount > 0 ? "primary" : "secondary"} onClick={onApprove} disabled={!!progressLabel || !canApprove || !readiness || importCount === 0} data-testid="open-approval" aria-busy={!!progressLabel}>
+              {progressLabel ? (
+                <>
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden /> {progressLabel}
+                </>
+              ) : (
+                `Import ${importCount} transaction${importCount === 1 ? "" : "s"}`
+              )}
             </ClayButton>
           </div>
         )}

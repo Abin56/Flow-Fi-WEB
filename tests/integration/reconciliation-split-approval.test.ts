@@ -31,6 +31,7 @@ import { EMPTY_DECISION } from "@/features/reconciliation/lib/decisions";
 import type { DraftState } from "@/features/reconciliation/lib/reconciliation-draft";
 import { reconRow } from "@/features/reconciliation/lib/test-fixtures";
 import type { ReconRow, RowDecision, RowOwnership, SplitShareDraft } from "@/features/reconciliation/lib/types";
+import { assignedPerson } from "@/features/transactions/lib/assigned-expense";
 import { accountBalanceDrift } from "@/lib/engines/stored-balance-drift";
 import { accountFromFirestore, accountToFirestore } from "@/lib/models/account";
 import { categoryToFirestore, type Category } from "@/lib/models/category";
@@ -227,6 +228,8 @@ describe("person assignment", () => {
     const [expense] = await w.liveExpenses();
     expect(expense).toMatchObject({ totalAmount: 1_000, accountId: w.bank.id, transactionId: txn.id, splitType: "custom" });
     expect(expense.participants.map((p) => [p.name, p.share, p.personId])).toEqual([["Ravi", 1_000, w.ravi.id]]);
+    // Paid-for-someone-else is read as such by the Transactions list/details ("For Ravi"), never as a Split.
+    expect(assignedPerson(expense)).toEqual({ personId: w.ravi.id, name: "Ravi" });
     const ledger = await w.ledgerOf(w.ravi.id);
     expect(ledger).toHaveLength(1);
     expect(ledger[0]).toMatchObject({ amount: 1_000, type: "gave", transactionRef: txn.id });
@@ -258,6 +261,7 @@ describe("split allocations", () => {
     expect(await w.balance(w.bank.id)).toBe(9_000); // the whole bill left the account
     const [expense] = await w.liveExpenses();
     expect(expense.splitType).toBe("custom");
+    expect(assignedPerson(expense)).toBeNull(); // a genuine split (my share ₹400) stays a Split
     expect(expense.participants.map((p) => [p.name, p.share, p.isMe]).sort()).toEqual([["Asha", 250, false], ["Me", 400, true], ["Ravi", 350, false]]);
     expect((await w.ledgerOf(w.ravi.id)).map((e) => e.amount)).toEqual([350]);
     expect((await w.ledgerOf(w.asha.id)).map((e) => e.amount)).toEqual([250]);

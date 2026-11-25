@@ -38,6 +38,7 @@ import {
   type HistoryTransaction,
 } from "@/lib/engines/history-builder";
 import { isSplit, myShare } from "@/lib/models/expense";
+import { userNote } from "@/features/people/lib/linked-description";
 import type { Bill } from "@/lib/models/bill";
 import type { Emi } from "@/lib/models/emi";
 import type { Expense } from "@/lib/models/expense";
@@ -118,7 +119,8 @@ export function useHistoryEntries(): { entries: HistoryEntry[]; isLoading: boole
       type: t.type,
       amount: t.amount,
       dateTime: t.dateTime,
-      notes: t.notes,
+      // History's subtitle: the transaction's description, else the user's own note — never an import's bank narration.
+      notes: t.description?.trim() || userNote(t.notes) || "",
       receiptPurpose: t.receiptPurpose,
       isPersonLedgerMovement: t.isPersonLedgerMovement,
       transferId: t.transferId,

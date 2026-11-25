@@ -199,7 +199,7 @@ describe("draft-only editor and zero writes", () => {
     seed("acc-card");
     const { deps, creates, readData } = tripwire();
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} approvalDeps={deps} />);
-    fireEvent.click(screen.getByRole("button", { name: "Expand row 3" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit row 3" }));
     expect(screen.getByTestId("editor-account").textContent).toMatch(/HDFC Millennia •••• 4821/);
     expect((screen.getByRole("radio", { name: "Split expense" }) as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByRole("radio", { name: "Someone else's expense" }) as HTMLButtonElement).disabled).toBe(false);

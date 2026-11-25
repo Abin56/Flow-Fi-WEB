@@ -15,6 +15,8 @@ import { useAllEmiInstallments } from "@/hooks/use-emis";
 import { useAllLoanInstallments, useLoans, useTrashedLoans } from "@/hooks/use-loans";
 import { usePeople } from "@/hooks/use-people";
 import { useLoanScheduledPayments } from "@/hooks/use-loan-scheduled-payments";
+import { useTransactions } from "@/hooks/use-transactions";
+import { withLinkedDescriptions } from "@/features/people/lib/linked-description";
 import { usePeopleAdvanceApplications, usePeopleLedgerEntries } from "@/features/people/hooks/use-people-data";
 import {
   buildPersonCycleStatement,
@@ -28,10 +30,17 @@ import { personLinkedEmis, type PersonLinkedEmi } from "@/lib/engines/person-lin
 import type { Emi } from "@/lib/models/emi";
 import type { Loan } from "@/lib/models/loan";
 import type { Installment } from "@/lib/models/payment-schedule";
+import type { Transaction } from "@/lib/models/transaction";
 import type { AdvanceApplication, LedgerEntry, Person } from "@/lib/models/person";
 import { createEmiRepository, createLoanRepository } from "@/lib/repositories/repository-factory";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import { useAuthStore } from "@/store/auth-store";
+
+/** Live transactions by id — only to title a shared / paid-for item with its approved description. */
+function useTransactionsById(): ReadonlyMap<string, Transaction> {
+  const { data: transactions } = useTransactions();
+  return useMemo(() => new Map(((transactions ?? []) as Transaction[]).map((t) => [t.id, t])), [transactions]);
+}
 
 export interface LinkedEmiSource {
   kind: "emi" | "loan";
@@ -72,6 +81,7 @@ export function usePersonCycleStatement(
   const { data: loanInstallments = [] } = useAllLoanInstallments();
   const { data: trashedLoans = [] } = useTrashedLoans();
   const { payments: loanPayments } = useLoanScheduledPayments();
+  const transactionsById = useTransactionsById();
 
   const person = useMemo(() => (people as Person[]).find((p) => p.id === personId) ?? null, [people, personId]);
 
@@ -100,7 +110,8 @@ export function usePersonCycleStatement(
     const loanIds = new Set([...(loans as Loan[]).map((l) => l.id), ...(trashedLoans as Loan[]).map((l) => l.id)]);
     return {
       person: { id: person.id, name: person.name, openingBalance: person.openingBalance, createdAt: person.createdAt },
-      ledgerEntries,
+      // A display copy for the statement's titles; the raw `ledgerEntries` are what every write plans from.
+      ledgerEntries: withLinkedDescriptions(ledgerEntries, transactionsById),
       loanIds,
       emis: emis as Emi[],
       loans: loans as Loan[],
@@ -108,7 +119,7 @@ export function usePersonCycleStatement(
       loanPayments,
       advanceApplications,
     };
-  }, [person, ledgerEntries, advanceApplications, emis, loans, trashedLoans, emiInstallments, loanInstallments, loanPayments]);
+  }, [person, ledgerEntries, transactionsById, advanceApplications, emis, loans, trashedLoans, emiInstallments, loanInstallments, loanPayments]);
 
   const statement = useMemo(() => (baseInput ? buildPersonCycleStatement({ ...baseInput, cycle }) : null), [baseInput, cycle]);
   const cycleStartDay = useMonthCycleStartDay();
@@ -181,6 +192,7 @@ export function usePeopleCycleStatements(cycle: StatementCycle): {
   const { data: loanInstallments = [], isLoading: loanInstallmentsLoading } = useAllLoanInstallments();
   const { data: trashedLoans = [], isLoading: trashedLoading } = useTrashedLoans();
   const { payments: loanPayments } = useLoanScheduledPayments();
+  const transactionsById = useTransactionsById();
 
   const statementsByPersonId = useMemo(() => {
     const loanIds = new Set([...(loans as Loan[]).map((l) => l.id), ...(trashedLoans as Loan[]).map((l) => l.id)]);
@@ -189,7 +201,7 @@ export function usePeopleCycleStatements(cycle: StatementCycle): {
     for (const person of people as Person[]) {
       out[person.id] = buildPersonCycleStatement({
         person: { id: person.id, name: person.name, openingBalance: person.openingBalance, createdAt: person.createdAt },
-        ledgerEntries: entriesByPersonId[person.id] ?? [],
+        ledgerEntries: withLinkedDescriptions(entriesByPersonId[person.id] ?? [], transactionsById),
         loanIds,
         emis: emis as Emi[],
         loans: loans as Loan[],
@@ -200,7 +212,7 @@ export function usePeopleCycleStatements(cycle: StatementCycle): {
       });
     }
     return out;
-  }, [people, entriesByPersonId, applicationsByPersonId, emis, loans, trashedLoans, emiInstallments, loanInstallments, loanPayments, cycle]);
+  }, [people, entriesByPersonId, transactionsById, applicationsByPersonId, emis, loans, trashedLoans, emiInstallments, loanInstallments, loanPayments, cycle]);
 
   // Every source the engine reads must have reported before a row renders: a statement built while the
   // EMI/Loan watches are still resolving omits linked-EMI obligations, then jumps once they land.

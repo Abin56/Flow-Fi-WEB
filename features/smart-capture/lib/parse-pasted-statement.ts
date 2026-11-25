@@ -774,7 +774,7 @@ function finalizeRow(
   // Only a merge that pulled an AMOUNT from a following line can hide a second transaction. A dated line that already
   // carries its amount, followed by amount-free lines, is the bank wrapping its own narration — said once, never a check.
   if (draft.mergedLines && draft.amountTokens.length > 0 && draft.amountFromContinuation) {
-    issues.push({ code: "merged_lines", message: `Built from ${draft.sourceLines.length} lines — check the extra line isn't a separate transaction.`, blocking: true });
+    issues.push({ code: "merged_lines", message: `Possible merged transaction (${draft.sourceLines.length} lines) — check source.`, blocking: true });
   } else if (draft.mergedLines && draft.amountTokens.length > 0) {
     notes.push(`The description continues on ${draft.sourceLines.length - 1 === 1 ? "the next line" : `the next ${draft.sourceLines.length - 1} lines`} (no amount there) — joined into this row.`);
   }

@@ -43,10 +43,18 @@ export interface MonthlyItem {
   owedBy: "them" | "owner" | null;
   /** The PDF's plain-words kind: "EMI" / "Shared Expense" / "Assigned Expense" / "Given" / … — from what the entry IS. */
   type: string;
-  /** The PDF's plain-words status. Never "Paid" (a paid item is left out) and never a per-item paid / remaining figure. */
+  /** The PDF's plain-words status, for an item with no reliable per-item Paid/Remaining (see `paid`/`remaining`). */
   status: "Pending" | "Postponed" | "Overdue";
   /** One short line under the title, in plain words ("Postponed to Dec 2026", "₹1,000 total · Your share ₹500"). Empty when the type says it all. */
   detail: string;
+  /**
+   * This item's own Paid / Remaining — straight from the engine's `remainingNow` for THIS obligation
+   * (never derived here, never a blind "amount minus a general receipt"). Null together when the
+   * engine carries no settlement state for this row (e.g. a plain adjustment): the PDF then falls back
+   * to `amount` + `status` for that row instead of guessing a split.
+   */
+  paid: string | null;
+  remaining: string | null;
 }
 
 export interface MonthlyPayment {
@@ -110,6 +118,13 @@ export interface MonthlySettlementView {
   mixed: { theyOwe: string; ownerOwes: string } | null;
   /** Due this cycle vs postponed — only when something is postponed and the balance runs one way. */
   split: MonthlySplit | null;
+  /**
+   * When money was paid toward the OVERALL balance without being tied to one item (a general payment,
+   * or a legacy unlinked one), the open items' own Remaining figures no longer sum to the balance — this
+   * says so in one line, so the two numbers on the page are never left silently disagreeing. Null when
+   * every payment this statement counts was tied to an item.
+   */
+  generalCreditNote: string | null;
 }
 
 /** The PDF's plain-words kind for a row — decided by what the entry IS, never by how it is being collected. */
@@ -163,6 +178,9 @@ export function monthlySettlementView(statement: PersonCycleStatement, options: 
     const where = df?.status === "postponed" ? `Postponed to ${when}` : df?.status === "lapsed" ? `Was expected ${when}` : df?.status === "expectedNow" ? `Postponed from ${df.from} · due now` : "";
     const share = r.purchase ? `${r.purchase} total · ${r.owedBy === "owner" ? r.amountLabel : "Your share"} ${r.original}` : "";
     const who = isMixed && r.owedBy ? `${r.owedBy === "them" ? first : view.ownerShort} owes` : "";
+    // This item's OWN Paid/Remaining — only when the engine tracks a settlement state for it
+    // (`remainingValue`). Every row reaching this list is unsettled (filtered below), so remaining > 0.
+    const hasOwnState = r.remainingValue != null;
     return {
       group,
       date: d.year ? `${d.day} ${d.year}` : d.day,
@@ -175,6 +193,8 @@ export function monthlySettlementView(statement: PersonCycleStatement, options: 
       type: TYPE_WORD[r.kind] ?? r.tag,
       status,
       detail: [where, share, who].filter(Boolean).join(" · "),
+      paid: hasOwnState ? money(Math.max(0, r.amountValue - r.remainingValue!)) : null,
+      remaining: hasOwnState ? money(r.remainingValue!) : null,
     };
   };
 
@@ -223,6 +243,22 @@ export function monthlySettlementView(statement: PersonCycleStatement, options: 
       ? { dueNow: money(fromPaise(outstandingPaise - postponedPaise)), postponed: money(fromPaise(postponedPaise)), postponedTo: targets.size === 1 ? [...targets][0] : "later cycles" }
       : null;
 
+  // Every listed item's own Remaining is engine-tracked per obligation (never invented here). Netted across both
+  // sides (them owing minus owner owing), it should equal the engine's own net balance (`currentPending`). A gap
+  // means some of that net isn't itemized above — a payment applied to the whole balance rather than one item, or
+  // an obligation type the item table doesn't track per item (e.g. a manual adjustment) — said once, plainly,
+  // rather than leaving the reader to notice the items below don't quite add up to the reconciled total.
+  let trackedNet = 0;
+  for (const r of [...view.carried, ...view.rows]) {
+    if (r.remainingValue == null) continue;
+    trackedNet += r.owedBy === "them" ? paise(r.remainingValue) : r.owedBy === "owner" ? -paise(r.remainingValue) : 0;
+  }
+  const untrackedGap = Math.abs(paise(statement.currentPending) - trackedNet);
+  const generalCreditNote =
+    !isMixed && untrackedGap >= SAME
+      ? `${money(fromPaise(untrackedGap))} of the balance above isn't itemized against a specific entry below — a payment applied to the whole balance, or an adjustment, rather than one item.`
+      : null;
+
   return {
     personName: view.personName,
     ownerName: view.ownerName,
@@ -240,6 +276,7 @@ export function monthlySettlementView(statement: PersonCycleStatement, options: 
     advance: view.advance,
     mixed: isMixed ? { theyOwe: money(statement.toReceive), ownerOwes: money(statement.toGive) } : null,
     split,
+    generalCreditNote,
   };
 }
 

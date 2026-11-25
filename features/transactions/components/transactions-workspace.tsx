@@ -77,6 +77,7 @@ import { useExpenses } from "@/hooks/use-expenses";
 import type { Account } from "@/lib/models/account";
 import type { Category } from "@/lib/models/category";
 import { isSplit as isSplitExpense, type SplitType } from "@/lib/models/expense";
+import { assignedPerson } from "@/features/transactions/lib/assigned-expense";
 import type { Person } from "@/lib/models/person";
 import { compareTransactionsNewestFirst, isLoanPrincipalDisbursement, type Transaction } from "@/lib/models/transaction";
 import { startOperation } from "@/store/operation-progress-store";
@@ -254,14 +255,20 @@ export function TransactionsWorkspace() {
     for (const r of rows) {
       const t = r.transaction;
       const expense = expenseByTransactionId.get(t.id);
-      if (!expense || !isSplitExpense(expense) || isAssignedToPerson(t)) continue;
+      if (!expense || !isSplitExpense(expense) || isAssignedToPerson(t) || assignedPerson(expense)) continue;
       const allocation = splitAllocation(expense);
       if (allocation) byId.set(t.id, allocation);
     }
     return byId;
   }, [rows, expenseByTransactionId]);
-  const assigneeFor = (t: Transaction): string | null =>
-    isAssignedToPerson(t) ? (personNameById.get(t.linkedPersonId!) ?? "a person") : null;
+  // Paid for one person: the transaction's own marker, or — for statement imports and Assign-to-person, which store a
+  // one-participant Expense with no "Me" share — the saved Expense (display only; nothing is written).
+  const assigneeFor = (t: Transaction): string | null => {
+    if (isAssignedToPerson(t)) return personNameById.get(t.linkedPersonId!) ?? "a person";
+    if (t.type !== "expense") return null;
+    const who = assignedPerson(expenseByTransactionId.get(t.id));
+    return who ? ((who.personId ? personNameById.get(who.personId) : null) ?? who.name) : null;
+  };
   // The person behind a People-ledger movement (Received / Repaid / Borrowed) — display only, read from
   // the same `linkedPersonId` reference tag the ledger entry already carries.
   const personNameFor = (t: Transaction): string | null =>

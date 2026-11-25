@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AwarenessInput } from "@/features/loans/lib/payment-awareness";
-import { PaymentAwareness, PaymentAwarenessProvider, PaymentAwarenessPublisher } from "./payment-awareness";
+import { PaymentAwareness, type UpcomingPayment, PaymentAwarenessProvider, PaymentAwarenessPublisher } from "./payment-awareness";
 
 /** The header indicator, driven the way the Record Payment dialog drives it: a publisher mounted while the dialog is open. */
 
@@ -16,14 +16,15 @@ const input = (over: Partial<AwarenessInput> = {}): AwarenessInput => ({
   account: { name: "SBI", type: "bank", currentBalance: 1500 },
   amount: 2500,
   payerName: "Shambu",
+  agreement: "Loan",
   success: false,
   ...over,
 });
 
-function Harness({ dialog }: { dialog: AwarenessInput | null | "closed" }) {
+function Harness({ dialog, upcoming }: { dialog: AwarenessInput | null | "closed"; upcoming?: UpcomingPayment | null }) {
   return (
     <PaymentAwarenessProvider>
-      <PaymentAwareness />
+      <PaymentAwareness upcoming={upcoming} progressPercent={40} />
       {dialog !== "closed" && <PaymentAwarenessPublisher input={dialog} />}
     </PaymentAwarenessProvider>
   );
@@ -55,11 +56,11 @@ describe("PaymentAwareness (header)", () => {
     expect(shown()?.getAttribute("data-awareness")).toBe("low");
     rerender(<Harness dialog={input({ earlier: true, directPayer: true, debitsAccount: false })} />);
     expect(shown()?.getAttribute("data-awareness")).toBe("direct");
-    expect(screen.getByRole("status").textContent).toContain("Your balance unchanged");
+    expect(screen.getByRole("status").textContent).toContain("My account unchanged");
     expect(screen.getByRole("status").textContent).not.toContain("Low balance");
     rerender(<Harness dialog={input({ earlier: true, debitsAccount: false })} />);
     expect(shown()?.getAttribute("data-awareness")).toBe("recorded");
-    expect(screen.getByRole("status").textContent).toContain("No new account debit");
+    expect(screen.getByRole("status").textContent).toContain("No new debit");
   });
 
   it("amount edits update the warning in place", () => {
@@ -103,6 +104,24 @@ describe("PaymentAwareness (header)", () => {
     expect(shown()?.getAttribute("data-awareness")).toBe("done");
     rerender(<Harness dialog={input({ account: rich, success: false })} />);
     expect(shown()?.getAttribute("data-awareness")).toBe("pay");
+  });
+
+  it("shows the next installment while no payment is open, and gives way to the payment being set up", () => {
+    const next: UpcomingPayment = { amount: 2500, dueDate: new Date(2026, 11, 1), sequenceNumber: 5, overdue: false };
+    const { rerender } = render(<Harness dialog="closed" upcoming={next} />);
+    expect(shown()?.getAttribute("data-awareness")).toBe("upcoming");
+    expect(screen.getByRole("status").textContent).toContain("Next · ₹2,500 · 1 Dec");
+    expect(screen.getByRole("status").textContent).not.toContain("Overdue");
+    rerender(<Harness dialog={input()} upcoming={next} />);
+    expect(shown()?.getAttribute("data-awareness")).toBe("low");
+    rerender(<Harness dialog="closed" upcoming={next} />);
+    expect(shown()?.getAttribute("data-awareness")).toBe("upcoming");
+  });
+
+  it("only an installment the schedule already flags overdue is called overdue", () => {
+    const late: UpcomingPayment = { amount: 2500, dueDate: new Date(2026, 9, 1), sequenceNumber: 3, overdue: true };
+    render(<Harness dialog="closed" upcoming={late} />);
+    expect(screen.getByRole("status").textContent).toContain("Overdue");
   });
 
   it("publishing without a provider (the list windows) is a harmless no-op", () => {

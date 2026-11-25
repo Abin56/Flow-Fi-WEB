@@ -147,8 +147,21 @@ export interface CommitReviewImportParams {
   linkRetryDelayMs?: number;
 }
 
+/**
+ * A staged row carries its category as a NAME. One name can belong to two categories (an income one and an expense
+ * one), so the name is resolved against the row's direction: the live category that fits it, else the only category of
+ * that name at all (a refund filed under an expense category). Several that fit equally resolve to nothing.
+ */
+function categoryFor(row: StagedRecord, categories: Category[]): { id: string | null; ambiguous: boolean } {
+  const named = categories.filter((c) => c.name === row.category);
+  const wanted = row.direction === "credit" ? "income" : "expense";
+  const fitting = named.filter((c) => c.deletedAt == null && c.isActive !== false && (c.type === wanted || c.type === "both"));
+  const candidates = fitting.length > 0 ? fitting : named;
+  return candidates.length === 1 ? { id: candidates[0].id, ambiguous: false } : { id: null, ambiguous: candidates.length > 1 };
+}
+
 /** Pre-flight "block commit, require review" validation — the only commit path (architecture §7's locked decision: client-driven, no Cloud Function duplication), so this is the single source of truth for what blocks a commit. */
-function validateRow(row: StagedRecord, categoryIdByName: Map<string, string>): CommitBlockingReason[] {
+function validateRow(row: StagedRecord, categories: Category[]): CommitBlockingReason[] {
   const reasons: CommitBlockingReason[] = [];
   if (row.needsReview) {
     reasons.push({ recordId: row.id, code: "needs_review", message: "This row is flagged needsReview and must be resolved before import." });
@@ -159,11 +172,17 @@ function validateRow(row: StagedRecord, categoryIdByName: Map<string, string>): 
   // B30: Category is only required for flow types where it's a meaningful choice — transfer/debt_movement/ignore
   // rows must not be blocked on a category the reviewer has nothing real to pick (their money movement is
   // categorized by the linked account/EMI/loan record instead, not this axis).
-  if (isCategoryApplicableForFlowType(row.flowType) && (row.category == null || !categoryIdByName.has(row.category))) {
+  const category = categoryFor(row, categories);
+  if (isCategoryApplicableForFlowType(row.flowType) && category.id == null) {
     reasons.push({
       recordId: row.id,
       code: "unresolved_category",
-      message: row.category == null ? "No category set." : `Category "${row.category}" doesn't match an existing category.`,
+      message:
+        row.category == null
+          ? "No category set."
+          : category.ambiguous
+            ? `More than one category is named "${row.category}" — rename one, then try again.`
+            : `Category "${row.category}" doesn't match an existing category.`,
     });
   }
   const action = deriveRecordAction(row);
@@ -664,11 +683,10 @@ export interface PreflightBlocker {
  * committed) — those were never going to be validated either way.
  */
 export function getPreflightBlockers(rows: StagedRecord[], categories: Category[]): PreflightBlocker[] {
-  const categoryIdByName = new Map(categories.map((c) => [c.name, c.id]));
   const blockers: PreflightBlocker[] = [];
   for (const row of rows) {
     if (!row.include || deriveRecordAction(row) === "ignore" || row.committedTransactionId) continue;
-    const blockingReasons = validateRow(row, categoryIdByName);
+    const blockingReasons = validateRow(row, categories);
     if (blockingReasons.length > 0) blockers.push({ recordId: row.id, blockingReasons });
   }
   return blockers;
@@ -833,7 +851,6 @@ async function acknowledgeWithRetry(params: CommitReviewImportParams, recordId: 
 }
 
 export async function commitReviewImport(params: CommitReviewImportParams): Promise<CommitReviewImportResult> {
-  const categoryIdByName = new Map(params.categories.map((c) => [c.name, c.id]));
   const results: CommitRowResult[] = [];
 
   for (const row of params.rows) {
@@ -846,7 +863,7 @@ export async function commitReviewImport(params: CommitReviewImportParams): Prom
       continue;
     }
 
-    const blockingReasons = validateRow(row, categoryIdByName);
+    const blockingReasons = validateRow(row, params.categories);
     if (blockingReasons.length > 0) {
       results.push({ recordId: row.id, outcome: "blocked", blockingReasons });
       continue;
@@ -868,7 +885,7 @@ export async function commitReviewImport(params: CommitReviewImportParams): Prom
           continue;
         }
       }
-      const categoryId = categoryIdByName.get(row.category!)!;
+      const categoryId = categoryFor(row, params.categories).id!;
       ({ transactionId } = await commitOneRow(row, categoryId, params));
     } catch (error) {
       if (error instanceof KeyedExpenseMismatchError || error instanceof KeyedExpenseIncompleteError) {

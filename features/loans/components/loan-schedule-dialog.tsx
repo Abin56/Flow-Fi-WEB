@@ -184,6 +184,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
               ),
               people: <AgreementPeopleTab people={people} returnTo={pathname || "/loans/"} onTheyPaid={lent ? undefined : askTheyPaid} />,
               peopleCount: people.length,
+              nextPayment: !isClosed && nextPayable ? { amount: remainingAmount(nextPayable), dueDate: nextPayable.dueDate, sequenceNumber: nextPayable.sequenceNumber, overdue: nextOverdue } : null,
             }
           : undefined
       }

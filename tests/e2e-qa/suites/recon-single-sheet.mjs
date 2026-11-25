@@ -255,7 +255,7 @@ scenario("rss-direct", "Capture → Review → Import: 5 normal rows import with
   chk("no 'Finish review' / 'Needs review' / 'Confirm amount' wording anywhere", !/Finish review|Needs review|Confirm amount/.test(await page.locator("body").innerText()));
 
   // Edit an amount: no confirmation of the number just typed, row stays Ready.
-  await page.getByRole("button", { name: "Expand row 2" }).click();
+  await page.getByRole("button", { name: "Edit row 2" }).click();
   await page.getByLabel("Amount").fill("77.50");
   await page.getByLabel("Amount").blur();
   await page.getByRole("button", { name: "Done" }).click();

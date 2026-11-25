@@ -146,17 +146,20 @@ function transaction(overrides: Partial<Transaction> = {}): Transaction {
   };
 }
 
+/** A committed expense filed elsewhere, so a chosen name is really resolved. */
+const TXN = { type: "expense" as const, categoryId: "cat-other", dateTime: new Date(2026, 0, 1), accountingMonth: null };
+
 describe("resolveCategoryId", () => {
   it("resolves a known category name to its id", () => {
-    expect(resolveCategoryId("Shopping", [category()])).toEqual({ categoryId: "cat-shopping", error: null });
+    expect(resolveCategoryId("Shopping", [category()], TXN)).toEqual({ categoryId: "cat-shopping", error: null });
   });
 
   it("returns undefined categoryId (leave unchanged) for null input, no error", () => {
-    expect(resolveCategoryId(null, [category()])).toEqual({ categoryId: undefined, error: null });
+    expect(resolveCategoryId(null, [category()], TXN)).toEqual({ categoryId: undefined, error: null });
   });
 
   it("errors on an unresolvable category name instead of silently dropping it", () => {
-    const result = resolveCategoryId("Ghost Category", [category()]);
+    const result = resolveCategoryId("Ghost Category", [category()], TXN);
     expect(result.categoryId).toBeUndefined();
     expect(result.error).toContain("Ghost Category");
   });
@@ -336,7 +339,7 @@ describe("saveGridFieldCommittedAware", () => {
 describe("draftToEditTransactionParams", () => {
   it("maps a valid draft to EditTransactionParams, resolving category name to categoryId", () => {
     const categories = [category()];
-    const result = draftToEditTransactionParams(draftFromRow(row()), categories);
+    const result = draftToEditTransactionParams(draftFromRow(row()), categories, TXN);
     expect(result.error).toBeNull();
     expect(result.params).toMatchObject({
       amount: 123.45,
@@ -351,27 +354,27 @@ describe("draftToEditTransactionParams", () => {
   });
 
   it("errors when the category name has no matching Category (rather than silently dropping or writing an invalid id)", () => {
-    const result = draftToEditTransactionParams(draftFromRow(row({ category: "Ghost Category" })), [category()]);
+    const result = draftToEditTransactionParams(draftFromRow(row({ category: "Ghost Category" })), [category()], TXN);
     expect(result.params).toBeNull();
     expect(result.error).toContain("Ghost Category");
   });
 
   it("leaves categoryId undefined (unchanged) when the draft has no category at all", () => {
-    const result = draftToEditTransactionParams(draftFromRow(row({ category: null })), [category()]);
+    const result = draftToEditTransactionParams(draftFromRow(row({ category: null })), [category()], TXN);
     expect(result.error).toBeNull();
     expect(result.params?.categoryId).toBeUndefined();
   });
 
   it("sets clearAccountingMonth false and a real Date when a month attribution is set", () => {
     const draft = { ...draftFromRow(row()), accountingMonth: "2026-03" };
-    const result = draftToEditTransactionParams(draft, [category()]);
+    const result = draftToEditTransactionParams(draft, [category()], TXN);
     expect(result.params?.clearAccountingMonth).toBe(false);
     // The LOCAL 1st — `effectiveMonth` reads months in local time (WFI-P3-08).
     expect(result.params?.accountingMonth).toEqual(new Date(2026, 2, 1));
   });
 
   it("[WFI-P3-08] keeps the committed transaction's date/time when the day is unchanged; a new day keeps its time of day", () => {
-    const existing = { dateTime: new Date(2026, 7, 15, 14, 30), accountingMonth: null };
+    const existing = { ...TXN, dateTime: new Date(2026, 7, 15, 14, 30) };
     const same = draftToEditTransactionParams({ ...draftFromRow(row()), date: "2026-08-15" }, [category()], existing);
     expect(same.params?.dateTime).toBeUndefined();
     const moved = draftToEditTransactionParams({ ...draftFromRow(row()), date: "2026-08-17" }, [category()], existing);

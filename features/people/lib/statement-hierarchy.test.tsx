@@ -220,8 +220,10 @@ describe("preview ↔ PDF", () => {
     expect(assigned.textContent).not.toContain("Assigned in full");
     expect(assigned.textContent).not.toContain("share");
     const page = (await pdfPages(s)).flat();
-    for (const r of s.view.rows) {
-      expect(container.querySelector(`[data-chip="${r.chip}"]`)?.textContent).toBe(r.tag);
+    // Paid for them in full is never tagged as a split. (Both share a chip colour, so each row's own chip is read.)
+    expect(s.view.rows.map((r) => r.tag)).toEqual(["Split", "For you"]);
+    for (const [i, r] of s.view.rows.entries()) {
+      expect(rows[i].querySelector(`[data-chip="${r.chip}"]`)?.textContent).toBe(r.tag);
       expect(page).toContain(pdfSafe(r.tag));
       // A meta line may wrap in the narrower portrait column; joined back it reads the same.
       expect(page.join(" ")).toContain(pdfSafe(r.metaLine));

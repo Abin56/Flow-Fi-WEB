@@ -269,7 +269,7 @@ describe("Git-style resolution", () => {
     fireEvent.click(resolve("import")); // "Edit details" opens the row's editor
     expect(screen.getByTestId("row-editor-panel")).toBeTruthy();
     expect(screen.queryByRole("checkbox", { name: "These are separate transactions" })).toBeNull();
-    fireEvent.click(screen.getByTestId("credit-refund"));
+    fireEvent.change(screen.getByTestId("credit-type-select"), { target: { value: "refund" } });
     expect(JSON.parse(draft()).decisions.r7).toMatchObject({ creditAs: "refund" });
     fireEvent.click(screen.getByTestId("editor-close"));
     setRowCategory("r7", "Salary");
@@ -485,9 +485,7 @@ describe("approval regression and zero writes", () => {
     setRowCategory("r7", "Salary");
     expect(["r5", "r6", "r7"].map(rowStatusOf)).toEqual(["ready", "ready", "ready"]);
     fireEvent.click(screen.getByTestId("open-approval"));
-    await waitFor(() => expect(rowStatusOf("r7")).toBe("imported"));
-    expect(["r5", "r6", "r7"].map(rowStatusOf)).toEqual(["imported", "imported", "imported"]);
-    expect(rowStatusOf("r1")).toBe("skipped"); // Already recorded — never written
+    await waitFor(() => expect(screen.queryAllByTestId("recon-row")).toHaveLength(0)); // all handled → the finished review is cleared
     expect(fakeRepo.createTransaction).toHaveBeenCalledTimes(3);
   });
 });

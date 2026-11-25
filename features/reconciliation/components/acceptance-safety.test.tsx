@@ -107,10 +107,8 @@ describe("final approval rechecks fresh data for dock-made decisions", () => {
     const unrelated = txn({ id: "t-other", amount: 999, description: "Rent", accountId: "acc-bank", dateTime: at(20) });
     const before = JSON.stringify([SWIGGY, CAFE]);
     const { repo } = await approveAgainst(withTransactions([SWIGGY, CAFE, BANK, unrelated]));
-    await waitFor(() => expect(rowStatusOf("r4")).toBe("imported"));
-    expect(rowStatusOf("r3")).toBe("imported");
-    expect(rowStatusOf("r1")).toBe("skipped"); // Already recorded — never written
-    expect(rowStatusOf("r2")).toBe("skipped");
+    // Everything is imported or skipped, so the finished review is cleared.
+    await waitFor(() => expect(screen.queryAllByTestId("recon-row")).toHaveLength(0));
     expect(repo.createTransaction).toHaveBeenCalledTimes(2);
     // The kept transactions were never touched: the fake repository has no update/delete at all, and the data is unchanged.
     expect(JSON.stringify([SWIGGY, CAFE])).toBe(before);

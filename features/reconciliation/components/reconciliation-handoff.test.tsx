@@ -114,7 +114,7 @@ describe("Smart Capture → Reconciliation handoff", () => {
     expect(within(panel).getByTestId("match-candidate").textContent).toMatch(/From SMS/);
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     // Arrives excluded, but OCR checks now live here, so it can be included here (two-step flow).
-    fireEvent.click(screen.getByRole("button", { name: "Expand row 3" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit row 3" }));
     expect(screen.queryByTestId("capture-excluded")).toBeNull();
     expect(screen.getByRole("switch", { name: "Include this row" })).toBeTruthy();
   });
@@ -147,6 +147,19 @@ describe("Smart Capture → Reconciliation handoff", () => {
     render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
     pickAccount();
     expect(screen.getByTestId("back-to-capture").getAttribute("href")).toBe("/smart-capture");
+  });
+});
+
+describe("deleting a captured row", () => {
+  it("one click removes it from THIS review only; Undo brings it back; nothing in FlowFi is written", () => {
+    handOff();
+    render(<ReconciliationWorkspace uid="u1" data={DATA} sync={LOADED} />);
+    pickAccount();
+    const before = screen.getAllByTestId("recon-row").length;
+    fireEvent.click(screen.getAllByTestId("row-delete")[0]!);
+    expect(screen.getAllByTestId("recon-row").length).toBe(before - 1);
+    fireEvent.click(screen.getByRole("button", { name: /Undo/ }));
+    expect(screen.getAllByTestId("recon-row").length).toBe(before);
   });
 });
 
@@ -193,16 +206,16 @@ describe("never silently replacing a review", () => {
     const originalIds = original.rows.map((r) => r.id);
 
     act(() => void handOff(capture([ocrLine(0, ["08/09/2026", "NETFLIX", "649.00 Dr"])])));
-    expect(screen.getByTestId("handoff-conflict")).toBeTruthy();
+    expect(screen.getByTestId("handoff-conflict").textContent).toMatch(/New capture available · 1 transaction/);
     expect(screen.getAllByTestId("recon-row").map((r) => r.dataset.rowId)).toEqual(originalIds); // untouched
 
-    fireEvent.click(screen.getByRole("button", { name: "Keep my current review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep current" }));
     expect(screen.queryByTestId("handoff-conflict")).toBeNull();
     expect(getHandoffState().pending).toBeNull();
     expect(screen.getAllByTestId("recon-row")).toHaveLength(3);
 
     act(() => void handOff(capture([ocrLine(0, ["08/09/2026", "NETFLIX", "649.00 Dr"])])));
-    fireEvent.click(screen.getByRole("button", { name: "Review the new capture instead" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review new" }));
     fireEvent.click(screen.getByRole("button", { name: "Replace review" }));
     expect(screen.getAllByTestId("recon-row")).toHaveLength(1);
     expect(rowEl("r1").textContent).toMatch(/NETFLIX/);

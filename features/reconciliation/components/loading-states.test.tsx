@@ -138,7 +138,7 @@ describe("edits and decisions survive loading", () => {
   it("a value typed while records are still loading is kept when matching completes, and is matched against what it now says", () => {
     seed();
     const view = render(<ReconciliationWorkspace uid="u1" data={{ ...DATA, transactions: [] }} sync={sync({ loading: ["transactions"] })} />);
-    fireEvent.click(screen.getByRole("button", { name: "Expand row 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit row 1" }));
     fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "300" } }); // row a becomes ₹300 — same as the Zomato in FlowFi
     fireEvent.blur(screen.getByLabelText("Amount"));
     fireEvent.click(screen.getByTestId("editor-close"));

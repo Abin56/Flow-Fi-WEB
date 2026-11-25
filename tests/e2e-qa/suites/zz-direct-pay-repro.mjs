@@ -39,6 +39,7 @@ scenario("zz-direct-pay-single", "Pay directly (single installment, shared loan)
   await payment.getByRole("region", { name: "Has their share been paid?" }).waitFor();
   await payment.getByRole("radio", { name: "QA Priya paid directly" }).click();
   await page.waitForTimeout(500);
+  await h.pickPaidDate(page, payment);
   await payment.getByLabel("Account for this record").click();
   await page.getByRole("option").first().click();
   await page.waitForTimeout(500);

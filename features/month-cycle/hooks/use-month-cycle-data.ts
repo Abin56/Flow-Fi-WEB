@@ -61,6 +61,7 @@ import type { Category } from "@/lib/models/category";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import { cardBillsDueInCycle, cardBillsForCard } from "@/lib/engines/card-cycle-bills";
 import { isSplit, type Expense } from "@/lib/models/expense";
+import { assignedPerson } from "@/features/transactions/lib/assigned-expense";
 import { useMySpendContext } from "@/hooks/use-my-spend-context";
 import { useSpendTransactions, withBuiltInChargeCategory } from "@/hooks/use-lender-charge-spend";
 import { isLenderChargeBillingRow } from "@/lib/engines/lender-charge-accounting";
@@ -153,6 +154,8 @@ export interface MonthCycleExpenseRow {
   /** My share only (equals `fullAmount` for a non-split expense) — what counts toward "My Expenses". */
   myAmount: number;
   isSplit: boolean;
+  /** The one person this whole expense was paid for (then `isSplit` is false: nothing was shared). */
+  paidFor: string | null;
 }
 
 export function useMonthCycleData() {
@@ -311,7 +314,8 @@ export function useMonthCycleData() {
 
     return rows.map(({ transaction: t, grossAmount, myAmount }): MonthCycleExpenseRow => {
       const expense = expenseByTransactionId.get(t.id);
-      const split = expense != null && isSplit(expense);
+      const paidFor = assignedPerson(expense)?.name ?? null;
+      const split = expense != null && isSplit(expense) && paidFor == null;
       const account = accountById.get(t.accountId);
       const category = categoryById.get(t.categoryId);
       return {
@@ -325,6 +329,7 @@ export function useMonthCycleData() {
         fullAmount: grossAmount,
         myAmount,
         isSplit: split,
+        paidFor,
       };
     });
   }, [spendTransactions, expenses, accounts, spendCategories, cycleRange, isCustomCycle, mySpendCtx]);

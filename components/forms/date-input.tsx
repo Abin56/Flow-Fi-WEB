@@ -2,6 +2,8 @@
 
 import * as React from "react";
 import { CalendarDays } from "lucide-react";
+import { DateCalendar, type DateCalendarContext } from "@/components/forms/date-calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
 /** `yyyy-mm-dd` (the value every date field in the app stores) -> `dd/mm/yyyy`; "" for anything else. */
@@ -50,18 +52,22 @@ export type DateInputProps = Omit<
   max?: string;
   /** Classes for the wrapper `div` — use for flex/grid sizing (`flex-1`, `min-w-0`), since `className` styles the field itself. */
   wrapperClassName?: string;
+  /** Payment dates: the calendar icon opens FlowFi's calendar (month/year pickers, due and today shortcuts) instead
+   *  of the browser's. It never changes `value` until a date is picked. */
+  calendar?: DateCalendarContext;
 };
 
 /**
  * A date field that shows and accepts **dd/mm/yyyy** whatever the browser's locale is (a native
  * `<input type="date">` follows the browser/OS locale, which is month-first for en-US). Drop-in for
  * `<input type="date">`: same `yyyy-mm-dd` value, `min`/`max`, `disabled`, `ref` (the text field), and
- * the calendar icon opens the browser's native date picker.
+ * the calendar icon opens the browser's native date picker (or FlowFi's own when `calendar` is given).
  */
-export function DateInput({ value, onChange, min, max, className, wrapperClassName, disabled, placeholder = "dd/mm/yyyy", ...props }: DateInputProps) {
+export function DateInput({ value, onChange, min, max, className, wrapperClassName, disabled, placeholder = "dd/mm/yyyy", calendar, ...props }: DateInputProps) {
   const pickerRef = React.useRef<HTMLInputElement>(null);
   const [text, setText] = React.useState(() => isoToDisplayDate(value));
   const [previousValue, setPreviousValue] = React.useState(value);
+  const [calendarOpen, setCalendarOpen] = React.useState(false);
 
   // An outside change (form reset, a date picked in the calendar, an edit dialog loading its record)
   // replaces what's shown — but never while the text already parses to the current value, so
@@ -81,6 +87,14 @@ export function DateInput({ value, onChange, min, max, className, wrapperClassNa
     const iso = displayToIsoDate(masked);
     onChange({ target: { value: iso !== "" && inRange(iso) ? iso : "" } });
   }
+
+  function pick(iso: string) {
+    setText(isoToDisplayDate(iso));
+    onChange({ target: { value: iso } });
+  }
+
+  const iconButton =
+    "absolute top-1/2 right-2 flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors outline-none hover:text-foreground disabled:pointer-events-none disabled:opacity-50";
 
   function openPicker() {
     const picker = pickerRef.current;
@@ -104,33 +118,54 @@ export function DateInput({ value, onChange, min, max, className, wrapperClassNa
         onChange={(e) => handleText(e.target.value)}
         className={cn("w-full", className, "pr-9")}
       />
-      <button
-        type="button"
-        tabIndex={-1}
-        disabled={disabled}
-        aria-label="Open calendar"
-        // Keeps focus (and a blur-to-commit handler) on the text field while the calendar opens.
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={openPicker}
-        className="absolute top-1/2 right-2 flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors outline-none hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-      >
-        <CalendarDays className="size-4" strokeWidth={1.75} />
-      </button>
-      {/* The browser's own calendar, never shown as a field — only its picker is used. Its date is yyyy-mm-dd. */}
-      <input
-        ref={pickerRef}
-        type="date"
-        tabIndex={-1}
-        aria-hidden
-        min={min}
-        max={max}
-        value={parsed}
-        onChange={(e) => {
-          setText(isoToDisplayDate(e.target.value));
-          onChange({ target: { value: e.target.value } });
-        }}
-        className="pointer-events-none absolute right-0 bottom-0 size-0 opacity-0"
-      />
+      {calendar ? (
+        <Popover open={calendarOpen && !disabled} onOpenChange={setCalendarOpen}>
+          <PopoverTrigger asChild>
+            <button type="button" disabled={disabled} aria-label="Open calendar" className={cn(iconButton, "focus-visible:ring-2 focus-visible:ring-ring")}>
+              <CalendarDays className="size-4" strokeWidth={1.75} />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-72 p-3" align="end">
+            <DateCalendar
+              value={parsed}
+              min={min}
+              max={max}
+              context={calendar}
+              onSelect={(iso) => {
+                pick(iso);
+                setCalendarOpen(false);
+              }}
+            />
+          </PopoverContent>
+        </Popover>
+      ) : (
+        <>
+          <button
+            type="button"
+            tabIndex={-1}
+            disabled={disabled}
+            aria-label="Open calendar"
+            // Keeps focus (and a blur-to-commit handler) on the text field while the calendar opens.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={openPicker}
+            className={iconButton}
+          >
+            <CalendarDays className="size-4" strokeWidth={1.75} />
+          </button>
+          {/* The browser's own calendar, never shown as a field — only its picker is used. Its date is yyyy-mm-dd. */}
+          <input
+            ref={pickerRef}
+            type="date"
+            tabIndex={-1}
+            aria-hidden
+            min={min}
+            max={max}
+            value={parsed}
+            onChange={(e) => pick(e.target.value)}
+            className="pointer-events-none absolute right-0 bottom-0 size-0 opacity-0"
+          />
+        </>
+      )}
     </div>
   );
 }

@@ -197,7 +197,7 @@ describe("editing a row invalidates a stale decision", () => {
     seed({ g1: { kind: "link", linkedRecordId: "t-groc" } });
     renderStudio();
     expect(rowEl("g1").dataset.decision).toBe("link");
-    fireEvent.click(screen.getByRole("button", { name: `Expand row ${rowNo("g1")}` }));
+    fireEvent.click(screen.getByRole("button", { name: `Edit row ${rowNo("g1")}` }));
     fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "310" } });
     fireEvent.click(screen.getByTestId("editor-close"));
     expect(rowEl("g1").dataset.decision).not.toBe("link"); // (₹310 no longer matches: the row may now simply be Ready)

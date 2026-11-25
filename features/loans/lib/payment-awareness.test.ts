@@ -13,6 +13,7 @@ const base: AwarenessInput = {
   account: sbi(5000),
   amount: 2500,
   payerName: "Shambu",
+  agreement: "Loan",
   success: false,
 };
 
@@ -61,13 +62,13 @@ describe("deriveAwareness", () => {
   it("already paid earlier: no debit, and never a low-balance warning even with an empty account", () => {
     const m = deriveAwareness({ ...base, earlier: true, debitsAccount: false, account: sbi(0) })!;
     expect(m.kind).toBe("recorded");
-    expect(m.title).toBe("Already paid · No new account debit");
+    expect(m.title).toBe("Already recorded · No new debit");
   });
 
   it("paid directly: nothing leaves my account, no warning", () => {
     const m = deriveAwareness({ ...base, earlier: true, directPayer: true, debitsAccount: false, account: sbi(0) })!;
     expect(m.kind).toBe("direct");
-    expect(m.title).toBe("Paid directly · Your balance unchanged");
+    expect(m.title).toBe("Paid directly · My account unchanged");
     expect(m.detail).toBe("Shambu paid the lender");
   });
 

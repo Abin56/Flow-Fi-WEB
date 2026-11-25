@@ -59,6 +59,8 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
   const [scope, setScope] = useState<string[] | null>(null);
   /** Rows whose import is running right now (the row's own spinner; a second click is ignored). */
   const [running, setRunning] = useState<string[]>([]);
+  /** Rows written so far in the current import (real counts from the engine). */
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
   // 2026-11-25: importing no longer waits for EVERY row to be resolved - each import covers the rows that are Ready (or
   // one row), and the rest stay in the review. The whole-review summary (open) keeps its old rule.
@@ -134,7 +136,7 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
       setStage("checking");
       try {
         const approvalDeps = deps ?? (await import("../lib/approval-app-deps")).createApprovalDeps(uid);
-        const outcome = await runApproval({ session, reviewed, repeatsAcknowledged: acknowledged, deps: approvalDeps, onStage: setStage, scope: scope ? new Set(scope) : null });
+        const outcome = await runApproval({ session, reviewed, repeatsAcknowledged: acknowledged, deps: approvalDeps, onStage: setStage, scope: scope ? new Set(scope) : null, onProgress: (done, total) => setProgress({ done, total }) });
         switch (outcome.status) {
           case "complete":
             setResult(outcome);
@@ -144,6 +146,8 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
             } else setStage("result");
             break;
           case "partial":
+            // Rows that DID land are done now — they must not be offered (or retried) as new work.
+            if (scope && onComplete) onComplete(outcome.outcomes.filter((o) => o.kind === "imported" || o.kind === "already_imported"));
             setResult(outcome);
             setStage("result");
             break;
@@ -165,6 +169,7 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
       } finally {
         busyRef.current = false;
         setRunning([]);
+        setProgress(null);
       }
     },
     [session, uid, deps, plan, onComplete],
@@ -211,7 +216,7 @@ export function useReconciliationApproval({ uid, session, plan, account, liveDat
     await run(snapshot, repeatsAck);
   }, [canApprove, snapshot, repeatsAck, run]);
 
-  return { stage, open, close, refresh, approve, importNow, direct, canOpen, canImport, running, canApprove, confirmed, setConfirmed, repeatsAck, setRepeatsAck, repeatRowIds, liveChanged, result, rowsAtApproval, staleReasons, message, isBusy: stage === "checking" || stage === "importing" };
+  return { stage, open, close, refresh, approve, importNow, direct, canOpen, canImport, running, progress, canApprove, confirmed, setConfirmed, repeatsAck, setRepeatsAck, repeatRowIds, liveChanged, result, rowsAtApproval, staleReasons, message, isBusy: stage === "checking" || stage === "importing" };
 }
 
 export type ReconciliationApproval = ReturnType<typeof useReconciliationApproval>;

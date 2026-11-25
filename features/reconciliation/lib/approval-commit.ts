@@ -255,6 +255,8 @@ export async function runApproval(input: {
   onStage?: (stage: "checking" | "importing") => void;
   /** Only these rows are imported (and reported) — see `revalidateApproval`. Absent = the whole review. */
   scope?: ReadonlySet<string> | null;
+  /** Real progress: called after each row is written (never a made-up percentage). */
+  onProgress?: (done: number, total: number) => void;
 }): Promise<ApprovalRunResult> {
   const { session, reviewed, deps } = input;
   const scope = input.scope ?? null;
@@ -281,6 +283,7 @@ export async function runApproval(input: {
     const failed = new Map<string, string>();
     if (staged.length > 0) {
       input.onStage?.("importing");
+      input.onProgress?.(0, staged.length);
       try {
         const commit = await commitReviewImport({
           documentId: reviewed.sessionId,
@@ -297,6 +300,7 @@ export async function runApproval(input: {
           repositories: deps.repositories,
           onRowCommitted: async (recordId, transactionId) => {
             committed.set(recordId, transactionId);
+            input.onProgress?.(committed.size, staged.length);
           },
           linkRetryDelayMs: deps.linkRetryDelayMs ?? 0,
         });

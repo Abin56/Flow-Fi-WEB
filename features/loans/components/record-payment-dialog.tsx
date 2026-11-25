@@ -268,11 +268,10 @@ export function RecordPaymentDialog({
   const [dateUnknown, setDateUnknown] = useState(false);
   // "Already paid earlier" + a transaction the user already recorded: that transaction IS the payment (see link-earlier-payment.ts).
   const [linkedTx, setLinkedTx] = useState<Transaction | null>(null);
-  // "Already paid earlier" date — starts on the installment's due date when that has passed, else today.
-  const [earlierDate, setEarlierDate] = useState(() => {
-    const due = firstUnpaidInstallment(target)?.dueDate;
-    return due && dateToInput(due) <= todayInput() ? dateToInput(due) : todayInput();
-  });
+  // "Already paid earlier" date — the user's own answer, so it starts empty: the due date is never assumed to be the
+  // day it was paid (the calendar opens on the due month and offers it as a shortcut). Switching installments keeps
+  // whatever was chosen.
+  const [earlierDate, setEarlierDate] = useState("");
 
   // The paying account is always the user's own explicit choice — never a silent default (a payment that moves
   // money must say which account it moves).
@@ -290,7 +289,10 @@ export function RecordPaymentDialog({
       ? paymentDateFrom(earlierDate)
       : null;
   const earlierDateError = !earlier || dateUnknown ? null : earlierDate === "" ? "Enter the date it was paid, or tick “I don't know the exact date”." : earlierDate > today ? "A payment already made can't be dated in the future." : null;
-  const paymentDate = (earlier ? earlierPaymentDate : paymentDateFrom(date)) ?? new Date();
+  // Until a past payment has its date, only the on-screen previews stand on the due date (when it has passed) — never
+  // shown as the paid date, and saving stays blocked by `earlierDateError`.
+  const previewFallback = earlier && anchor && dateToInput(anchor.dueDate) <= today ? anchor.dueDate : new Date();
+  const paymentDate = (earlier ? earlierPaymentDate : paymentDateFrom(date)) ?? previewFallback;
   const isLoan = target?.kind === "loan";
   const loanRow = target?.kind === "loan" ? target.row : null;
   const emiRow = target?.kind === "emi" ? target.row : null;
@@ -525,9 +527,7 @@ export function RecordPaymentDialog({
   function recordOnePast(installment: Installment): boolean {
     if (modeLocked) return false;
     if (loanRow && firstUnpaidInstallment(target)?.id !== installment.id) return false;
-    const due = dateToInput(installment.dueDate);
     setPinnedPast(emiRow ? installment : null);
-    setEarlierDate(due <= todayInput() ? due : todayInput());
     setDateUnknown(false);
     setChoice("installment");
     setMode("earlier");
@@ -819,6 +819,7 @@ export function RecordPaymentDialog({
           account: payingAccount,
           amount: view === "pay" ? planAmount : null,
           payerName,
+          agreement: isLoan ? "Loan" : "EMI",
           success,
         }
       : null;
@@ -1058,14 +1059,19 @@ export function RecordPaymentDialog({
             )}
           </PayField>
         )}
-        <PayField label={earlier ? (lent ? "Date received" : "Date paid") : "Payment date"}>
+        <PayField label={lent ? (earlier ? "Received on" : "Payment date") : "Paid on"}>
           <span className="relative">
             {earlier ? (
-              <DateInput className={PAY_INPUT} aria-label={lent ? "Date received" : "Date paid"} value={dateUnknown ? "" : earlierDate} max={today} disabled={dateUnknown} onChange={(e) => setEarlierDate(e.target.value)} />
+              <DateInput className={PAY_INPUT} aria-label={lent ? "Date received" : "Date paid"} value={dateUnknown ? "" : earlierDate} max={today} disabled={dateUnknown} calendar={{ dueDate: next?.dueDate }} onChange={(e) => setEarlierDate(e.target.value)} />
             ) : (
-              <DateInput className={PAY_INPUT} aria-label="Payment date" value={date} onChange={(e) => setDate(e.target.value)} />
+              <DateInput className={PAY_INPUT} aria-label="Payment date" value={date} calendar={{ dueDate: next?.dueDate }} onChange={(e) => setDate(e.target.value)} />
             )}
           </span>
+          {next && (
+            <span className="text-[11px] font-medium text-muted-foreground" data-testid="payment-due-context">
+              Due: {next.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+            </span>
+          )}
         </PayField>
         {earlier && !loanDetail && (
           <PayField label="Note" className="@lg:col-span-2">
@@ -1100,7 +1106,8 @@ export function RecordPaymentDialog({
             {dateUnknown && anchor && <span className="font-normal text-muted-foreground">· saved as “date not known”</span>}
           </label>
           {earlierDateError && (
-            <p role="alert" className="text-xs font-semibold text-expense">
+            // Not chosen yet is a prompt, not an error; a future date is.
+            <p role={earlierDate === "" ? "status" : "alert"} className={cn("text-xs font-semibold", earlierDate === "" ? "text-muted-foreground" : "text-expense")}>
               {earlierDateError}
             </p>
           )}

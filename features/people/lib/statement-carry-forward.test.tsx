@@ -106,7 +106,7 @@ describe("brought-forward items stay on the statement that brought them forward"
     expect(statement.amount).toBe(1569.6);
     expect(view.carried).toHaveLength(13);
     const fish = view.carried[0];
-    expect(fish).toMatchObject({ title: "Shai Ganesh - fish", original: money(200), tag: "Split", chip: "carried" });
+    expect(fish).toMatchObject({ title: "Shai Ganesh - fish", original: money(200), tag: "For you", chip: "carried" });
     expect(view.carried[4]).toMatchObject({ original: money(174.22), tag: "Split", chip: "carried" }); // Shambu's own share of the ₹348.43 bill
     expect(view.closing).toEqual({ label: "Balance due", value: money(1569.6), direction: "theyOwe" });
   });

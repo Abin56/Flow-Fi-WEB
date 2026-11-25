@@ -237,7 +237,8 @@ const KIND_TAG: Record<SettlementKind, string> = {
   loan: "Loan",
   moneyGiven: "Given",
   moneyReceived: "Borrowed",
-  assigned: "Split",
+  // Paid for the recipient in full — nothing was split.
+  assigned: "For you",
   split: "Split",
   paymentReceived: "Payment",
   paymentMade: "Payment",

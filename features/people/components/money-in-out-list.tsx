@@ -27,8 +27,10 @@ export interface MoneyItem {
   kind: "cash" | "owed";
   amount: number;
   title: string;
-  /** What the user wrote (note / own title) — optional. */
+  /** What it was for: the approved description of a shared / paid-for item, else what the user wrote — optional. */
   description: string | null;
+  /** The user's own note, when it says something other than the description — shown in the details only. */
+  note?: string | null;
   /** Account or payment method it moved through. */
   account: string | null;
   /** Recorded as already received before FlowFi tracked it — no account change. */
@@ -217,7 +219,8 @@ export function MoneyInOutList({ items, isLoading, empty, maxRows }: { items: re
                         <dt className="text-muted-foreground">Type</dt>
                         <dd>{cash ? (incoming ? "Money received" : "Money paid") : incoming ? "Paid for you — you owe them" : "Paid for them — they owe you"}</dd>
                         {it.account && (<><dt className="text-muted-foreground">Account</dt><dd>{it.account}</dd></>)}
-                        {it.description && (<><dt className="text-muted-foreground">Note</dt><dd>{it.description}</dd></>)}
+                        {it.description && (<><dt className="text-muted-foreground">Description</dt><dd>{it.description}</dd></>)}
+                        {it.note && (<><dt className="text-muted-foreground">Note</dt><dd>{it.note}</dd></>)}
                         {it.split && (
                           <>
                             <dt className="text-muted-foreground">Split</dt>

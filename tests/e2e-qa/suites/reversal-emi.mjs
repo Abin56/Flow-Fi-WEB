@@ -273,6 +273,7 @@ scenario("rev-emi-label-funding", "EMI: payment details name the funding — acc
   await page.getByRole("button", { name: "Continue with 1 EMI" }).click();
   const past = page.getByRole("dialog", { name: /Record past payment/ });
   await past.getByRole("button", { name: /^Save past payment/ }).waitFor();
+  await h.pickPaidDate(page, past, "Today");
   await past.getByRole("button", { name: /^Save past payment/ }).click();
   await past.waitFor({ state: "hidden", timeout: 25000 });
   await page.waitForTimeout(1500);

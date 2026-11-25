@@ -21,7 +21,7 @@
  */
 
 import { Fragment, forwardRef } from "react";
-import { PencilLine, Sparkles } from "lucide-react";
+import { PencilLine, Sparkles, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { describeAmountDelta, describeDayGap } from "../lib/amounts-and-days";
 import type { RowStatus } from "../lib/row-status";
@@ -31,7 +31,7 @@ import { ACCOUNT_MISSING_META, Mark, StatusChip, Money, SHEET_CELLS, SHEET_FRAME
 
 /** ≥56rem: every column. ≥38rem: # · Date · Description · Amount · Status · Action. Narrow: # · Description · Amount · Action. */
 const COLS =
-  "grid-cols-[1.75rem_minmax(0,1fr)_6.5rem_8.5rem] @min-[38rem]:grid-cols-[2rem_4rem_minmax(0,1fr)_7.25rem_7.5rem_9rem] @min-[60rem]:grid-cols-[2rem_4.25rem_minmax(0,1fr)_7.5rem_4.25rem_9.5rem_7.5rem_7.5rem_10rem]";
+  "grid-cols-[1.75rem_minmax(0,1fr)_6rem_12rem] @min-[38rem]:grid-cols-[2rem_4rem_minmax(0,1fr)_7.25rem_7rem_12.5rem] @min-[60rem]:grid-cols-[2rem_4.25rem_minmax(0,1fr)_7.5rem_4.25rem_9.5rem_7.5rem_6.75rem_13.5rem]";
 const MID = "hidden @min-[38rem]:block";
 const WIDE = "hidden @min-[60rem]:block";
 
@@ -109,10 +109,12 @@ export interface ReconTableProps {
   /** The row whose inline match review is open, and what to render under it (inside the same scroll body). */
   inlineId?: string | null;
   renderInline?: (row: ReconRow) => React.ReactNode;
+  /** Remove the captured row from THIS review only (undoable). Never touches a FlowFi transaction. */
+  onRemove?: (row: ReconRow) => void;
 }
 
 export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function ReconTable(
-  { rows, numberOf, matches, decisions, selectedId, expandedId, onSelect, onToggleExpand, onCompare, onKeyDown, pendingLabel, quickActions, contained = true, header, accountMissing = false, accountHintOf, inlineId = null, renderInline, statusOf, descriptionOf, categoryOf, onCategory, renderAction },
+  { rows, numberOf, matches, decisions, selectedId, expandedId, onSelect, onToggleExpand, onCompare, onKeyDown, pendingLabel, quickActions, contained = true, header, accountMissing = false, accountHintOf, inlineId = null, renderInline, statusOf, descriptionOf, categoryOf, onCategory, renderAction, onRemove },
   ref,
 ) {
   return (
@@ -315,8 +317,8 @@ export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function R
                     <button
                       type="button"
                       aria-expanded={expanded}
-                      aria-label={`${expanded ? "Collapse" : "Expand"} row ${numberOf(row.id)}`}
-                      title={expanded ? "Close details" : "Details"}
+                      aria-label={`${expanded ? "Close editor for" : "Edit"} row ${numberOf(row.id)}`}
+                      title={expanded ? "Close editor" : "Edit"}
                       data-testid="row-edit"
                       onClick={(e) => {
                         e.stopPropagation();
@@ -329,6 +331,21 @@ export const ReconTable = forwardRef<HTMLDivElement, ReconTableProps>(function R
                     >
                       <PencilLine className="size-3.5" />
                     </button>
+                    {onRemove && row.include && status?.kind !== "imported" && (
+                      <button
+                        type="button"
+                        title="Delete from this review (nothing in FlowFi changes — Undo restores it)"
+                        aria-label={`Delete row ${numberOf(row.id)} from this review`}
+                        data-testid="row-delete"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRemove(row);
+                        }}
+                        className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-danger/10 hover:text-danger focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    )}
                   </span>
                 </div>
                 {inlineId === row.id && renderInline?.(row)}

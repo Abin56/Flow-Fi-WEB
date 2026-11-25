@@ -5,7 +5,7 @@ import { CheckCircle2, ChevronRight } from "lucide-react";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { InlineHostSlot, StackBase, useInlineLayerId, useStackBase } from "@/components/finance/stack-layer";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { PaymentAwareness } from "@/features/loans/components/payment-awareness";
+import { PaymentAwareness, type UpcomingPayment } from "@/features/loans/components/payment-awareness";
 import { AmountDisplay, InstallmentProgress, LE_RADIUS, Money, dueLabel, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
 import { cn } from "@/lib/utils";
 
@@ -270,6 +270,8 @@ export interface AgreementPageOptions {
   schedule: ReactNode;
   people?: ReactNode;
   peopleCount?: number;
+  /** The next installment still to pay (the figures `NextStrip` already shows) — drawn in the header while no payment is open. */
+  nextPayment?: UpcomingPayment | null;
 }
 
 /**
@@ -306,6 +308,7 @@ function AgreementPage({
   historyCount,
   people,
   peopleCount = 0,
+  nextPayment,
   footer,
   testId,
 }: Omit<Parameters<typeof AgreementWindow>[0], "open" | "onOpenChange" | "comingUp" | "detailsTitle" | "upcoming" | "all" | "upcomingCount"> & AgreementPageOptions) {
@@ -341,7 +344,7 @@ function AgreementPage({
           <p className="truncate text-xs text-muted-foreground">{facts}</p>
         </div>
         {/* Payment awareness: read-only, fed by the open Record Payment dialog; empty (but reserved) otherwise. */}
-        <PaymentAwareness className="min-w-[11rem] flex-1 basis-0 self-center" />
+        <PaymentAwareness className="min-w-[11rem] flex-1 basis-0 self-center" upcoming={nextPayment} progressPercent={total > 0 ? (paid / total) * 100 : 0} />
         <FooterLayout.Provider value="page">{footer}</FooterLayout.Provider>
       </header>
 

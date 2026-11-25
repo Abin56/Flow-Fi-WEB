@@ -35,6 +35,8 @@ export interface AwarenessInput {
   /** The planned amount; null while it is invalid or not chosen yet. */
   amount: number | null;
   payerName: string;
+  /** What the payment goes to — names the right-hand end of the flow. */
+  agreement: "Loan" | "EMI";
   /** The dialog's own success flag — the ONLY thing that can produce a "done" message. */
   success: boolean;
 }
@@ -45,6 +47,10 @@ export interface AwarenessModel {
   amount: string | null;
   /** The account / card / person on the left of the flow, when there is one. */
   from: string | null;
+  /** "Loan" / "EMI" — the destination node. */
+  agreement: "Loan" | "EMI";
+  /** Formatted shortfall — only on `low`. */
+  shortfall: string | null;
   /** The short sentence the header shows. */
   title: string;
   /** A second, quieter line. */
@@ -60,13 +66,13 @@ const hasAmount = (n: number | null): n is number => n != null && Number.isFinit
  *  recognised money movement). Pure. */
 export function deriveAwareness(i: AwarenessInput): AwarenessModel | null {
   const amount = hasAmount(i.amount) ? formatCurrencyExact(i.amount) : null;
-  const base = { amount, success: i.success } as const;
+  const base = { amount, success: i.success, agreement: i.agreement, shortfall: null } as const;
 
   if (i.earlier && i.directPayer) {
-    return { ...base, kind: "direct", from: i.payerName, title: "Paid directly · Your balance unchanged", detail: `${i.payerName} paid the lender`, doneText: `Direct payment recorded${amount ? ` · ${amount}` : ""}` };
+    return { ...base, kind: "direct", from: i.payerName, title: "Paid directly · My account unchanged", detail: `${i.payerName} paid the lender`, doneText: `Direct payment recorded${amount ? ` · ${amount}` : ""}` };
   }
   if (i.earlier) {
-    return { ...base, kind: "recorded", from: null, title: "Already paid · No new account debit", detail: null, doneText: "Past payment recorded · No account change" };
+    return { ...base, kind: "recorded", from: null, title: "Already recorded · No new debit", detail: null, doneText: "Past payment recorded · No account change" };
   }
   if (i.lent) {
     if (!i.creditsAccount) return null;
@@ -87,7 +93,7 @@ export function deriveAwareness(i: AwarenessInput): AwarenessModel | null {
     if (hasAmount(i.amount)) {
       const funds = previewFunds(i.account, i.amount);
       if (funds.status === "insufficient") {
-        return { ...base, kind: "low", from: i.account.name, title: `Low balance · Short by ${formatCurrencyExact(funds.shortfall)}`, detail: `${i.account.name} has ${formatCurrencyExact(funds.before)}`, doneText };
+        return { ...base, shortfall: formatCurrencyExact(funds.shortfall), kind: "low", from: i.account.name, title: `Low balance · Short by ${formatCurrencyExact(funds.shortfall)}`, detail: `${i.account.name} has ${formatCurrencyExact(funds.before)}`, doneText };
       }
     }
     return { ...base, kind: "pay", from: i.account.name, title: amount ? `${amount} from ${i.account.name}` : `From ${i.account.name}`, detail: null, doneText };

@@ -131,6 +131,9 @@ export function BulkHistoricalDialog({
     date: fromAccount ? payDate : bulkDraftDate(dateMode ?? "unknown", c.installment.dueDate, sameDate, draft[c.installment.id]?.date ?? ""),
   }));
   const plan = planBulkRecordedEarlier({ candidates, draft: draftItems, batchId });
+  // Calendar context only: the earliest picked due date (the month a shared date most likely falls near).
+  const earliestDue = picked.reduce<Date | null>((first, c) => (first == null || c.installment.dueDate < first ? c.installment.dueDate : first), null);
+  const sharedDateCalendar = picked.length === 1 ? { dueDate: earliestDue } : { monthHint: earliestDue };
   const selectedTotal = picked.reduce((t, c) => t + c.remaining, 0);
   const reviewTotal = plan.ok ? plan.total : null;
   // Pay several: who paid the lender for EACH installment — me from an account (default), or someone else directly (recorded as
@@ -455,7 +458,7 @@ export function BulkHistoricalDialog({
             </div>
             {dateMode === "same" && (
               <PayField label={lent ? "Date received" : "Date paid"}>
-                <DateInput className={PAY_INPUT} aria-label="One date for all" value={sameDate} max={todayInput()} onChange={(e) => setSameDate(e.target.value)} />
+                <DateInput className={PAY_INPUT} aria-label="One date for all" value={sameDate} max={todayInput()} calendar={sharedDateCalendar} onChange={(e) => setSameDate(e.target.value)} />
               </PayField>
             )}
             {loanRow && (
@@ -492,6 +495,7 @@ export function BulkHistoricalDialog({
                           aria-label={`Date paid for #${c.installment.sequenceNumber}`}
                           value={draft[id]?.date ?? ""}
                           max={todayInput()}
+                          calendar={{ dueDate: c.installment.dueDate }}
                           onChange={(e) => setField(id, "date", e.target.value)}
                         />
                       )}
@@ -673,7 +677,12 @@ export function BulkHistoricalDialog({
               </PayField>
             )}
             <PayField label="Payment date">
-              <DateInput className={PAY_INPUT} aria-label="Payment date" value={payDate} max={todayInput()} disabled={started} onChange={(e) => setPayDate(e.target.value)} />
+              <DateInput className={PAY_INPUT} aria-label="Payment date" value={payDate} max={todayInput()} disabled={started} calendar={sharedDateCalendar} onChange={(e) => setPayDate(e.target.value)} />
+              {picked.length > 1 && payDate !== "" && (
+                <span className="text-[11px] font-medium text-muted-foreground" data-testid="bulk-pay-date-note">
+                  All {plural(picked.length)} are recorded as paid on {new Date(`${payDate}T12:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}.
+                </span>
+              )}
             </PayField>
             <div className="flex flex-col gap-1.5 border-t border-border pt-3" data-testid="bulk-balance-preview">
               {!lent && mineCount === 0 && otherCount > 0 ? (

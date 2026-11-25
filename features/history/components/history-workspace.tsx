@@ -51,6 +51,13 @@ const SPLIT_STATUS_TONE: Record<string, "success" | "neutral" | "expense" | "war
   completed: "success",
 };
 
+/** The one person a whole expense was paid for (my share ₹0, nobody else on it) — null for a real split. */
+function paidFor(detail: { myShare: number; shares: { name: string; isMe: boolean }[] } | null): string | null {
+  if (!detail || detail.myShare > 0) return null;
+  const others = detail.shares.filter((s) => !s.isMe);
+  return others.length === 1 ? others[0].name : null;
+}
+
 function formatEntryDate(date: Date, now: Date): string {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -126,7 +133,7 @@ export function HistoryWorkspace() {
                         </div>
                         {entry.subtitle && <p className="truncate text-xs text-muted-foreground">{entry.subtitle}</p>}
                         <div className="mt-1 flex flex-wrap items-center gap-2">
-                          <span className="text-[11px] text-muted-foreground">{historyCategoryLabel(entry.category)}</span>
+                          <span className="text-[11px] text-muted-foreground">{paidFor(entry.splitExpenseDetail) ? "Paid for someone" : historyCategoryLabel(entry.category)}</span>
                           {entry.excludeFromCalculations && (
                             <StatusChip label="Excluded" tone="neutral" />
                           )}
@@ -139,9 +146,15 @@ export function HistoryWorkspace() {
                         </div>
                         {entry.splitExpenseDetail && (
                           <p className="mt-1 text-xs text-muted-foreground">
-                            You {formatCurrency(entry.splitExpenseDetail.myShare)} ·{" "}
-                            {entry.splitExpenseDetail.participantCount - 1} other
-                            {entry.splitExpenseDetail.participantCount - 1 === 1 ? "" : "s"}{" "}
+                            {paidFor(entry.splitExpenseDetail) ? (
+                              <>For {paidFor(entry.splitExpenseDetail)} </>
+                            ) : (
+                              <>
+                                You {formatCurrency(entry.splitExpenseDetail.myShare)} ·{" "}
+                                {entry.splitExpenseDetail.participantCount - 1} other
+                                {entry.splitExpenseDetail.participantCount - 1 === 1 ? "" : "s"}{" "}
+                              </>
+                            )}
                             {entry.splitExpenseDetail.amountToCollect > 0
                               ? `· ${formatCurrency(entry.splitExpenseDetail.amountToCollect)} to collect`
                               : "· settled"}

@@ -146,7 +146,7 @@ export function CandidatePersonSplitEditor({
           <Switch checked={draft.owesPersonToggle} onCheckedChange={(checked) => onChange({ owesPersonToggle: checked })} className="mt-0.5" />
           <span>
             <span className="block text-foreground">This person owes me this expense</span>
-            <span className="block text-xs text-muted-foreground">Adds this amount to what they owe you.</span>
+            <span className="block text-xs text-muted-foreground">{draft.owesPersonToggle ? "Adds this amount to what they owe you." : "Off: linked only — nothing is added to what they owe you."}</span>
           </span>
         </label>
       )}

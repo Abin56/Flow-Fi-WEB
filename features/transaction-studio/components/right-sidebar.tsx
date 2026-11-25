@@ -115,7 +115,11 @@ export function RightSidebar({
 
   async function onChangeCategory(category: string) {
     if (isCommitted) {
-      const { categoryId, error } = resolveCategoryId(category, categories);
+      if (!committedTransaction) {
+        toast.error("Couldn't save changes", "This transaction hasn't finished loading yet — try again in a moment.");
+        return;
+      }
+      const { categoryId, error } = resolveCategoryId(category, categories, committedTransaction);
       if (error) {
         toast.error("Couldn't save changes", error);
         return;

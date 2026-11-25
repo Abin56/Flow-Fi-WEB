@@ -11,16 +11,31 @@ import type { TransactionDetailsDraft } from "./transaction-manage-draft";
  * used by `draftToEditTransactionParams` below and by any other committed-row category edit
  * (`RightSidebar`'s `RowManagementPanel`), so there's exactly one category-name-to-id resolution
  * rule instead of one per call site that could quietly drift apart.
+ *
+ * A name can belong to two categories, so it is resolved against the committed `transaction`:
+ *  - its current category already has this name → no change (`categoryId` undefined), never a swap to a namesake;
+ *  - otherwise the live category of that name that fits its direction, else the only one of that name at all;
+ *  - several that fit equally → an error, and the stored category stays.
+ * Same rule as the import's `categoryFor` (commit-review-import.ts).
  */
 export function resolveCategoryId(
   categoryName: string | null,
   categories: Category[],
+  transaction: Pick<Transaction, "type" | "categoryId">,
 ): { categoryId: string | undefined; error: string | null } {
-  const categoryId = categoryName ? categories.find((c) => c.name === categoryName)?.id : undefined;
-  if (categoryName && !categoryId) {
-    return { categoryId: undefined, error: `"${categoryName}" isn't a known category — pick one from the list.` };
-  }
-  return { categoryId, error: null };
+  if (!categoryName || categories.some((c) => c.id === transaction.categoryId && c.name === categoryName)) return { categoryId: undefined, error: null };
+  const named = categories.filter((c) => c.name === categoryName);
+  const wanted = transaction.type === "income" ? "income" : "expense";
+  const fitting = named.filter((c) => c.deletedAt == null && c.isActive !== false && (c.type === wanted || c.type === "both"));
+  const candidates = fitting.length > 0 ? fitting : named;
+  if (candidates.length === 1) return { categoryId: candidates[0].id, error: null };
+  return {
+    categoryId: undefined,
+    error:
+      candidates.length > 1
+        ? `More than one category is named "${categoryName}" — nothing was changed. Choose the exact one in Transactions, or rename one.`
+        : `"${categoryName}" isn't a known category — pick one from the list.`,
+  };
 }
 
 /**
@@ -45,9 +60,9 @@ export function draftToEditTransactionParams(
   draft: TransactionDetailsDraft,
   categories: Category[],
   /** The committed transaction being edited — its own date/time is kept unless the day actually changed (WFI-P3-08). */
-  existing?: Pick<Transaction, "dateTime" | "accountingMonth"> | null,
+  existing: Pick<Transaction, "dateTime" | "accountingMonth" | "type" | "categoryId">,
 ): { params: EditTransactionParams; error: null } | { params: null; error: string } {
-  const { categoryId, error } = resolveCategoryId(draft.category, categories);
+  const { categoryId, error } = resolveCategoryId(draft.category, categories, existing);
   if (error) return { params: null, error };
 
   return {

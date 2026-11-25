@@ -99,17 +99,21 @@ export function ShareStatementMode({
   const downloadPdf = async (mode: "monthly" | "full" = "monthly") => {
     setPdfBusy(true);
     try {
-      // Words in Plus Jakarta Sans, amounts in Geist Mono with the real ₹; if a font can't load, the PDF still
-      // renders (Helvetica, "Rs.").
       const [statementPdf, settlementPdf] = await Promise.all([
         import("@/features/people/lib/person-statement-pdf"),
         import("@/features/people/lib/monthly-settlement-pdf"),
       ]);
-      const [amountFonts, textFonts] = await Promise.all([statementPdf.loadStatementAmountFonts(), statementPdf.loadStatementTextFonts()]);
+      // The Full PDF keeps Plus Jakarta Sans + Geist Mono. The Monthly PDF uses its own face, Inter (2026-11-25
+      // polish pass) — if either can't load, the PDF still renders (Helvetica, "Rs.").
       const bytes =
         mode === "monthly"
-          ? await settlementPdf.renderMonthlySettlementPdf(statement, { ...options, amountFonts, textFonts })
-          : await statementPdf.renderPersonStatementPdf(statement, { ...options, orientation: statementOrientation(), amountFonts, textFonts });
+          ? await settlementPdf.renderMonthlySettlementPdf(statement, { ...options, textFonts: await settlementPdf.loadMonthlySettlementTextFonts() })
+          : await statementPdf.renderPersonStatementPdf(statement, {
+              ...options,
+              orientation: statementOrientation(),
+              amountFonts: await statementPdf.loadStatementAmountFonts(),
+              textFonts: await statementPdf.loadStatementTextFonts(),
+            });
       const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");

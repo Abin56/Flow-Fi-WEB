@@ -113,6 +113,7 @@ const bankBody = async ({ page }, chk) => {
   await h.shot(page, `ps-bank-form${sfx(page)}`);
   chk("the form says it is a past payment — no account balance changes — for this installment (₹3,000, #1)", /no account balance changes/.test(await form.getByTestId("past-payment-header").innerText()) && /Installment #1/.test(await form.innerText()));
   chk("People answers are asked separately; nothing assumed received", /Priya: ₹1,000 still to receive/.test((await form.getByTestId("reconcile-summary").innerText()).replace(/\n/g, " ")));
+  await h.pickPaidDate(page, form);
   await page.evaluate(() => window.__reset());
   await form.getByRole("button", { name: /^Save past payment of ₹3,000/ }).click();
   await form.waitFor({ state: "hidden", timeout: 60000 });

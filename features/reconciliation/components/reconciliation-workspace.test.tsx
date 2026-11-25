@@ -245,7 +245,7 @@ describe("Reconciliation workspace — desktop", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     fireEvent.keyDown(grid(), { key: "l" });
-    fireEvent.click(screen.getByRole("button", { name: "Expand row 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit row 1" }));
     const amount = screen.getByLabelText("Amount") as HTMLInputElement;
     fireEvent.change(amount, { target: { value: "452.50" } });
     fireEvent.blur(amount);
@@ -344,7 +344,7 @@ describe("Reconciliation workspace — row bottom sheet", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
     const savedBefore = sessionStorage.getItem(`${DRAFT_KEY_PREFIX}u1`);
-    fireEvent.click(screen.getByRole("button", { name: "Expand row 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit row 2" }));
     const panel = sheet()!;
     expect(panel.getAttribute("role")).toBe("dialog");
     expect(screen.getByTestId("statement-sheet").contains(panel)).toBe(false);
@@ -375,7 +375,7 @@ describe("Reconciliation workspace — row bottom sheet", () => {
   it("a typed value is kept when the sheet closes before the field is left; Escape in a field reverts it and keeps the sheet open", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
-    fireEvent.click(screen.getByRole("button", { name: "Expand row 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit row 1" }));
     const shown = (screen.getByLabelText("Description") as HTMLInputElement).value; // FlowFi's wording (here: the user's own "Swiggy" history)
     (screen.getByLabelText("Description") as HTMLInputElement).focus();
     fireEvent.change(screen.getByLabelText("Description"), { target: { value: "SWIGGY BLR" } });
@@ -391,7 +391,7 @@ describe("Reconciliation workspace — row bottom sheet", () => {
   it("offers Mine / Someone else's / Split on a charge — Mine by default, nothing written by choosing", () => {
     seedDraft();
     render(<ReconciliationWorkspace uid="u1" data={DATA} />);
-    fireEvent.click(screen.getByRole("button", { name: "Expand row 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit row 1" }));
     const own = within(screen.getByTestId("editor-ownership"));
     expect(own.getByRole("radio", { name: "My own expense" }).getAttribute("aria-checked")).toBe("true");
     fireEvent.click(own.getByRole("radio", { name: "Split expense" }));

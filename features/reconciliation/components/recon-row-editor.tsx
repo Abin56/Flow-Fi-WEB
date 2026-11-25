@@ -426,24 +426,27 @@ export function ReconRowEditor({
 
           {/* The financial meaning — never guessed: what a credit is, whether a UPI/NEFT line went to someone else, who an expense is for. */}
           {!row.captureExcluded && row.direction === "credit" && (
-            <div className="flex flex-col gap-1.5 border-t border-border-subtle pt-2.5" data-testid="editor-credit-type">
-              <span className="text-[12px] font-semibold text-foreground/80">What is this credit?</span>
-              <div role="radiogroup" aria-label="What is this credit?" className="flex flex-wrap gap-1.5">
-                {CREDIT_CHOICES.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={creditChoice === c.id}
-                    title={c.hint}
-                    data-testid={`credit-${c.id}`}
-                    onClick={() => onDecide(creditChoicePatch(c.id, decision))}
-                    className={cn("h-8 rounded-lg border px-3 text-[12.5px] font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none", creditChoice === c.id ? "border-primary bg-primary/15 text-foreground" : "border-border-strong/70 bg-card text-foreground/80 hover:bg-secondary/60")}
-                  >
-                    {c.label}
-                  </button>
-                ))}
-              </div>
+            <div className="flex flex-col gap-1 border-t border-border-subtle pt-2.5" data-testid="editor-credit-type">
+              <label className="flex items-center gap-2 text-[12px] font-semibold text-foreground/80">
+                <span className="shrink-0">Credit type</span>
+                <select
+                  data-testid="credit-type-select"
+                  aria-label="Credit type"
+                  value={creditChoice ?? ""}
+                  onChange={(e) => {
+                    const id = e.target.value as CreditChoice | "";
+                    if (id) onDecide(creditChoicePatch(id, decision));
+                  }}
+                  className="h-8 min-w-0 flex-1 rounded-lg border border-border-strong/70 bg-card px-2 text-[12.5px] font-semibold text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  {!creditChoice && <option value="">Choose…</option>}
+                  {CREDIT_CHOICES.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               {creditChoice && <p className="text-[11.5px] text-foreground/65">{CREDIT_CHOICES.find((c) => c.id === creditChoice)!.hint}</p>}
             </div>
           )}

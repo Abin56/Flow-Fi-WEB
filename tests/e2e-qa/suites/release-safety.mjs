@@ -133,7 +133,7 @@ scenario(
       await pop.getByTestId("import-confirm-submit").click();
     };
     for (const n of [2, 3, 5]) await importVia(n, false);
-    await page.getByRole("button", { name: /Expand row 5$/ }).click();
+    await page.getByRole("button", { name: /Edit row 5$/ }).click();
     await page.getByLabel("Notes").fill("QA note — keep the receipt");
     await page.getByRole("button", { name: "Done" }).click(); // the row sheet closes; the note is already in the draft
     chk("near-amount row: Import as transaction still asks for the 'separate transactions' acknowledgement", await (async () => { await row(1).click(); await openImportConfirm(page); const asks = (await page.getByRole("checkbox", { name: "These are separate transactions" }).count()) === 1; await page.keyboard.press("Escape"); await page.keyboard.press("Escape"); return asks; })());

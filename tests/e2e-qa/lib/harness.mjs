@@ -143,6 +143,12 @@ export async function addFixture(page, which) {
  * Client-side navigation. `waitForURL` waits for a "load" event that a Next client-side route change never fires, so
  * it hung; instead observe the route itself: the pathname (the app uses trailing slashes) and, when given, the query.
  */
+/** A past payment's date is never pre-filled: choose it through the calendar's own shortcut ("Due …" or "Today"). */
+export async function pickPaidDate(page, scope, shortcut = /^Due \d/) {
+  await scope.getByLabel(/^Date (paid|received)$/).locator("xpath=..").getByRole("button", { name: "Open calendar" }).click();
+  await page.getByTestId("date-calendar").getByRole("button", { name: shortcut }).click();
+}
+
 export async function go(page, href) {
   await page.evaluate((h) => window.next.router.push(h), href);
   await page.waitForFunction(

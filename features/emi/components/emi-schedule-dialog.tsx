@@ -140,6 +140,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
               ),
               people: <AgreementPeopleTab people={people} returnTo={pathname || "/loans/"} onTheyPaid={askTheyPaid} />,
               peopleCount: people.length,
+              nextPayment: !isClosed && nextPayable ? { amount: remainingAmount(nextPayable), dueDate: nextPayable.dueDate, sequenceNumber: nextPayable.sequenceNumber, overdue: nextOverdue } : null,
             }
           : undefined
       }

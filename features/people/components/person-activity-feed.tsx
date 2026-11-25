@@ -14,6 +14,8 @@ import { filterLedgerRows, type LedgerRow, type PaymentRecord } from "@/features
 import { isSplit, type Expense } from "@/lib/models/expense";
 import { MoneyInOutList, type MoneyItem } from "@/features/people/components/money-in-out-list";
 import { isGenericRowTitle, settlementKind } from "@/features/people/lib/settlement-presentation";
+import { userNote } from "@/features/people/lib/linked-description";
+import { assignedPerson } from "@/features/transactions/lib/assigned-expense";
 import type { PersonCycleStatement } from "@/lib/engines/person-cycle-statement";
 import { isOriginationTransactionId } from "@/lib/engines/loan-origination";
 import { money } from "@/lib/engines/person-cycle-statement-share";
@@ -311,10 +313,11 @@ export function PersonActivityFeed({
   };
 
   // "Money in & out": one plain line per movement that really happened — never an obligation or a schedule.
-  const notesByTransaction = new Map(transactions.map((t) => [t.id, t.notes?.trim() ?? ""]));
+  // A transaction's notes can hold the user's own words AND an import's bank narration — only the former is ever shown.
+  const notesByTransaction = new Map(transactions.map((t) => [t.id, userNote(t.notes)]));
   const noteOfEntry = (entryId: string | null): string | null => {
     const ref = entryId ? lookups.entriesById.get(entryId)?.transactionRef : null;
-    return (ref ? notesByTransaction.get(ref) : null) || null;
+    return (ref ? notesByTransaction.get(ref) : null) ?? null;
   };
   // The same handlers the table used — nothing new is written from here.
   const paymentActions = (parent: LedgerRow, p: PaymentRecord): MoneyItem["actions"] => [
@@ -324,7 +327,8 @@ export function PersonActivityFeed({
   const splitOfEntry = (entryId: string | null): MoneyItem["split"] => {
     const ref = entryId ? lookups.entriesById.get(entryId)?.transactionRef : null;
     const expense = ref ? expenses.find((e) => e.transactionId === ref && e.deletedAt == null) : null;
-    if (!expense || !isSplit(expense)) return undefined;
+    // Paid for one person in full is not a split — the row's type already says who it was for.
+    if (!expense || !isSplit(expense) || assignedPerson(expense)) return undefined;
     return { total: expense.totalAmount, participants: expense.participants.map((p) => ({ name: p.isMe ? "You" : p.name, share: p.share, isMe: p.isMe, isThisPerson: p.personId === personId })) };
   };
   const hrefOfEntry = (entryId: string | null): string | null => {
@@ -344,6 +348,11 @@ export function PersonActivityFeed({
       const dir = dirOf(row) ?? "out";
       const manual = meta.kind === "moneyGiven" || meta.kind === "moneyReceived";
       const own = row.ownPayment;
+      // A shared / paid-for item is described by its approved description (the row's title); money that changed hands
+      // is described by what the user wrote about it.
+      const note = noteOfEntry(row.entryId);
+      const ownTitle = !row.recordedLoanCash && !isGenericRowTitle(row.title) ? row.title : null;
+      const description = cash ? (note ?? (manual ? ownTitle : null)) : (ownTitle ?? note);
       const editing = handlers.editingKey === row.key;
       const actions: MoneyItem["actions"] = [
         ...(row.settle && row.state !== "settled" && !row.key.startsWith("loan") && row.direction !== "iOwe" ? [{ id: "record" as const, onClick: () => handlers.onSettleStart(row) }] : []),
@@ -359,7 +368,8 @@ export function PersonActivityFeed({
         kind: cash ? "cash" : "owed",
         amount: cash ? cash.amount : row.amount,
         title: cash ? (dir === "in" ? `Received from ${firstName}` : `Paid to ${firstName}`) : meta.kind === "adjustment" ? "Balance correction" : dir === "in" ? `${firstName} paid for you` : `Paid for ${firstName}`,
-        description: noteOfEntry(row.entryId) ?? ((manual || !cash) && !row.recordedLoanCash && !isGenericRowTitle(row.title) ? row.title : null),
+        description,
+        note: note !== description ? note : null,
         account: row.recordedLoanCash?.account ?? lookups.accountForEntry(row.entryId) ?? null,
         earlier: receivedEarlier(row.entryId),
         direct: paidDirectly(row.entryId),

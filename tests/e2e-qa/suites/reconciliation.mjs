@@ -164,7 +164,7 @@ scenario(
     chk("the full comparison is a full-width top sheet that fits the viewport", box && Math.round(box.x) === 0 && Math.round(box.width) === 1280 && Math.round(box.y) === 0 && box.height < 800, JSON.stringify(box));
     await page.keyboard.press("Escape");
 
-    await page.getByRole("button", { name: "Expand row 3" }).click();
+    await page.getByRole("button", { name: "Edit row 3" }).click();
     const amount = page.getByLabel("Amount");
     await amount.fill("452.50");
     await amount.press("Enter");

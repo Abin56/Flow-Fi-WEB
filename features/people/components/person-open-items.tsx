@@ -34,6 +34,12 @@ const PREVIEW_LIMIT = 8;
  * Actions: Received / Paid (Record payment with that item picked) and Postpone (money they owe).
  * Rows are `payableObligations` (the same list Record payment offers); nothing is computed here beyond layout.
  */
+/** A paid-for-them expense is stored as a "gave" share, but no cash was handed over — say what it was. */
+function captionOf(o: PayableObligation, first: string): string {
+  const assigned = (o.target.kind === "split" && o.target.sourceKind === "assignedExpense") || (o.target.kind === "entry" && o.target.entry.sourceKind === "assignedExpense");
+  return assigned ? `You paid for ${first}` : o.typeLabel;
+}
+
 export function PersonOpenItems({
   personName,
   obligations,
@@ -113,7 +119,7 @@ export function PersonOpenItems({
                 <td role="cell" className={cn(TD, "max-w-0")}>
                   <div className="flex min-w-0 items-center gap-2">
                     <p className="min-w-[35%] shrink truncate text-[13px] leading-tight font-semibold text-foreground">{o.title}</p>
-                    {!(o.isEmi && o.title.endsWith(" · EMI share")) && <span className="truncate text-[11.5px] text-muted-foreground">{o.typeLabel}</span>}
+                    {!(o.isEmi && o.title.endsWith(" · EMI share")) && <span className="truncate text-[11.5px] text-muted-foreground">{captionOf(o, first)}</span>}
                   </div>
                 </td>
                 <td role="cell" className={TD}>

@@ -11,27 +11,12 @@
  * statement is for and the one answer (the balance due); the body is white paper — the reconciliation card, then
  * each section as one connected panel (column header → rows) with quiet hairlines and fixed money columns, so
  * figures line up down the page. The document closes on a midnight panel (the table's total, the ending balance)
- * that mirrors the header. Type: Plus Jakarta Sans (the app's face) for words, Geist Mono for figures, small-caps
- * labels with letter-spacing — each when its bytes are given; otherwise Helvetica with "Rs.". Every colour supports
- * a word, so the statement stays clear in greyscale print.
+ * that mirrors the header. Type: Inter for words (2026-11-25 — matches the Monthly PDF), Geist Mono for figures,
+ * small-caps labels with letter-spacing — each when its bytes are given; otherwise Helvetica with "Rs.". Every
+ * colour supports a word, so the statement stays clear in greyscale print.
  */
 import fontkit from "@pdf-lib/fontkit";
-import {
-  PDFDocument,
-  PDFName,
-  PDFNull,
-  StandardFonts,
-  clip,
-  endPath,
-  popGraphicsState,
-  pushGraphicsState,
-  rectangle,
-  rgb,
-  setCharacterSpacing,
-  type PDFFont,
-  type PDFPage,
-  type RGB,
-} from "pdf-lib";
+import { PDFDocument, PDFName, PDFNull, StandardFonts, rgb, setCharacterSpacing, type PDFFont, type PDFPage, type RGB } from "pdf-lib";
 import {
   STATEMENT_COPY,
   statementSections,
@@ -53,14 +38,16 @@ export function pdfSafe(text: string): string {
 const hex = (h: string) => rgb(...hexToUnit(h));
 const INK = hex(STATEMENT_INK.ink);
 const BODY = hex(STATEMENT_INK.body);
-const MUTED = hex(STATEMENT_INK.muted);
+const MUTED = hex("#64748B"); // refined secondary text, matching the Monthly PDF (local override, see NAVY above)
 const FAINT = hex(STATEMENT_INK.faint);
 const RULE = hex(STATEMENT_INK.rule);
 const RULE_STRONG = hex(STATEMENT_INK.ruleStrong);
 const SURFACE = hex(STATEMENT_INK.surface);
 const HEAD = hex(STATEMENT_INK.head);
-const NAVY = hex(STATEMENT_INK.navy);
-const NAVY_TINT = hex(STATEMENT_INK.navyTint);
+// Refined navy/tint (2026-11-25, matching the Monthly PDF's own polish pass) — a local override here too, so the
+// two PDFs read as one family; the shared palette (and the on-screen preview that also reads it) is untouched.
+const NAVY = hex("#142544");
+const NAVY_TINT = hex("#EDF2F8");
 const NAVY_RULE = hex(STATEMENT_INK.navyRule);
 const MIDNIGHT = hex(STATEMENT_INK.midnight);
 const MIDNIGHT_LINE = hex(STATEMENT_INK.midnightLine);
@@ -129,13 +116,15 @@ export async function loadStatementAmountFonts(base = "/fonts/geist-mono"): Prom
   }
 }
 
-/** Fetches the text faces in the browser; null when they can't be loaded (the PDF then keeps Helvetica). */
-export async function loadStatementTextFonts(base = "/fonts/plus-jakarta-sans"): Promise<StatementTextFonts | null> {
+/**
+ * Fetches the text faces in the browser; null when they can't be loaded (the PDF then keeps Helvetica). Inter by
+ * default (2026-11-25 — matches the Monthly PDF's own face, so the two statements read as one family); the static
+ * per-weight files are the official rsms/inter v4.1 release (`extras/ttf/`), since Google Fonts now ships Inter
+ * only as a variable font that pdf-lib/fontkit can't reliably split into discrete weights. SIL OFL licensed.
+ */
+export async function loadStatementTextFonts(base = "/fonts/inter", family = "Inter"): Promise<StatementTextFonts | null> {
   try {
-    const [regular, medium, semibold, bold, extrabold] = await fetchAll(
-      base,
-      ["Regular", "Medium", "SemiBold", "Bold", "ExtraBold"].map((w) => `PlusJakartaSans-${w}.ttf`),
-    );
+    const [regular, medium, semibold, bold, extrabold] = await fetchAll(base, ["Regular", "Medium", "SemiBold", "Bold", "ExtraBold"].map((w) => `${family}-${w}.ttf`));
     return { regular, medium, semibold, bold, extrabold };
   } catch {
     return null;
@@ -170,8 +159,7 @@ function pageGeometry(orientation: StatementOrientation) {
   const colRight = (i: number) => colX(i) + COL_W[i] - PAD;
   return { portrait, PAGE_W, PAGE_H, M, PAD, TABLE_W, COLUMNS, COL_W, colX, colRight, DESC_W: COL_W[2] - 2 * PAD, STATUS_W: COL_W[5] - 2 * PAD };
 }
-/** The first page's midnight header band, and the slimmer band that opens every later page. */
-const HERO_H = 84;
+/** The slimmer band that opens every later page (the first page's own masthead is compact, not a band). */
 const CONT_H = 30;
 /** The footer rule's height; footer text sits below it. */
 const FOOTER_RULE_Y = 26;
@@ -349,15 +337,6 @@ export async function renderPersonStatementPdf(
   };
   const amountRight = (s: string, right: number, yy: number, size: number, font: PDFFont, color: RGB, maxW = 400) =>
     textRight(s, right, yy, sizeToFit(s, size, amountFace(font), maxW), amountFace(font), color);
-  /**
-   * Fine concentric rings, clipped to a midnight area — the guilloché of a banknote or a premium card, drawn as
-   * hairlines one shade off the ground so they never compete with the text.
-   */
-  const ornament = (cx: number, cy: number, area: { x: number; y: number; w: number; h: number }, radii: number[]) => {
-    page.pushOperators(pushGraphicsState(), rectangle(area.x, area.y, area.w, area.h), clip(), endPath());
-    for (const r of radii) page.drawCircle({ x: cx, y: cy, size: r, borderColor: MIDNIGHT_LINE, borderWidth: 0.7 });
-    page.pushOperators(popGraphicsState());
-  };
   /** "+ / − / =" in a small ring on a boundary — the reconciliation read as one sum. */
   const opGlyph = (op: "+" | "−" | "=") => (op === "−" ? (textCustom ? "−" : "–") : op);
   const operator = (op: "+" | "−" | "=", cx: number, cy: number, onMidnight = false) => {
@@ -486,51 +465,39 @@ export async function renderPersonStatementPdf(
     hline(M, M + TABLE_W, y - h, RULE_STRONG, 0.8);
   };
 
-  // ---------------- Header band (first page) ----------------
-  // Midnight, full bleed: the brand and the document's name, who it is for, the period and date, and — on the
-  // right, the largest figure in the document — the balance due with who owes whom.
+  // ---------------- Header (first page) ----------------
+  // A compact, quietly premium masthead — not a full midnight band: the brand on a plain white page, a fine
+  // navy-over-gold double rule, the person named clearly with a small direction pill, period/as-of kept small
+  // and secondary. The balance itself is the reconciliation card's own answer cell (`drawSummary`'s primary
+  // cell, just below) — the hero no longer repeats it, which is what let it shrink.
   const drawHero = () => {
-    const bottom = PAGE_H - HERO_H;
-    const top = PAGE_H;
-    box(0, bottom, PAGE_W, HERO_H, MIDNIGHT);
-    // Brand row.
-    text("FlowFi", M, top - 24, 14, heavy, WHITE);
-    const bx = M + width("FlowFi", 14, heavy) + 9;
-    vline(bx, top - 14.5, top - 26, GOLD, 0.8);
-    tracked("PEOPLE SETTLEMENT STATEMENT", bx + 9, top - 23, 6.2, semi, GOLD_LIGHT, 1.1);
-    trackedRight(`GENERATED ${generated.toUpperCase()}`, M + TABLE_W, top - 23, 5.6, semi, ON_MID_MUTED, 0.8);
-    // Who it is for, the period, the date the figures are read at.
-    const leftW = TABLE_W * (portrait ? 0.54 : 0.58);
-    tracked("STATEMENT FOR", M, top - 42, 5.8, semi, ON_MID_MUTED, 0.9);
-    text(fit(view.personName, bold, 20, leftW), M, top - 61, sizeToFit(view.personName, 20, bold, leftW, 11), bold, WHITE);
-    let fx = M;
-    for (const [label, value] of [
-      ["PERIOD", view.cycleLabel],
-      ["AMOUNTS AS OF", view.asOf],
-    ] as const) {
-      if (fx > M + leftW - 60) break;
-      tracked(label, fx, top - 75, 5.6, semi, ON_MID_MUTED, 0.8);
-      const lx = fx + trackedWidth(label, 5.6, semi, 0.8) + 6;
-      const v = fit(value, medium, 7.8, M + leftW - lx);
-      text(v, lx, top - 75, 7.8, medium, ON_MID);
-      fx = lx + width(v, 7.8, medium) + 18;
-    }
-    const leftEnd = Math.max(fx - 18, M + Math.min(leftW, width(view.personName, 20, bold)));
-    // The answer.
-    const R = M + TABLE_W;
-    const rightW = TABLE_W - leftW - 16;
-    const amountSize = sizeToFit(view.amount, portrait ? 24 : 27, amountBold, rightW, 12);
-    const headline = fit(settled ? "Nothing left to settle" : view.headline, medium, 7.8, rightW);
-    const answerW = Math.max(width(view.amount, amountSize, amountBold), width(headline, 7.8, medium));
-    trackedRight(view.current.label.toUpperCase(), R, top - 40, 6.2, semi, GOLD_LIGHT, 1);
-    textRight(view.amount, R, top - 62, amountSize, amountBold, settled ? SETTLED_ON_MID : WHITE);
-    textRight(headline, R, top - 75, 7.8, medium, ON_MID);
-    // Ripples spreading from the answer, kept to the open ground between the two blocks so no text is crossed.
-    const gapL = leftEnd + 24;
-    const gapR = R - answerW - 22;
-    if (gapR - gapL > 40) ornament(gapR + 26, bottom + HERO_H * 0.42, { x: gapL, y: bottom + 2, w: gapR - gapL, h: HERO_H - 2 }, [36, 58, 80, 102, 124, 146, 168]);
-    box(0, bottom, PAGE_W, 1.6, GOLD);
-    y = bottom - 12;
+    const top = PAGE_H - 22;
+    y = top;
+    text("FlowFi", M, y, 14, heavy, NAVY);
+    const wmW = width("FlowFi", 14, heavy);
+    box(M + wmW + 9, y - 2.5, 3, 8.5, GOLD);
+    tracked("PEOPLE SETTLEMENT STATEMENT", M + wmW + 16, y - 0.2, 6.2, semi, MUTED, 1);
+    trackedRight(`GENERATED ${generated.toUpperCase()}`, M + TABLE_W, y, 5.6, semi, MUTED, 0.8);
+    textRight(fit(`${view.cycleLabel}  ·  As of ${view.asOf}`, regular, T.meta, 320), M + TABLE_W, y - 10, T.meta, regular, FAINT);
+    y -= 15;
+    // A fine double rule — navy over a hairline of gold — the one bit of "signature" styling.
+    hline(M, M + TABLE_W, y, NAVY, 1.1);
+    hline(M, M + TABLE_W, y - 2.2, GOLD, 0.6);
+    y -= 15;
+    tracked("STATEMENT FOR", M, y, 5.8, semi, MUTED, 0.9);
+    y -= 19;
+    // The statement is read by the person, so it never says "you" — the owner is named instead.
+    const pillLabel = settled ? "SETTLED" : view.direction === "iOwe" ? `${view.ownerShort.toUpperCase()} OWES` : "RECEIVABLE";
+    const pillColor = settled ? PAID_TEXT : view.direction === "iOwe" ? CHIP.overdue.text : NAVY;
+    const pillTint = settled ? CHIP.paid.fill : view.direction === "iOwe" ? CHIP.overdue.fill : NAVY_TINT;
+    const pillW = trackedWidth(pillLabel, T.label, semi, 0.7) + 16;
+    text(fit(view.personName, bold, 18, TABLE_W - pillW - 16), M, y, sizeToFit(view.personName, 18, bold, TABLE_W - pillW - 16, 11), bold, INK);
+    box(M + TABLE_W - pillW, y - 2, pillW, 13, pillTint);
+    tracked(pillLabel, M + TABLE_W - pillW + 8, y + 2.2, T.label, semi, pillColor, 0.7);
+    y -= 15;
+    // The direction sentence, named once up here and again on the ending balance panel — never "you" either place.
+    text(fit(settled ? "Nothing left to settle" : view.headline, medium, 9, TABLE_W), M, y, 9, medium, MUTED);
+    y -= 13;
   };
 
   // ---------------- Reconciliation card: the sum that produces the balance ----------------

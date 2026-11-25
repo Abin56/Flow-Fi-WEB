@@ -181,6 +181,13 @@ const pickAccount = async (user: ReturnType<typeof userEvent.setup>, label: RegE
 };
 const renderDialog = (target: PaymentTarget) => render(<RecordPaymentDialog target={target} open onOpenChange={() => {}} />);
 const panel = () => screen.queryByRole("region", { name: "Who pays this installment" });
+/** A past payment's date is never pre-filled: the user picks it — here through the calendar's own shortcut. */
+const pickPaidDate = async (user: ReturnType<typeof userEvent.setup>, shortcut: RegExp | string = /^Due /) => {
+  const field = screen.getByLabelText(/^Date (paid|received)$/);
+  await user.click(within(field.parentElement!).getByRole("button", { name: "Open calendar" }));
+  await user.click(within(screen.getByTestId("date-calendar")).getByRole("button", { name: shortcut }));
+};
+
 const footer = (name: string | RegExp) => screen.getByRole("button", { name }) as HTMLButtonElement;
 
 /** Record past payments → the one installment the dialog was on → the single past-payment form (unchanged write path). */
@@ -367,6 +374,7 @@ describe("E — Mark an old EMI as paid", () => {
     const target = emiTarget();
     renderDialog(target);
     await openPastSingle(user);
+    await pickPaidDate(user);
     expect(screen.getByTestId("past-payment-header").textContent).toContain("paid before FlowFi — no account balance changes");
     expect(screen.queryByRole("region", { name: "Has their share been paid?" })).toBeNull();
     expect(screen.queryByLabelText(/paid from account/i)).toBeNull();
@@ -383,6 +391,44 @@ describe("E — Mark an old EMI as paid", () => {
       recordedEarlier: { dateKnown: true },
       peopleGateAcknowledgement: EARLIER_ACK,
     });
+  });
+
+  it("the paid date starts empty (never the due date), blocks saving, and a typed date survives other edits", async () => {
+    const user = userEvent.setup();
+    renderDialog(emiTarget());
+    await openPastSingle(user);
+    const field = () => screen.getByLabelText("Date paid") as HTMLInputElement;
+    expect(field().value).toBe("");
+    expect(screen.getByTestId("payment-due-context").textContent).toMatch(/^Due: /);
+    expect(footer("Save past payment of ₹3,000").disabled).toBe(true);
+    await user.type(field(), "05/03/2024");
+    await user.click(screen.getByRole("button", { name: "Pay it now instead" }));
+    await openPastSingle(user);
+    expect(field().value).toBe("05/03/2024");
+    await user.click(footer("Save past payment of ₹3,000"));
+    await waitFor(() => expect(emiRecordPayment).toHaveBeenCalledTimes(1));
+    expect(emiRecordPayment.mock.calls[0][2]).toMatchObject({ date: new Date(2024, 2, 5, 12), recordedEarlier: { dateKnown: true } });
+  });
+
+  it("calendar: opens on the due month, month and year jump directly, browsing never changes the date", async () => {
+    const user = userEvent.setup();
+    const target = emiTarget();
+    renderDialog(target);
+    await openPastSingle(user);
+    const field = screen.getByLabelText("Date paid") as HTMLInputElement;
+    await user.click(within(field.parentElement!).getByRole("button", { name: "Open calendar" }));
+    const calendar = within(screen.getByTestId("date-calendar"));
+    const due = dueOf(target);
+    const month = () => (calendar.getByRole("combobox", { name: "Month" }) as HTMLSelectElement).value;
+    const year = () => (calendar.getByRole("combobox", { name: "Year" }) as HTMLSelectElement).value;
+    expect([month(), year()]).toEqual([String(due.getMonth()), String(due.getFullYear())]);
+    await user.selectOptions(calendar.getByRole("combobox", { name: "Year" }), String(due.getFullYear() - 2));
+    await user.selectOptions(calendar.getByRole("combobox", { name: "Month" }), "4");
+    expect(field.value).toBe("");
+    await user.click(calendar.getByRole("button", { name: `15 May ${due.getFullYear() - 2}` }));
+    expect(screen.queryByTestId("date-calendar")).toBeNull();
+    expect(field.value).toBe(`15/05/${due.getFullYear() - 2}`);
+    expect(emiRecordPayment).not.toHaveBeenCalled();
   });
 
   it("unknown date → stored on the installment's due date, flagged as not known", async () => {
@@ -404,6 +450,7 @@ describe("E — Mark an old EMI as paid", () => {
     await user.click(screen.getByRole("button", { name: "Pay it now instead" }));
     expect(footer("Pay ₹3,000 to lender")).toBeTruthy();
     await openPastSingle(user);
+    await pickPaidDate(user);
     expect(footer("Save past payment of ₹3,000").disabled).toBe(true); // the record's account is chosen, never assumed
     await pickAccount(user);
     await user.click(footer("Save past payment of ₹3,000"));
@@ -422,6 +469,7 @@ describe("E — Mark an old EMI as paid", () => {
     emiRecordPayment.mockRejectedValueOnce(new Error("offline"));
     renderDialog(emiTarget());
     await openPastSingle(user);
+    await pickPaidDate(user);
     await user.click(footer("Save past payment of ₹3,000"));
     await waitFor(() => expect(emiRecordPayment).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole("button", { name: "Pay it now instead" })).toBeNull();
@@ -696,7 +744,7 @@ describe("I — mark several old installments as paid", () => {
 
 describe("J — Mark an old EMI as paid: had the people sharing it already paid you?", () => {
   const share = (personId: string, personName: string, received = 0): ReimbursementLine => ({
-    // Due date deliberately different from the lender payment's date (the default "Date paid" is #1's due date).
+    // Due date deliberately different from the lender payment's date (the date picked here is #1's due date).
     personId, personName, installmentId: "i1", sequenceNumber: 1, dueDate: day(-40), obligationKey: "emi-inst:i1", share: 1000, received, remaining: 1000 - received,
   });
   const choose = async (user: ReturnType<typeof userEvent.setup>, who: string, option: string) =>
@@ -707,6 +755,7 @@ describe("J — Mark an old EMI as paid: had the people sharing it already paid 
     reimbLines = [share("amma", "AMMA"), share("sanju", "SANJU")];
     renderDialog(emiTarget());
     await openPastSingle(user);
+    await pickPaidDate(user);
     expect(screen.getByRole("heading", { name: /already paid you/i })).toBeTruthy();
     expect(screen.queryByText(/already included in your flowfi account balance/i)).toBeNull();
     expect(footer("Save past payment of ₹3,000")).toBeTruthy();
@@ -741,6 +790,7 @@ describe("J — Mark an old EMI as paid: had the people sharing it already paid 
     reimbLines = [share("sanju", "SANJU")];
     renderDialog(emiTarget());
     await openPastSingle(user);
+    await pickPaidDate(user);
     await choose(user, "SANJU", "Received in full");
     await user.clear(screen.getByLabelText("Date received from SANJU"));
     expect(screen.getByText("No date entered — it will be saved as “Date not known”.")).toBeTruthy();
@@ -757,6 +807,7 @@ describe("J — Mark an old EMI as paid: had the people sharing it already paid 
     reimbLines = [share("amma", "AMMA")];
     renderDialog(emiTarget());
     await openPastSingle(user);
+    await pickPaidDate(user);
     await choose(user, "AMMA", "Received some");
     await user.type(screen.getByRole("spinbutton", { name: /amount received from amma/i }), "400");
     await user.clear(screen.getByLabelText("Date received from AMMA"));
@@ -786,6 +837,7 @@ describe("J — Mark an old EMI as paid: had the people sharing it already paid 
     reimbRecord.mockImplementationOnce(async (items) => Object.fromEntries(items.map((i) => [i.key, i.personId === "amma" ? { status: "failed" as const, error: "offline" } : { status: "recorded" as const }])));
     renderDialog(emiTarget());
     await openPastSingle(user);
+    await pickPaidDate(user);
     await choose(user, "AMMA", "Received in full");
     await choose(user, "SANJU", "Received in full");
     await pickAccount(user, "Received into account");
@@ -850,6 +902,7 @@ describe("Paying account — balance preview and funds", () => {
     mockSbiBalance = 0;
     renderDialog(loanTarget());
     await openPastSingle(user);
+    await pickPaidDate(user);
     await pickAccount(user);
     expect(screen.queryByTestId("payment-source-summary")).toBeNull();
     await user.click(footer("Save past payment of ₹3,000"));
@@ -964,10 +1017,14 @@ describe("L — an EMI paid ahead (not due yet) can still be recorded as a past 
     base.installment = base.row.installments[1]; // #2, due in 2 days
     renderDialog(base as never);
     await openPastSingle(user);
+    // Nothing is assumed, and a due date that hasn't arrived can't be picked as the paid date.
+    expect((screen.getByLabelText("Date paid") as HTMLInputElement).value).toBe("");
+    expect(footer("Save past payment of ₹3,000").disabled).toBe(true);
+    await pickPaidDate(user, "Today");
     await user.click(footer("Save past payment of ₹3,000"));
     await waitFor(() => expect(emiRecordPayment).toHaveBeenCalledTimes(1));
     expect(emiRecordPayment.mock.calls[0][2]).toMatchObject({ amount: 3000, targetInstallmentId: "i2", recordedEarlier: { dateKnown: true }, accountId: null });
-    // Not due yet → the past-payment date starts on today, never the future due date.
+    // The date the user picked is the date written.
     expect((emiRecordPayment.mock.calls[0][2] as { date: Date }).date.toDateString()).toBe(new Date().toDateString());
   });
 });
@@ -991,6 +1048,7 @@ describe("M — who is paying the lender", () => {
     expect(screen.getByTestId("pay-card")).toBeTruthy();
 
     await user.click(screen.getByRole("radio", { name: "ABIN paid directly" }));
+    await pickPaidDate(user);
     expect(screen.getByRole("radio", { name: "Single payment" }).getAttribute("aria-checked")).toBe("true");
     await user.click(within(screen.getByRole("radiogroup", { name: "ABIN" })).getByRole("radio", { name: "Cover full share" }));
     await user.click(screen.getByRole("radio", { name: "Record without balance change" }));
@@ -1015,6 +1073,7 @@ describe("M — who is paying the lender", () => {
     reimbLines = [];
     renderDialog(emiTarget());
     await user.click(screen.getByRole("radio", { name: "SANJU paid directly" }));
+    await pickPaidDate(user);
     expect(screen.getByTestId("payer-hint").textContent).toContain("No money leaves your accounts");
     await user.click(footer(/Save payment made by SANJU of ₹3,000/));
     await waitFor(() => expect(emiRecordPayment).toHaveBeenCalledTimes(1));

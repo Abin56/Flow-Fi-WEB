@@ -151,13 +151,13 @@ export function BulkActionBar({
     }
 
     if (committedSelection.length > 0) {
-      const { categoryId, error } = resolveCategoryId(categoryName, categories);
-      if (error) {
-        toast.error("Couldn't assign category", error);
-      } else {
-        const { succeeded, failed } = await applyToCommittedRows(committedSelection, committedTransactionsById, transactionRepository, (transaction) =>
-          transactionRepository!.editTransaction(transaction, { categoryId }),
-        );
+      {
+        // Resolved per transaction: one name can mean a different category for an expense and for an income.
+        const { succeeded, failed } = await applyToCommittedRows(committedSelection, committedTransactionsById, transactionRepository, async (transaction) => {
+          const { categoryId, error } = resolveCategoryId(categoryName, categories, transaction);
+          if (error) throw new Error(error);
+          await transactionRepository!.editTransaction(transaction, { categoryId });
+        });
         if (succeeded.length > 0) {
           // Staging sync only for the rows whose real transaction actually succeeded — never
           // reports a committed edit as done when it wasn't.

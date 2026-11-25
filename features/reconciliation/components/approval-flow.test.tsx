@@ -99,6 +99,11 @@ const dialog = () => screen.getByTestId("approval-dialog");
 const rowEl = (rowId: string) => screen.getAllByTestId("recon-row").find((r) => r.dataset.rowId === rowId)!;
 const statusOf = (rowId: string) => rowEl(rowId)?.dataset.status;
 
+/** An imported row reads Imported — or, once EVERY row is handled, the finished review has been cleared. */
+async function importedOrCleared(rowId: string) {
+  await waitFor(() => expect(screen.queryAllByTestId("recon-row").length === 0 || statusOf(rowId) === "imported").toBe(true));
+}
+
 describe("Import — one click, nothing written before it", () => {
   it("opening Reconciliation writes nothing; Import covers the Ready rows only, and the rest stay for later", async () => {
     seed({ e1: { kind: "import_new", category: "Food" } });
@@ -108,7 +113,7 @@ describe("Import — one click, nothing written before it", () => {
     expect(button.disabled).toBe(false);
     expect(button.textContent).toBe("Import 1 transaction"); // e1 only — the others are not Ready
     importNow();
-    await waitFor(() => expect(statusOf("e1")).toBe("imported"));
+    await importedOrCleared("e1");
     expect(fake.creates).toBe(1);
     expect([...fake.store.values()].map((t) => t.description)).toEqual(["CAFE ONE"]);
     expect(statusOf("rf")).toBe("fix"); // the credit still needs its type — untouched
@@ -123,21 +128,20 @@ describe("Import — one click, nothing written before it", () => {
     expect(button.textContent).toBe("Import 3 transactions");
     expect(fake.creates).toBe(0);
     importNow();
-    await waitFor(() => expect(statusOf("e1")).toBe("imported"));
+    await importedOrCleared("e1");
     expect(screen.queryByTestId("approval-confirm")).toBeNull(); // no confirmation step existed
     expect(screen.queryByTestId("approval-dialog")).toBeNull();
     expect(fake.creates).toBe(3);
     expect(fake.balanceEffect()).toBe(-90 - 250 + 300);
-    expect(["e1", "e2", "rf"].map(statusOf)).toEqual(["imported", "imported", "imported"]);
-    expect(statusOf("lk")).toBe("skipped"); // Already recorded — never written
-    expect(statusOf("ig")).toBe("skipped");
+    // Every row is imported or skipped, so the finished review is cleared (a clean Smart Capture follows).
+    expect(screen.queryAllByTestId("recon-row")).toHaveLength(0);
   });
 
   it("a row's own Import imports exactly that row", async () => {
     seed();
     const { fake } = mount();
     fireEvent.click(within(rowEl("e2")).getByTestId("row-import"));
-    await waitFor(() => expect(statusOf("e2")).toBe("imported"));
+    await importedOrCleared("e2");
     expect(fake.creates).toBe(1);
     expect([...fake.store.values()].map((t) => t.description)).toEqual(["BOOKSTORE"]);
     expect(statusOf("e1")).toBe("ready");
@@ -159,7 +163,7 @@ describe("Import — one click, nothing written before it", () => {
     fake.failFor.clear();
     rerender(); // the live data catches up: the two imported rows are now seen as already imported
     fireEvent.click(screen.getByTestId("approval-retry"));
-    await waitFor(() => expect(statusOf("e2")).toBe("imported"));
+    await importedOrCleared("e2");
     expect(fake.store.size).toBe(3);
     expect(fake.creates).toBe(4); // 3 first run (one failed) + exactly one retry
   });
@@ -192,7 +196,7 @@ describe("Import — one click, nothing written before it", () => {
     const button = screen.getByTestId("open-approval");
     fireEvent.click(button);
     fireEvent.click(button);
-    await waitFor(() => expect(statusOf("e1")).toBe("imported"));
+    await importedOrCleared("e1");
     expect(fake.creates).toBe(3);
   });
 
@@ -202,7 +206,7 @@ describe("Import — one click, nothing written before it", () => {
     const button = within(rowEl("e1")).getByTestId("row-import");
     fireEvent.click(button);
     fireEvent.click(button);
-    await waitFor(() => expect(statusOf("e1")).toBe("imported"));
+    await importedOrCleared("e1");
     expect(fake.creates).toBe(1);
   });
 
@@ -218,7 +222,7 @@ describe("Import — one click, nothing written before it", () => {
     fireEvent.click(within(within(dialog()).getByTestId("approval-repeats")).getByRole("checkbox"));
     expect(submit.disabled).toBe(false);
     fireEvent.click(submit);
-    await waitFor(() => expect(statusOf("a2")).toBe("imported"));
+    await importedOrCleared("a2");
     expect(fake.creates).toBe(2);
   });
 
@@ -233,10 +237,10 @@ describe("Import — one click, nothing written before it", () => {
     expect(statusOf("m1")).toBe("ready");
     expect(statusOf("m2")).toBe("ready");
     fireEvent.click(within(rowEl("m1")).getByTestId("row-import"));
-    await waitFor(() => expect(statusOf("m1")).toBe("imported"));
+    await importedOrCleared("m1");
     rerender(); // row 1 is now a live FlowFi transaction — it must not hold row 2 back
     fireEvent.click(within(rowEl("m2")).getByTestId("row-import"));
-    await waitFor(() => expect(statusOf("m2")).toBe("imported"));
+    await importedOrCleared("m2");
     expect(screen.queryByTestId("approval-dialog")).toBeNull();
     expect(fake.creates).toBe(2);
     const saved = [...fake.store.values()];
