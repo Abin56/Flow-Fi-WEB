@@ -146,6 +146,7 @@ export function HeroAmount({
   autoFocus = true,
   invalid = false,
   inputRef,
+  compact = false,
 }: {
   label: string;
   value: string;
@@ -153,6 +154,7 @@ export function HeroAmount({
   autoFocus?: boolean;
   invalid?: boolean;
   inputRef?: React.Ref<HTMLInputElement>;
+  compact?: boolean;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-1">
@@ -167,7 +169,7 @@ export function HeroAmount({
           invalid ? "border-expense" : "border-border-strong",
         )}
       >
-        <span aria-hidden className="pl-4 font-heading text-[26px] font-semibold text-foreground/40">
+        <span aria-hidden className={cn("pl-4 font-heading text-[26px] font-semibold text-foreground/40", compact && "pl-3 text-[21px] text-foreground/60")}>
           ₹
         </span>
         <input
@@ -183,7 +185,7 @@ export function HeroAmount({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           style={{ outline: "none" }}
-          className="h-14 w-full min-w-0 appearance-none rounded-none border-0 bg-transparent px-2 font-heading text-[30px] font-bold tracking-tight text-foreground tabular-nums shadow-none ring-0 outline-none placeholder:text-foreground/25 focus:border-0 focus:shadow-none focus:ring-0 focus:outline-none focus-visible:ring-0 focus-visible:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          className={cn("h-14 w-full min-w-0 appearance-none rounded-none border-0 bg-transparent px-2 font-heading text-[30px] font-bold tracking-tight text-foreground tabular-nums shadow-none ring-0 outline-none placeholder:text-foreground/25 focus:border-0 focus:shadow-none focus:ring-0 focus:outline-none focus-visible:ring-0 focus-visible:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none", compact && "h-11 text-[28px]")}
         />
       </div>
     </div>

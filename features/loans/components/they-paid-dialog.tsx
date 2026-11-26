@@ -64,8 +64,6 @@ export function useTheyPaidForm({
   const items = reconcile.plan.ok ? reconcile.plan.items : [];
   const total = reconcile.plan.ok ? reconcile.plan.summary.total : 0;
   const retrying = saved != null && reconcile.failed.length > 0;
-  const names = [...new Map(reconcile.lines.map((l) => [l.personId, l.personName])).values()];
-  const who = names.length === 1 ? names[0] : "They";
   const openLines = reconcile.lines.filter((l) => l.remaining > PAYMENT_EPSILON);
   // Paid toward their overall balance with no installment chosen — shown, never assigned (that is People's own explicit action).
   const general = (breakdown?.participants ?? []).filter((p) => (p.generalCredit ?? 0) > 0.005 && (p.current?.remaining ?? 0) > PAYMENT_EPSILON);
@@ -92,7 +90,7 @@ export function useTheyPaidForm({
       setSaving(false);
     }
   }
-  return { reconcile, accounts, installment, saving, success, saved, retrying, names, who, openLines, general, items, total, confirmDisabled, confirmLabel, submit };
+  return { reconcile, accounts, installment, saving, success, saved, retrying, openLines, general, items, total, confirmDisabled, confirmLabel, submit };
 }
 
 export function TheyPaidDialog({
@@ -108,7 +106,7 @@ export function TheyPaidDialog({
   installmentId: string;
 }) {
   const f = useTheyPaidForm({ ...rest, onClosed: () => onOpenChange(false) });
-  const { reconcile, accounts, installment, saving, success, saved, retrying, names, who, openLines, general, confirmDisabled, confirmLabel, submit } = f;
+  const { reconcile, accounts, installment, saving, success, saved, retrying, openLines, general, confirmDisabled, confirmLabel, submit } = f;
 
   return (
     <PaymentSheet
@@ -116,8 +114,8 @@ export function TheyPaidDialog({
       onOpenChange={onOpenChange}
       eyebrow="People ledger"
       icon={HandCoins}
-      title={`${who} paid`}
-      description={installment ? `Installment #${installment.sequenceNumber} · due ${installment.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })} · lender payment isn't changed` : undefined}
+      title="Record a People receipt"
+      description={installment ? `Installment #${installment.sequenceNumber} · due ${installment.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}` : undefined}
       onConfirm={submit}
       confirmLabel={confirmLabel}
       confirmDisabled={confirmDisabled}
@@ -126,6 +124,7 @@ export function TheyPaidDialog({
       cancelLabel={saved != null && !retrying ? "Close" : "Cancel"}
     >
       <div className="mx-auto flex w-full max-w-[36rem] flex-col gap-2.5" data-testid="they-paid">
+        <p className="text-xs text-muted-foreground">The receipt saves immediately and updates the person’s share.</p>
         {general.map((p) => (
           <p key={p.personId} role="note" className="rounded-[8px] border border-border bg-secondary/60 px-3 py-2 text-xs text-foreground" data-testid={`they-paid-general-${p.personId}`}>
             <span className="font-semibold">{p.personName}</span> has {formatCurrency(p.generalCredit ?? 0)} in People that isn&apos;t linked to an installment, so it isn&apos;t counted here. If it covers this one, apply it in{" "}

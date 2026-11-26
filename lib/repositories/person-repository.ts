@@ -7,6 +7,7 @@
  */
 
 import { safeDocs } from "@/lib/firestore/safe-docs";
+import { PersonDeletionBlockedError, personDeletionBlockers } from "@/lib/repositories/person-deletion-guard";
 import { type CollectionReference, doc, type DocumentReference, getDocs, query, runTransaction, type Transaction as FirestoreTransaction, where } from "firebase/firestore";
 import { FirestoreCrudRepository } from "@/lib/firestore/firestore-crud-repository";
 import { recordEdit, updateField } from "@/lib/firestore/soft-deletable";
@@ -142,8 +143,8 @@ export class PersonRepository extends FirestoreCrudRepository<Person> {
   }
 
   /**
-   * Permanently deletes `person` and every `LedgerEntry` ever recorded
-   * against them (active and trashed) — Firestore doesn't cascade-delete
+   * Permanently deletes `person` and their reverted / deleted `LedgerEntry` records — only when nothing live depends
+   * on them (`person-deletion-guard.ts`); otherwise refused with nothing removed. Firestore doesn't cascade-delete
    * subcollections on its own, and the Trash screen's confirmation dialog
    * explicitly promises "their history will be permanently removed", so
    * this is the one place that promise must actually be kept. `ledgerRepo`
@@ -153,13 +154,27 @@ export class PersonRepository extends FirestoreCrudRepository<Person> {
    * `LedgerRepository`.
    */
   async deletePersonAndLedger(person: Person, ledgerRepo: LedgerRepository): Promise<void> {
-    const entries = [...(await ledgerRepo.getAll()), ...(await ledgerRepo.getTrash())];
-    for (const entry of entries) {
-      await ledgerRepo.permanentlyDeleteEntry(entry);
-    }
-    await this.permanentlyDelete(person);
+    const personRef = this.docRef(person.id);
+    const userDoc = this.collection.parent!;
+    await runTransaction(this.collection.firestore, async (tx) => {
+      // Read first: any People write moves this document, so one that commits meanwhile retries the checks below.
+      const fresh = await tx.get(personRef);
+      if (!fresh.exists()) return;
+      const reasons = await personDeletionBlockers({ userDoc, personId: person.id, person: fresh.data() });
+      if (reasons.length > 0) {
+        throw new PersonDeletionBlockedError(`${fresh.data().name} can't be deleted — they still have ${reasons.join(", ")}. Nothing was deleted.`);
+      }
+      const leftovers = await ledgerRepo.getTrash();
+      // One commit removes the reverted entries and the person together.
+      if (leftovers.length > MAX_DELETES_PER_COMMIT) throw new PersonDeletionBlockedError(`${fresh.data().name} has too many old records to delete safely. Nothing was deleted.`);
+      for (const entry of leftovers) tx.delete(ledgerRepo.docRef(entry.id));
+      tx.delete(personRef);
+    });
   }
 }
+
+/** A Firestore commit holds 500 writes; the person is one of them. */
+const MAX_DELETES_PER_COMMIT = 499;
 
 /** Deterministic ledger-entry id of one keyed Save action (see `LedgerRepository.addEntryWithTransaction`). */
 export function ledgerEntryIdForKey(idempotencyKey: string): string {

@@ -64,6 +64,46 @@ describe("installmentTableRows", () => {
   it("the People column is empty for an unshared agreement", () => {
     expect(rows.every((r) => r.people === null)).toBe(true);
   });
+
+  const share = (id: string, received: number, extra: Partial<AgreementPeopleLine> = {}): AgreementPeopleLine => ({
+    personId: "dad", personName: "Dad", key: `emi-inst:${id}`, installmentId: id, sequenceNumber: 1, dueDate: NOW,
+    share: 2500, received, remaining: 2500 - received,
+    status: received === 2500 ? "received" : received > 0 ? "partial" : "pending", postponedDate: null, bankPaid: false, ...extra,
+  });
+
+  it("keeps a historical receipt on its installment and treats today's share as due", () => {
+    const [october, november, december] = installmentTableRows({
+      installments: [installments[1], { ...installments[2], dueDate: new Date(2026, 10, 22, 18) }, installments[0]],
+      actions: [action("a")], closed: false, now: NOW,
+      peopleLines: new Map([["a", [share("a", 2000)]], ["b", [share("b", 0)]], ["c", [share("c", 0)]]]),
+    });
+    expect(october.peopleRepayment?.amounts).toMatchObject({ received: 2000, remaining: 500, label: "received" });
+    expect(october.paid).toBe(3000);
+    expect(november.peopleRepayment?.amounts).toMatchObject({ received: 0, remaining: 2500, label: "received" });
+    expect(december.peopleRepayment?.text).toBe("Pending");
+  });
+
+  it("sums the ledger amounts once and explains advance, direct and postponed shares per person", () => {
+    const [row] = installmentTableRows({
+      installments: [installments[1]], actions: [], closed: false, now: NOW,
+      peopleLines: new Map([["a", [
+        share("a", 2500, { paidDirectly: true }),
+        share("a", 500.25, { personId: "mom", personName: "Mom", fromAdvance: 500.25, status: "postponed" }),
+      ]]]),
+    });
+    expect(row.peopleRepayment?.amounts).toEqual({ received: 3000.25, remaining: 1999.75, label: "settled", timing: "Postponed" });
+    expect(row.peopleRepayment?.detail).toContain("includes direct lender payment");
+    expect(row.peopleRepayment?.detail).toContain("Mom: ₹500.25 settled · ₹1,999.75 left · ₹500.25 from advance · postponed");
+  });
+
+  it("shows a fully received share and falls back to status for inconsistent figures", () => {
+    const result = (line: AgreementPeopleLine) => installmentTableRows({
+      installments: [installments[1]], actions: [], closed: false, now: NOW,
+      peopleLines: new Map([["a", [line]]]),
+    })[0].peopleRepayment;
+    expect(result(share("a", 2500))?.amounts).toMatchObject({ received: 2500, remaining: 0, label: "received" });
+    expect(result(share("a", 2000, { remaining: 900 }))).toEqual({ text: "Partially received", detail: undefined, amounts: null });
+  });
 });
 
 describe("summarizePeopleLines — one word per installment", () => {

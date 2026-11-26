@@ -678,7 +678,7 @@ export function PostponeFields({ draft }: { draft: PostponeDraft; noMoneyNote?: 
  * Selected-cycle line: what is postponed to a later cycle vs. expected here after a postponement. Display
  * only — both amounts are already inside the cycle's pending figures and are never added again.
  */
-export function DeferralCycleSummary({ cycle, className }: { cycle: StatementCycle; className?: string }) {
+export function DeferralCycleSummary({ cycle, className, hideLater = false }: { cycle: StatementCycle; className?: string; /** The host already shows the postponed amount beside due-now. */ hideLater?: boolean }) {
   const ctx = useContext(DeferralContext);
   const summary = useMemo(() => (ctx ? deferralCycleSummary(ctx.byKey.values(), cycle) : null), [ctx, cycle]);
   if (!summary || (summary.postponedLaterCount === 0 && summary.expectedHereCount === 0)) return null;
@@ -694,7 +694,7 @@ export function DeferralCycleSummary({ cycle, className }: { cycle: StatementCyc
           Expected this cycle after postponement <span className="font-bold">{money(summary.expectedHere)}</span>
         </span>
       )}
-      {summary.postponedLaterCount > 0 && (
+      {!hideLater && summary.postponedLaterCount > 0 && (
         <span
           aria-label={summary.expectedHereCount > 0 ? undefined : "Postponed payments"}
           title="Postponed to later cycles — already included in pending, not added again"

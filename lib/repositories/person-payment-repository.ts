@@ -23,7 +23,8 @@
  * advance writes only an `AdvanceApplication` (no cash, no balance — the advance already moved both).
  *
  * Allocation amounts come from `allocatePayment` (`lib/engines/person-payment.ts`); this file re-checks
- * split installments against their fresh documents so a stale screen can never over-pay one.
+ * split installments against their fresh documents so a stale screen can never over-pay one, and Loan / EMI
+ * shares against what is still open at write time (`people-share-cap.ts`).
  */
 
 import {
@@ -49,6 +50,9 @@ import type { TransactionRepository } from "@/lib/repositories/transaction-repos
 import { generateId } from "@/lib/utils/id-generator";
 import { TxSession } from "@/lib/firestore/tx-session";
 import { assertRecordedEarlierDate } from "@/lib/engines/recorded-earlier";
+import { isPaidDirectlyEntry } from "@/lib/engines/historical-reimbursement";
+import { assertShareSettlementWithinOpen, isShareKey } from "@/lib/repositories/people-share-cap";
+import type { Firestore } from "firebase/firestore";
 
 export { TxSession };
 
@@ -181,6 +185,11 @@ export interface PersonPaymentDeps {
    */
   liveAgreementScheduleIds?: () => Promise<string[]>;
   scheduleDocRef?: (scheduleId: string) => DocumentReference<PaymentSchedule>;
+  /**
+   * With `liveAgreementScheduleIds`: switches on the write-time limit on settling an installment share
+   * (`people-share-cap.ts`). Always wired by the app's factory; fakes without a real database skip it.
+   */
+  shareLimit?: { firestore: Firestore; uid: string };
 }
 
 type PaymentGroup = { entries: LedgerEntry[]; applications: AdvanceApplication[]; funds: PurposeFund[] };
@@ -226,9 +235,22 @@ export class PersonPaymentRepository {
    * instead of being un-applied with it — the People Ledger's Revert payment uses this.
    */
   async revertPayment(person: Person, paymentId: string, options?: { blockIfAdvanceUsed?: boolean }): Promise<void> {
-    const pre = await this.preloadGroup(paymentId);
+    const apply = await this.prepareRevert(person, paymentId, options);
     await runTransaction(this.db, async (tx) => {
       const session = new TxSession(tx);
+      await apply(session);
+      session.flush();
+    });
+  }
+
+  /**
+   * `revertPayment` in two halves: the queries now, and the revert itself to run inside a transaction session — its
+   * own, or the one a lender payment is being reversed in, so both commit together or not at all. Safe to run again on a
+   * retried attempt (every document is re-read through the session). The caller flushes the session.
+   */
+  async prepareRevert(person: Person, paymentId: string, options?: { blockIfAdvanceUsed?: boolean }): Promise<(session: TxSession) => Promise<void>> {
+    const pre = await this.preloadGroup(paymentId);
+    return async (session) => {
       if (options?.blockIfAdvanceUsed) {
         let used = 0;
         for (const a of pre.applications) {
@@ -240,8 +262,7 @@ export class PersonPaymentRepository {
         }
       }
       await this.revertInSession(session, person, pre);
-      session.flush();
-    });
+    };
   }
 
   /**
@@ -276,7 +297,7 @@ export class PersonPaymentRepository {
     await runTransaction(this.db, async (tx) => {
       const session = new TxSession(tx);
       await this.revertInSession(session, person, pre);
-      const { advanceEntryId } = await this.recordInSession(session, person, carried, newPaymentId, owners);
+      const { advanceEntryId } = await this.recordInSession(session, person, carried, newPaymentId, owners, { paymentId, entries: pre.entries });
       if (advanceEntryId) {
         for (const a of pre.applications) {
           if (a.deletedAt != null) continue;
@@ -369,6 +390,7 @@ export class PersonPaymentRepository {
     const targets = params.targets.filter((t) => t.uses.length > 0);
     if (targets.length === 0) throw new Error("Nothing to apply.");
     const advanceIds = [...new Set(targets.flatMap((t) => t.uses.map((u) => u.advanceEntryId)))];
+    const shareOwners = this.deps.shareLimit && targets.some((t) => isShareKey(t.obligationKey)) ? ((await this.deps.liveAgreementScheduleIds?.()) ?? null) : null;
     await runTransaction(this.db, async (tx) => {
       // Re-queried on EVERY attempt (a query can't run inside a client transaction). Together with the lock
       // write on each advance entry below, a concurrent apply that committed first makes this attempt fail
@@ -395,6 +417,20 @@ export class PersonPaymentRepository {
           if (fresh.exists() && fresh.data().deletedAt == null) used = round2(used + fresh.data().amount);
         }
         if (used + amount > snap.data().amount + PAYMENT_EPSILON) throw new Error("Not enough advance available.");
+      }
+      // An applied advance settles a share just as a receipt does, so it has the same limit.
+      if (shareOwners != null && this.deps.shareLimit) {
+        const amounts = new Map<string, number>();
+        for (const t of targets) amounts.set(t.obligationKey, round2((amounts.get(t.obligationKey) ?? 0) + t.uses.reduce((s, u) => s + u.amount, 0)));
+        await assertShareSettlementWithinOpen({
+          ...this.deps.shareLimit,
+          session,
+          personId: person.id,
+          amounts,
+          paidToLender: false,
+          scheduleIds: shareOwners,
+          installmentDocRef: this.deps.installmentDocRef as never,
+        });
       }
       // Lock token outside the model: the write turns a concurrent apply on the same advance into a conflict.
       for (const id of drawing.keys()) tx.update(this.deps.ledgerRepository.docRef(id), { advanceAppliedAt: serverTimestamp() } as never);
@@ -485,6 +521,7 @@ export class PersonPaymentRepository {
     input: RecordPaymentInput,
     paymentId: string,
     owners: readonly string[] | null = null,
+    replacing: { paymentId: string; entries: readonly LedgerEntry[] } | null = null,
   ): Promise<{ advanceEntryId: string | null }> {
     const { direction, date, accountId } = input;
     const note = input.note?.trim() ?? "";
@@ -541,6 +578,26 @@ export class PersonPaymentRepository {
         const open = round2(inst.data().amountDue - inst.data().amountPaid);
         if (line.amount > open + PAYMENT_EPSILON) throw new Error("A split share has less outstanding than this payment line.");
       }
+    }
+
+    // An installment share can't be settled past what is still open on it NOW — nor, when the person paid the lender,
+    // past what the lender was recorded as paid that way. Reads only, before the first write.
+    const shareAmounts = new Map<string, number>();
+    for (const line of lines) {
+      if (line.route.kind !== "derived") continue;
+      shareAmounts.set(line.route.obligationRef, round2((shareAmounts.get(line.route.obligationRef) ?? 0) + line.amount));
+    }
+    if (shareAmounts.size > 0 && owners != null && this.deps.shareLimit) {
+      await assertShareSettlementWithinOpen({
+        ...this.deps.shareLimit,
+        session,
+        personId: person.id,
+        amounts: shareAmounts,
+        paidToLender: isPaidDirectlyEntry({ recordedEarlier: earlier, note }),
+        scheduleIds: owners,
+        installmentDocRef: this.deps.installmentDocRef as never,
+        replacing,
+      });
     }
 
     const tx = session.asTransaction();

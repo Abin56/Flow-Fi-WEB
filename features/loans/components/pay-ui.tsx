@@ -25,6 +25,7 @@ export function PayCard({
   className,
   testId,
   tone = "plain",
+  compact = false,
 }: {
   title?: React.ReactNode;
   aside?: React.ReactNode;
@@ -33,16 +34,17 @@ export function PayCard({
   testId?: string;
   /** "people" tints the card so money coming FROM a person reads apart from the payment TO the bank. */
   tone?: "plain" | "people";
+  compact?: boolean;
 }) {
   return (
-    <section data-testid={testId} className={cn("overflow-hidden rounded-[10px] border bg-card shadow-e1", tone === "people" ? "border-settle-receivable-text/25" : "border-border", className)}>
+    <section data-testid={testId} className={cn("min-w-0 rounded-lg border border-border bg-card", className)}>
       {(title != null || aside != null) && (
-        <header className={cn("flex items-center justify-between gap-3 border-b px-3 py-1.5", tone === "people" ? "border-settle-receivable-text/20 bg-settle-receivable-tint/40" : "border-border bg-secondary/50")}>
-          <h3 className={PAY_LABEL}>{title}</h3>
-          {aside != null && <div className="min-w-0 truncate text-xs text-muted-foreground">{aside}</div>}
+        <header className={cn("flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-t-lg border-b border-border px-3 py-2", tone === "people" ? "bg-settle-receivable-tint/35" : "bg-secondary/35", compact && "lg:py-1.5")}>
+          <h3 className="text-xs font-semibold text-foreground">{title}</h3>
+          {aside != null && <div className="min-w-0 text-xs break-words text-muted-foreground">{aside}</div>}
         </header>
       )}
-      <div className="flex flex-col gap-2.5 p-3">{children}</div>
+      <div className={cn("flex flex-col gap-2.5 p-3", compact && "lg:gap-2 lg:py-2")}>{children}</div>
     </section>
   );
 }
@@ -90,7 +92,7 @@ export function AmountTile({ active, label, hint, amount, onSelect }: { active: 
           <span aria-hidden className={cn("grid size-3.5 shrink-0 place-items-center rounded-full border-[1.5px] transition-colors", active ? "border-primary-accent-text bg-primary-accent-text" : "border-border-strong")}>
             {active && <span className="size-1 rounded-full bg-card" />}
           </span>
-          <span className="truncate text-[13px] font-semibold text-foreground">{label}</span>
+          <span className="text-[13px] leading-tight font-semibold break-words text-foreground">{label}</span>
         </span>
         {amount != null && <Money exact amount={amount} className="shrink-0 text-[13px] text-foreground" />}
       </span>
@@ -119,9 +121,9 @@ export function PayAmountInput({ value, onChange, autoFocus, ariaLabel }: { valu
 }
 
 /** A segmented pair/trio of choices in one line (36px → 32px), used for EMI funding and the extra-amount treatment. */
-export function PaySegmented<T extends string>({ options, value, onChange, ariaLabel, wrapLabels = false }: { options: { value: T; label: string }[]; value: T; onChange: (v: T) => void; ariaLabel: string; wrapLabels?: boolean }) {
+export function PaySegmented<T extends string>({ options, value, onChange, ariaLabel, disabled, className }: { options: { value: T; label: string }[]; value: T | null; onChange: (v: T) => void; ariaLabel: string; disabled?: boolean; className?: string }) {
   return (
-    <div role="radiogroup" aria-label={ariaLabel} className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-[8px] border border-border bg-secondary p-0.5">
+    <div role="radiogroup" aria-label={ariaLabel} className={cn("grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-secondary p-0.5", className)}>
       {options.map((o) => {
         const on = o.value === value;
         return (
@@ -130,11 +132,11 @@ export function PaySegmented<T extends string>({ options, value, onChange, ariaL
             type="button"
             role="radio"
             aria-checked={on}
+            disabled={disabled}
             onClick={() => onChange(o.value)}
             className={cn(
-              "min-w-0 rounded-[6px] px-2.5 text-xs font-semibold outline-none transition-[background-color,color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-ring",
-              wrapLabels ? "min-h-8 py-1 leading-tight [overflow-wrap:anywhere]" : "h-8 truncate",
-              on ? "bg-card text-foreground shadow-e1 ring-1 ring-primary-accent-text" : "text-muted-foreground hover:text-foreground",
+              "min-h-9 min-w-0 rounded-md px-2 py-1 text-xs leading-tight font-semibold [overflow-wrap:anywhere] outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60",
+              on ? "bg-card text-foreground ring-1 ring-inset ring-primary-accent-text" : "text-muted-foreground hover:text-foreground",
             )}
           >
             {o.label}
@@ -144,7 +146,6 @@ export function PaySegmented<T extends string>({ options, value, onChange, ariaL
     </div>
   );
 }
-
 /** One line of the receipt: label left, figure right. */
 export function ReceiptLine({ label, children, tone, strong }: { label: React.ReactNode; children: React.ReactNode; tone?: "good" | "bad"; strong?: boolean }) {
   return (
@@ -156,29 +157,16 @@ export function ReceiptLine({ label, children, tone, strong }: { label: React.Re
 }
 
 /** "Note, GST, fees" and the like — closed by default, no state to hold. */
-export function PayMore({ title, summary, children, testId }: { title: string; summary?: React.ReactNode; children: React.ReactNode; testId?: string }) {
+export function PayMore({ title, summary, children, testId, compact = false }: { title: React.ReactNode; summary?: React.ReactNode; children: React.ReactNode; testId?: string; compact?: boolean }) {
   return (
-    <details data-testid={testId} className="group rounded-[10px] border border-border bg-card shadow-e1">
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-semibold text-foreground outline-none marker:hidden hover:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+    <details data-testid={testId} className={cn("group min-w-0 rounded-lg border border-border bg-card", compact && "lg:rounded-none lg:border-x-0 lg:border-t-0 lg:bg-transparent")}>
+      <summary className={cn("flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-semibold text-foreground outline-none marker:hidden hover:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden", compact && "lg:px-1 lg:py-1.5")}>
         {title}
         <span className="flex-1" aria-hidden />
         {summary != null && <span className="max-w-[60%] truncate font-normal text-muted-foreground group-open:hidden">{summary}</span>}
         <ChevronDown className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-open:rotate-180 motion-reduce:transition-none" aria-hidden />
       </summary>
-      <div className="grid grid-cols-1 gap-2.5 border-t border-border p-3 @md:grid-cols-2">{children}</div>
+      <div className={cn("grid grid-cols-1 gap-2.5 border-t border-border p-3 @md:grid-cols-2", compact && "lg:py-2")}>{children}</div>
     </details>
-  );
-}
-
-/** Step heading inside a merged card: a numbered dot, the label, and what is chosen so far on the right. */
-export function PayStepHead({ n, label, value }: { n: number; label: string; value?: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span aria-hidden className="grid size-5 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-bold text-primary-foreground tabular-nums">
-        {n}
-      </span>
-      <span className={PAY_LABEL}>{label}</span>
-      {value != null && <span className="ml-auto min-w-0 truncate text-xs font-medium text-foreground/70">{value}</span>}
-    </div>
   );
 }

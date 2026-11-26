@@ -63,8 +63,9 @@ export function Topbar({
 
       <button
         type="button"
+        aria-label="Open search"
         onClick={onOpenCommandPalette}
-        className="flex h-8.5 min-w-0 flex-1 items-center gap-2 rounded-lg bg-muted/70 px-3 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none sm:max-w-xs"
+        className="flex h-8.5 min-w-0 flex-1 items-center gap-2 rounded-lg bg-muted/70 px-3 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none max-[380px]:w-8 max-[380px]:flex-none max-[380px]:justify-center max-[380px]:px-0 sm:max-w-xs"
       >
         <Search className="size-3.5 shrink-0" />
         <span className="hidden truncate sm:inline">Search for anything...</span>
@@ -73,11 +74,11 @@ export function Topbar({
         </kbd>
       </button>
 
-      <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+      <div className="ml-auto flex min-w-0 items-center gap-1.5 sm:gap-2">
         <GlobalCycleNavigator />
 
-        <div className="flex items-center gap-0.5 sm:gap-1">
-          <IconButton aria-label="Notifications" disabled title="Coming soon" className="size-8 opacity-50 disabled:cursor-not-allowed">
+        <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
+          <IconButton aria-label="Notifications" disabled title="Coming soon" className="size-8 opacity-50 disabled:cursor-not-allowed max-[380px]:hidden">
             <Bell className="size-4" />
           </IconButton>
 

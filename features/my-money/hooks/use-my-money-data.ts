@@ -33,6 +33,9 @@ import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { usePeopleLedgerEntries, usePeopleRows } from "@/features/people/hooks/use-people-data";
 import { usePeopleCycleStatements } from "@/features/people/hooks/use-person-cycle-statement";
+import { useAllPersonDeferrals } from "@/features/people/hooks/use-payment-deferrals";
+import { projectDueNow } from "@/lib/engines/person-due-now";
+import { cycleContaining } from "@/lib/engines/person-cycle-statement";
 import { attentionItems, openRemainingByKey, useAllPersonFollowUps } from "@/features/people/hooks/use-person-follow-ups";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import { useGlobalCycle } from "@/features/month-cycle/hooks/use-global-cycle";
@@ -73,6 +76,8 @@ export interface CollectItem {
   name: string;
   /** Gross still owed to me today (People engine). */
   amount: number;
+  /** The part of `amount` postponed to after this cycle (0 when none). `amount` itself is unchanged. */
+  postponed: number;
   /** Already reimbursed against the obligations still open (partial repayments). */
   partlyReceived: number;
   reasons: string[];
@@ -136,6 +141,7 @@ export function useMyMoneyData() {
   const { entriesByPersonId, isLoading: entriesLoading } = usePeopleLedgerEntries();
   const { statementsByPersonId, isLoading: peopleStatementsLoading } = usePeopleCycleStatements(ALL_TIME);
   const { followUpsByPersonId, isLoading: followUpsLoading } = useAllPersonFollowUps();
+  const { deferralsByPerson } = useAllPersonDeferrals();
   const { ctx: mySpendCtx, isLoading: mySpendLoading } = useMySpendContext();
 
   const isLoading =
@@ -218,6 +224,8 @@ export function useMyMoneyData() {
         personId: row.id,
         name: row.name,
         amount,
+        postponed:
+          projectDueNow({ total: amount, rows: open, deferrals: deferralsByPerson[row.id] ?? [], cycle: cycleContaining(now, startDay), startDay, today: now })?.postponed ?? 0,
         partlyReceived: round2(partlyReceived),
         reasons,
         expected: reminder ? { date: reminder.followUp.remindOn, status: reminder.status as "upcoming" | "dueToday" | "overdue" } : null,
@@ -244,7 +252,7 @@ export function useMyMoneyData() {
       advanceHeld: sides.advanceHeld,
       collectedInPeriod: round2(collectedInPeriod),
     };
-  }, [peopleRows, followUpsByPersonId, statementsByPersonId, cycleRange, now]);
+  }, [peopleRows, followUpsByPersonId, statementsByPersonId, cycleRange, now, deferralsByPerson, startDay]);
 
   // ── My spending: My Spend engine, Month Cycle bucketing ──
   const spending = useMemo(() => {

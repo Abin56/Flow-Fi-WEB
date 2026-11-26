@@ -5,7 +5,8 @@ import { useMemo, useRef, useState } from "react";
 import { AccountSelect } from "@/components/finance/account-label";
 import { DateInput } from "@/components/forms/date-input";
 import { useHistoricalReimbursement, type ReimbursementTarget } from "@/features/loans/hooks/use-historical-reimbursement";
-import { planSharePostpone } from "@/features/loans/lib/share-postpone-plan";
+import { planSharePostpone, splitReminderShares } from "@/features/loans/lib/share-postpone-plan";
+import { usePersonFollowUpActions } from "@/features/people/hooks/use-person-follow-ups";
 import { usePaymentDeferralActions, usePeoplePaymentDeferrals } from "@/features/people/hooks/use-payment-deferrals";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import { defaultTargetCycle } from "@/lib/engines/person-payment-deferral";
@@ -64,6 +65,14 @@ export interface HistoricalReconcileState {
 
 const received = (d: ReimbursementDraft | undefined) => d != null && d.choice !== "none";
 
+/** Why this person's receipt for this share wasn't saved (the save's own message), or null when nothing failed. */
+export function reimbursementFailure(state: Pick<HistoricalReconcileState, "failed" | "results">, line: Pick<ReimbursementLine, "personId" | "obligationKey">): string | null {
+  const item = state.failed.find((f) => f.personId === line.personId && f.obligationKey === line.obligationKey);
+  if (!item) return null;
+  const result = state.results?.[item.key];
+  return result?.status === "failed" && result.error ? result.error : "Not saved yet.";
+}
+
 export function useHistoricalReconcile(params: {
   target: ReimbursementTarget | null;
   defaultAccountId: string;
@@ -74,14 +83,13 @@ export function useHistoricalReconcile(params: {
    */
   defaultDateOf?: (line: ReimbursementLine) => string | null;
   /**
-   * Past payment: the lender payment moves no balance, so what people paid back must not credit the account either
-   * (the money went straight on to the lender). Every received row is recorded as "Already in my account".
+   * Account-neutral reconciliation. A past receipt is already in the account. Direct lender coverage is
+   * identified separately by `paidDirectly`.
    */
   noBalanceChange?: boolean;
   /**
-   * "Paid directly": the people paid the lender themselves. Every open share starts as covered in full with no account change
-   * (the answer the choice itself implies) instead of "Leave pending" — the user can still cover part or leave one pending.
-   * An answer the user has given always wins over this starting point.
+   * The people paid the lender themselves — only changes how each receipt is noted. Nobody starts as covered: the
+   * user always names who actually paid, and how much (`direct-lender-settlement.ts`).
    */
   paidDirectly?: boolean;
 }): HistoricalReconcileState {
@@ -95,6 +103,7 @@ export function useHistoricalReconcile(params: {
   const [remindOn, setRemindOn] = useState("");
   const [reminderStatus, setReminderStatus] = useState<"saved" | "failed" | null>(null);
   const deferralActions = usePaymentDeferralActions();
+  const followUpActions = usePersonFollowUpActions();
   const startDay = useMonthCycleStartDay();
   const { deferralsByPerson } = usePeoplePaymentDeferrals([...new Set(lines.map((l) => l.personId))]);
   // One request id per share: a retry after a lost response is the same (idempotent) write.
@@ -108,15 +117,11 @@ export function useHistoricalReconcile(params: {
     return d != null && d !== "" && d <= todayText() ? d : "";
   };
   const lineByKey = new Map(lines.map((l) => [reimbursementLineKey(l), l]));
+  // Every row starts unanswered: who paid is never assumed.
   const blank: ReimbursementDraft = { choice: "none", amount: "" };
   const paidDirectly = params.paidDirectly === true;
-  // The starting answer of a line nobody has touched: covered in full, no account change (direct payment only).
-  const startingDraft = (l: ReimbursementLine | undefined): ReimbursementDraft =>
-    paidDirectly && l != null && l.remaining > PAYMENT_EPSILON ? { choice: "full", amount: "", treatment: "included" } : blank;
-  const merged: Record<string, ReimbursementDraft> = { ...draft };
-  if (paidDirectly) for (const l of lines) { const k = reimbursementLineKey(l); if (merged[k] === undefined) merged[k] = startingDraft(l); }
   const shown: Record<string, ReimbursementDraft> = Object.fromEntries(
-    Object.entries(merged).map(([k, d]) => {
+    Object.entries(draft).map(([k, d]) => {
       const l = lineByKey.get(k);
       const withDate = l != null && received(d) && d.date === undefined ? { ...d, date: defaultDateFor(l) } : d;
       return [k, params.noBalanceChange && received(withDate) ? { ...withDate, treatment: "included" as const } : withDate];
@@ -131,21 +136,21 @@ export function useHistoricalReconcile(params: {
     lines,
     loading: isLoading,
     draft: shown,
-    setLine: (key, patch) => setDraft((prev) => ({ ...prev, [key]: { ...blank, ...(prev[key] ?? startingDraft(lineByKey.get(key))), ...patch } })),
+    setLine: (key, patch) => setDraft((prev) => ({ ...prev, [key]: { ...blank, ...prev[key], ...patch } })),
     setPerson: (personId, choice) =>
       setDraft((prev) => {
         const next = { ...prev };
-        for (const l of lines) if (l.personId === personId && l.remaining > PAYMENT_EPSILON) next[reimbursementLineKey(l)] = { ...blank, ...(prev[reimbursementLineKey(l)] ?? startingDraft(l)), choice, amount: "" };
+        for (const l of lines) if (l.personId === personId && l.remaining > PAYMENT_EPSILON) next[reimbursementLineKey(l)] = { ...blank, ...prev[reimbursementLineKey(l)], choice, amount: "" };
         return next;
       }),
     setAllTreatments: (treatment) =>
-      setDraft((prev) => Object.fromEntries(Object.entries({ ...Object.fromEntries(lines.map((l) => [reimbursementLineKey(l), startingDraft(l)])), ...prev }).map(([k, d]) => [k, received(d) ? { ...d, treatment } : d]))),
+      setDraft((prev) => Object.fromEntries(Object.entries(prev).map(([k, d]) => [k, received(d) ? { ...d, treatment } : d]))),
     setPersonReceived: (personId, patch) =>
       setDraft((prev) => {
         const next = { ...prev };
         for (const l of lines) {
           const key = reimbursementLineKey(l);
-          const base = prev[key] ?? startingDraft(l);
+          const base = prev[key] ?? blank;
           if (l.personId === personId && received(base)) next[key] = { ...base, ...patch };
         }
         return next;
@@ -184,27 +189,42 @@ export function useHistoricalReconcile(params: {
         if (people.length > 0) {
           const today = new Date();
           const dueOf = (key: string) => lines.find((l) => l.obligationKey === key)?.dueDate ?? today;
-          const latest = Math.max(...people.flatMap((p) => p.obligations.map((o) => dueOf(o.key).getTime())));
-          const target = defaultTargetCycle(new Date(latest), today, startDay, null);
-          const requests = planSharePostpone({
-            people,
-            dateOf: dueOf,
-            deferralsByPerson,
-            target,
-            reminder: { kind: "date", remindOn: remindDate },
-            startDay,
-            now: today,
-            requestIdFor: (personId, key) => {
-              const id = `${personId}|${key}`;
-              let rid = reminderIds.current.get(id);
-              if (!rid) reminderIds.current.set(id, (rid = generateId()));
-              return rid;
-            },
-          });
+          // Without everyone's current timing it can't be known what is already postponed — nothing is moved.
+          if (!people.every((p) => deferralsByPerson[p.personId] != null)) {
+            setReminderStatus("failed");
+            return r;
+          }
+          const { toPostpone, remindOnly } = splitReminderShares({ people, dateOf: dueOf, deferralsByPerson, startDay, now: today });
           let ok = true;
-          for (const req of requests) {
+          if (toPostpone.length > 0) {
+            const latest = Math.max(...toPostpone.flatMap((p) => p.obligations.map((o) => dueOf(o.key).getTime())));
+            const requests = planSharePostpone({
+              people: toPostpone,
+              dateOf: dueOf,
+              deferralsByPerson,
+              target: defaultTargetCycle(new Date(latest), today, startDay, null),
+              reminder: { kind: "date", remindOn: remindDate },
+              startDay,
+              now: today,
+              requestIdFor: (personId, key) => {
+                const id = `${personId}|${key}`;
+                let rid = reminderIds.current.get(id);
+                if (!rid) reminderIds.current.set(id, (rid = generateId()));
+                return rid;
+              },
+            });
+            for (const req of requests) {
+              try {
+                await deferralActions.apply(req);
+              } catch {
+                ok = false;
+              }
+            }
+          }
+          // Already expected later: the reminder only (one per share — setting it again re-dates the same one).
+          for (const share of remindOnly) {
             try {
-              await deferralActions.apply(req);
+              await followUpActions.set({ personId: share.personId, obligationKey: share.key, obligationTitle: share.title, kind: "date", remindOn: remindDate });
             } catch {
               ok = false;
             }
@@ -319,7 +339,7 @@ export function HistoricalPeopleReconcile({
       </h3>
       <p className="-mt-1.5 text-[11.5px] text-muted-foreground" data-testid="reconcile-intro">
         {directPaymentLabels
-          ? "For any amount paid directly to the lender, select how much of the share it covers and choose “Record without balance change”. Any uncovered amount stays owed in People."
+          ? "Choose only the people who actually paid the lender, and how much each covered. Any uncovered amount stays owed in People."
           : viaLender
           ? `If ${solo ?? "they"} paid the lender for their share, choose “Received in full” and “Already in my account”. Anything left as “Not received yet” stays owed in People.`
           : `Mark what ${solo ?? "each person"} has paid you. Anything left as “Not received yet” stays owed in People.`}
@@ -400,7 +420,7 @@ export function HistoricalPeopleReconcile({
                   line={l}
                   draft={draft[reimbursementLineKey(l)]}
                   error={errors[reimbursementLineKey(l)]}
-                  failed={state.failed.some((f) => f.personId === l.personId && f.obligationKey === l.obligationKey)}
+                  failed={reimbursementFailure(state, l)}
                   showInstallment={showInstallment}
                   locked={locked}
                   directPaymentLabels={directPaymentLabels}
@@ -432,7 +452,7 @@ export function HistoricalPeopleReconcile({
             <AccountSelect className="h-9 rounded-[6px] border border-border bg-card px-2 text-sm" accounts={accounts as Account[]} value={state.accountId} onChange={state.setAccountId} ariaLabel={directPaymentLabels && !anyAdded ? "Account for the People record" : "Received into account"} />
           </label>
           {/* What the two per-row choices mean — the buttons alone don't say it. */}
-          {noBalanceChange ? <p className="text-[11px] leading-snug text-muted-foreground">Past payment — your account balance doesn&apos;t change. What people paid back went straight to the lender.</p> : !compact && <p className="text-[11px] leading-snug text-muted-foreground">
+          {noBalanceChange && directPaymentLabels ? <p className="text-[11px] leading-snug text-muted-foreground">Paid to the lender — no money moves through your accounts. The account only holds the People record.</p> : noBalanceChange ? <p className="text-[11px] leading-snug text-muted-foreground">Select Received for money the person paid you. The receipt reduces their share and is recorded as already in your account.</p> : !compact && <p className="text-[11px] leading-snug text-muted-foreground">
             {directPaymentLabels ? (
               <><span className="font-semibold text-foreground/80">Add to my account</span> credits the account above when the person paid you directly.</>
             ) : (
@@ -555,7 +575,7 @@ function ShareLineRow({
   line: ReimbursementLine;
   draft: ReimbursementDraft | undefined;
   error: string | undefined;
-  failed: boolean;
+  failed: string | null;
   showInstallment: boolean;
   locked?: boolean;
   directPaymentLabels: boolean;
@@ -634,7 +654,7 @@ function ShareLineRow({
       )}
       {failed && (
         <p role="alert" className="text-right text-[11px] font-semibold text-expense">
-          Not saved yet — retry below.
+          {failed}
         </p>
       )}
     </div>

@@ -57,7 +57,7 @@ const CARD_ENGRAVING = [
 /** The EMV chip — gold die with the contact-pad lines, like a physical card. */
 function EmvChip() {
   return (
-    <svg width="28" height="21" viewBox="0 0 28 21" aria-hidden className="shrink-0 drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)]">
+    <svg width="24" height="18" viewBox="0 0 28 21" aria-hidden className="shrink-0 drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)]">
       <defs>
         <linearGradient id="cc-chip-gold" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stopColor="#fdeeb0" />
@@ -157,9 +157,8 @@ export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHov
   const glare = useMotionTemplate`radial-gradient(260px circle at ${glareX} ${glareY}, rgba(255,255,255,0.22), transparent 60%)`;
 
   return (
-    <StaggerItem>
-      {/* Width-capped so a lone card (or a wide column) never stretches into a wide banner. */}
-      <div className="w-full max-w-[440px] [perspective:1100px]">
+    <StaggerItem className="grid min-w-0 grid-cols-1">
+      <div className="grid grid-cols-1 [perspective:1100px]">
         <motion.div
           role="button"
           tabIndex={0}
@@ -192,10 +191,8 @@ export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHov
             rotateY: reduceMotion ? 0 : rotateY,
           }}
           className={cn(
-            // Real card proportions (ID-1 ≈ 1.586 : 1). The tile itself must NOT be overflow-hidden: that would turn off
-            // aspect-ratio's grow-to-fit, so on a narrow screen the footer got clipped. The art is clipped by its own
-            // inner layer below, which leaves the tile free to grow to fit its content.
-            "group/tile relative flex aspect-[1.62/1] w-full cursor-pointer flex-col justify-between gap-3 rounded-[16px] px-5 pt-4 pb-0 text-white shadow-[0_10px_28px_-12px_rgba(0,0,0,0.55),0_2px_6px_-2px_rgba(0,0,0,0.25),inset_0_1px_0_rgba(255,255,255,0.35),inset_0_0_0_1px_rgba(255,255,255,0.12)] outline-none transition-shadow duration-300 hover:shadow-[0_22px_44px_-14px_rgba(0,0,0,0.6),0_4px_10px_-4px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.45),inset_0_0_0_1px_rgba(255,255,255,0.18)] focus-visible:ring-2 focus-visible:ring-ring",
+            // Clip the artwork on its own layer so the tile can grow when its content wraps.
+            "group/tile relative flex aspect-[1.7/1] w-full cursor-pointer flex-col justify-between gap-2 self-stretch rounded-[14px] px-3 pt-2.5 text-white shadow-[0_10px_28px_-12px_rgba(0,0,0,0.55),0_2px_6px_-2px_rgba(0,0,0,0.25),inset_0_1px_0_rgba(255,255,255,0.35),inset_0_0_0_1px_rgba(255,255,255,0.12)] outline-none transition-shadow duration-300 hover:shadow-[0_22px_44px_-14px_rgba(0,0,0,0.6),0_4px_10px_-4px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.45),inset_0_0_0_1px_rgba(255,255,255,0.18)] focus-visible:ring-2 focus-visible:ring-ring",
             active && "shadow-[0_14px_34px_-14px_rgba(0,0,0,0.5)] ring-2 ring-primary-accent-text ring-offset-2 ring-offset-background",
             partnerHighlighted && !active && "ring-2 ring-white/70 ring-offset-2 ring-offset-background",
           )}
@@ -233,11 +230,11 @@ export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHov
 
           {/* Landscape layout: identity strip on top, then card number / holder on the left and the figures on the right
               (like a physical card), then the usage bar. Spacing is spread evenly over the height. */}
-          <div className="relative flex flex-1 flex-col justify-between gap-3">
+          <div className="relative flex flex-1 flex-col justify-between gap-2">
             {/* Identity: bank logo + name, network + options */}
             <div className="flex items-start justify-between gap-2">
               <div className="flex min-w-0 items-center gap-2">
-                {bankId && <BankLogo bankId={bankId} size={24} className="shadow-[0_2px_6px_rgba(0,0,0,0.35)] ring-2 ring-white/45" />}
+                {bankId && <BankLogo bankId={bankId} size={22} className="shadow-[0_2px_6px_rgba(0,0,0,0.35)] ring-2 ring-white/45" />}
                 <h3 className="truncate font-heading text-[15px] font-semibold tracking-[0.005em] [text-shadow:0_1px_2px_rgba(0,0,0,0.35)]">{card.name}</h3>
               </div>
               <div className="-mt-1 -mr-1.5 flex shrink-0 items-center gap-1.5">
@@ -271,16 +268,16 @@ export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHov
               </div>
             </div>
 
-            <div className="flex items-end justify-between gap-4">
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,44%)] items-end gap-2">
               {/* Left: chip + contactless, number, holder, and the shared-limit / EMI-lock pills */}
-              <div className="flex min-w-0 flex-col gap-1.5">
+              <div className="flex min-w-0 flex-col gap-1">
                 {/* chip + contactless with the embossed number on the same line (keeps the left column short) */}
-                <div className="flex items-center gap-2.5">
-                  <span className="flex shrink-0 items-center gap-1.5" aria-hidden>
+                <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                  <span className="flex shrink-0 items-center gap-1" aria-hidden>
                     <EmvChip />
-                    <Wifi className="size-3.5 rotate-90 text-white/65" strokeWidth={2.25} />
+                    <Wifi className="size-3 rotate-90 text-white/65" strokeWidth={2.25} />
                   </span>
-                  <span className="font-mono text-[13px] font-medium tracking-[0.18em] whitespace-nowrap text-white/90 tabular-nums [text-shadow:0_-1px_0_rgba(0,0,0,0.45),0_1px_0_rgba(255,255,255,0.22)]">
+                  <span className="font-mono text-[12px] font-medium tracking-[0.1em] whitespace-nowrap text-white/90 tabular-nums [text-shadow:0_-1px_0_rgba(0,0,0,0.45),0_1px_0_rgba(255,255,255,0.22)]">
                     •••• {card.last4}
                   </span>
                 </div>
@@ -294,14 +291,14 @@ export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHov
                   </span>
                 )}
                 {(card.lockedEmiPrincipal > 0 || card.sharedLimit) && (
-                  <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                  <div className="flex min-w-0 flex-wrap items-center gap-1">
                     {card.lockedEmiPrincipal > 0 && (
                       <span
                         title={`${formatCurrency(card.lockedEmiPrincipal)} of card-EMI principal is locked on this card`}
-                        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-black/25 px-2 py-0.5 text-[10.5px] leading-4 font-medium whitespace-nowrap text-white/90 tabular-nums ring-1 ring-white/20"
+                        className="inline-flex min-w-0 items-center gap-1 rounded-full bg-black/25 px-1.5 py-0.5 text-[10.5px] leading-tight font-medium text-white/90 tabular-nums ring-1 ring-white/20"
                       >
                         <Lock className="size-3 shrink-0" strokeWidth={2.25} />
-                        {formatCurrency(card.lockedEmiPrincipal)} locked
+                        <span className="wrap-anywhere">{formatCurrency(card.lockedEmiPrincipal)} locked</span>
                       </span>
                     )}
                     {card.sharedLimit && (
@@ -323,15 +320,15 @@ export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHov
               </div>
 
               {/* Right: the figure that matters, with its limit underneath */}
-              <div className="min-w-0 shrink-0 text-right">
+              <div className="min-w-0 text-right wrap-anywhere">
                 <p className="text-[10px] font-semibold tracking-[0.14em] text-white/65 uppercase">Credit used</p>
-                <p className="mt-1 leading-none">
+                <p className="mt-0.5 leading-none">
                   <Money
                     value={formatCurrency(card.usedCredit)}
-                    className="text-[28px] font-bold tracking-tight tabular-nums [text-shadow:0_1px_0_rgba(255,255,255,0.18),0_3px_10px_rgba(0,0,0,0.4)]"
+                    className="text-[23px] font-bold tracking-tight tabular-nums [text-shadow:0_1px_0_rgba(255,255,255,0.18),0_3px_10px_rgba(0,0,0,0.4)]"
                   />
                 </p>
-                <p className="mt-1.5 text-[10.5px] tracking-[0.02em] text-white/65 tabular-nums">
+                <p className="mt-1 text-[10.5px] leading-tight tracking-[0.02em] text-white/65 tabular-nums">
                   <span className="text-[9.5px] font-semibold tracking-[0.14em] uppercase">{card.sharedLimit ? "Shared limit" : "Limit"}</span>{" "}
                   <Money value={formatCurrency(card.creditLimit)} className="text-[12px] font-semibold text-white/90" />
                 </p>
@@ -339,7 +336,7 @@ export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHov
             </div>
 
             <div>
-              <div className="relative h-2 w-full overflow-hidden rounded-full bg-black/30 shadow-[inset_0_1px_3px_rgba(0,0,0,0.45),0_1px_0_rgba(255,255,255,0.12)]">
+              <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/30 shadow-[inset_0_1px_3px_rgba(0,0,0,0.45),0_1px_0_rgba(255,255,255,0.12)]">
                 <motion.div
                   className={cn(
                     "relative h-full rounded-full",
@@ -357,12 +354,12 @@ export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHov
                   <span className="absolute inset-x-1 top-px h-[2px] rounded-full bg-white/60" aria-hidden />
                 </motion.div>
               </div>
-              <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-white/75">
+              <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-white/75">
                 <span className="inline-flex shrink-0 items-center gap-1.5 font-semibold text-white">
                   <span className={cn("size-1.5 shrink-0 rounded-full", highUtilization ? "bg-red-400" : utilization >= 50 ? "bg-amber-300" : "bg-emerald-300")} aria-hidden />
                   {utilization}% used
                 </span>
-                <span className="min-w-0 truncate tabular-nums">
+                <span className="min-w-0 text-right wrap-anywhere tabular-nums">
                   <span className="font-semibold text-white">{formatCurrency(Math.max(0, card.available))}</span> available{card.sharedLimit ? " (shared)" : ""}
                 </span>
               </div>
@@ -371,8 +368,8 @@ export function CreditCardTile({ card, bankId, active, partnerHighlighted, onHov
 
           {/* Bill status — from the canonical Pay Now scope only (never an already-paid bill's date) */}
           {/* Full-bleed glass band along the card's bottom edge (negative margin cancels the tile's side padding) */}
-          <div className="relative -mx-5 flex items-center justify-between gap-2 rounded-b-[16px] border-t border-white/15 bg-black/25 px-5 py-2.5 text-[11px] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
-            <span className="min-w-0 truncate text-white/75 tabular-nums">
+          <div className="relative -mx-3 flex items-center justify-between gap-2 rounded-b-[14px] border-t border-white/15 bg-black/25 px-3 py-1.5 text-[11px] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+            <span className="min-w-0 text-white/75 wrap-anywhere tabular-nums">
               {due.dueDate
                 ? `Bill ${formatCurrency(due.amount)} · ${formatDueDate(due.dueDate)}`
                 : `Next statement ${formatDueDate(statementWindowForDate(card.card, new Date()).periodEnd)}`}

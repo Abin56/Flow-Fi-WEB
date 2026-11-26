@@ -1,16 +1,22 @@
 "use client";
 
-import { Check, ChevronLeft, History, Wallet } from "lucide-react";
+import { ChevronLeft, History, Wallet } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { AccountSelect } from "@/components/finance/account-label";
 import { PaymentSourceSummary, isUnderfunded } from "@/components/finance/payment-source-summary";
 import { DateInput } from "@/components/forms/date-input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { emiCardLabel } from "@/features/emi/components/emi-card";
 import { useEmiActions } from "@/features/emi/hooks/use-emi-data";
+import { cardEmiCase, planCardEmiLegs, type CardEmiCase } from "@/features/emi/lib/emi-card-funding";
+import { planEmiPaymentAllocation } from "@/features/emi/lib/emi-payment-allocation";
 import { Money, formatDueDate } from "@/features/loans/components/loan-emi-ui";
-import { PAY_INPUT, PayCard, PayField, ReceiptLine } from "@/features/loans/components/pay-ui";
+import { loanPayingAccounts } from "@/features/loans/lib/loan-paying-accounts";
+import { PAY_INPUT, PayCard, PayField, PaySegmented } from "@/features/loans/components/pay-ui";
 import { PaymentSheet } from "@/features/loans/components/payment-sheet";
+import { PaymentSavedMotion } from "@/features/loans/components/payment-awareness";
 import { DERIVED_QUERY_PREFIXES, type PaymentTarget } from "@/features/loans/components/record-payment-dialog";
 import { HistoricalPeopleReconcile, useHistoricalReconcile } from "@/features/loans/components/historical-people-reconcile";
 import type { ReimbursementItem } from "@/lib/engines/historical-reimbursement";
@@ -19,6 +25,10 @@ import { useEmiPaymentHistory, useLoanPaymentHistory } from "@/features/loans/ho
 import { useLoanActions } from "@/features/loans/hooks/use-loans-data";
 import { friendlyLoanError } from "@/features/loans/lib/loan-live-state";
 import { useAccounts } from "@/hooks/use-accounts";
+import { useTransactions } from "@/hooks/use-transactions";
+import { cardBillPaymentHref, cardPaymentContext } from "@/features/loans/lib/card-payment-context";
+import { cardFundedLoanCardId } from "@/lib/engines/credit-utilization";
+import type { Transaction } from "@/lib/models/transaction";
 import {
   bulkDraftDate,
   historicalCandidates,
@@ -34,6 +44,7 @@ import {
   type HistoricalCandidate,
 } from "@/lib/engines/bulk-recorded-earlier";
 import { RECORDED_EARLIER_PEOPLE_ACK } from "@/lib/engines/recorded-earlier";
+import { directLenderNote, directSettlementError } from "@/lib/engines/direct-lender-settlement";
 import { formatCurrency, formatCurrencyExact } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { generateId } from "@/lib/utils/id-generator";
@@ -58,18 +69,21 @@ export function BulkHistoricalDialog({
   target,
   open,
   onOpenChange,
-  toolbar,
+  onBack,
   instant = false,
   workspace = false,
   mode,
   onRecordOne,
   preselectId = null,
+  ownCardAccountId = null,
 }: {
+  /** A card-financed Loan's own card account (see `loan-paying-accounts.ts`). */
+  ownCardAccountId?: string | null;
   target: PaymentTarget;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The payment flow's pinned "what are you recording" switch — the way back to Pay now. */
-  toolbar?: React.ReactNode;
+  onBack?: () => void;
   /** This page replaces a sibling page of the same flow: no enter animation. */
   instant?: boolean;
   workspace?: boolean;
@@ -118,8 +132,10 @@ export function BulkHistoricalDialog({
   const [results, setResults] = useState<Record<string, BulkItemResult>>({});
   const [running, setRunning] = useState(false);
   const [success, setSuccess] = useState(false);
+  // Paying out now never offers a card (see `loan-paying-accounts.ts`); a past record and money I receive keep every account.
+  const payingAccounts = fromAccount && !lent ? loanPayingAccounts(accounts, ownCardAccountId) : accounts;
   // Never a silent default: the account that pays (or anchors the record) is the user's explicit choice.
-  const accountId = accounts.some((a) => a.id === pickedAccountId) ? pickedAccountId : "";
+  const accountId = payingAccounts.some((a) => a.id === pickedAccountId) ? pickedAccountId : "";
 
   // Frozen once recording starts: a recorded row stays listed (now paid) while only the rest are retried.
   const picked = candidates.filter((c) => selected.has(c.installment.id) && (c.eligible || results[c.installment.id] != null));
@@ -163,6 +179,8 @@ export function BulkHistoricalDialog({
     defaultAccountId: accountId,
     // Each person's row starts on the date chosen for that installment above ("blank / unknown" stays blank).
     paidDirectly: fromAccount,
+    // Pay several: a payment to the lender never adds money to my account.
+    noBalanceChange: fromAccount,
     defaultDateOf: (l) => (fromAccount ? payDate : bulkDraftDate(dateMode ?? "unknown", l.dueDate, sameDate, draft[l.installmentId]?.date ?? "")),
   });
   const [peopleItems, setPeopleItems] = useState<ReimbursementItem[] | null>(null);
@@ -175,6 +193,35 @@ export function BulkHistoricalDialog({
   // A card-linked EMI posts on its card; every other payment moves the chosen account.
   const needsAccount = loanRow != null || (emiRow != null && emiRow.emi.linkedCreditCardId == null);
   const account = accounts.find((a) => a.id === accountId) ?? null;
+  // Wording only — a card-linked EMI I pay is billed to its card by the existing Case A / B rule (`emi-card-funding.ts`).
+  // These figures describe that rule per installment; nothing here is passed to a write.
+  const { data: allTransactions = [], isLoading: transactionsLoading, isError: transactionsError } = useTransactions();
+  const cardEmi = emiRow != null && emiRow.emi.linkedCreditCardId != null;
+  const cardName = (cardEmi ? emiCardLabel(emiRow) : null) ?? "the linked card";
+  const cardAccountId = emiRow?.linkedCard?.accountId ?? null;
+  const card = cardPaymentContext(
+    emiRow ? { kind: "emi", emi: emiRow.emi, cardAccountId } : loanRow ? { kind: "loan", loan: loanRow.loan } : null,
+    allTransactions as Transaction[],
+  );
+  const loanCardId = loanRow ? cardFundedLoanCardId(loanRow.loan) : null;
+  const checkingLoanPurchase = fromAccount && loanCardId != null && loanRow?.loan.purchaseTransactionId != null && (transactionsLoading || transactionsError);
+  const loanCardBillHref = fromAccount && loanCardId && card.purchaseOnCard ? cardBillPaymentHref(loanCardId) : null;
+  const cardCase: CardEmiCase | null =
+    cardEmi && cardAccountId
+      ? cardEmiCase(emiRow.emi, cardAccountId, (allTransactions as Transaction[]).find((t) => t.id === emiRow.emi.purchaseTransactionId) ?? null)
+      : null;
+  const cardCharge = (() => {
+    if (cardCase == null || !payerSplit) return null;
+    let total = 0;
+    for (const item of payerSplit.mine) {
+      if (isBulkDone(results[item.installment.id])) continue;
+      const allocation = planEmiPaymentAllocation({ installments, amount: item.amount, date: item.date, targetInstallmentId: item.installment.id });
+      if (!allocation.ok) return null;
+      const principal = allocation.portions.reduce((t, p) => t + p.principalPaid, 0);
+      total += planCardEmiLegs({ emiCase: cardCase, mode: "card", applied: item.amount, principal }).cardCharge;
+    }
+    return Math.round(total * 100) / 100;
+  })();
   // Only the installments still to be written count (a retry has already recorded the rest).
   const underfunded = fromAccount && !lent && needsAccount && mineCount > 0 && isUnderfunded(account, mineTotal);
   // The account must be chosen when it moves (pay now) — or, for a Loan paid earlier, anchors the record. An EMI paid earlier posts nothing.
@@ -182,6 +229,27 @@ export function BulkHistoricalDialog({
   // Pay several: the directly-paid installments' People shares are still loading — don't save before they're known.
   const directPeopleChecking = fromAccount && !lent && otherCount > 0 && reconcile.loading;
   const plural = (n: number) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+  // Pay several: whose People shares the "Person paid lender" installments will cover — read off the very items the save uses.
+  const directCovered = fromAccount && reconcile.plan.ok ? reconcile.plan.summary.people.filter((p) => p.receivedNow > 0.005) : [];
+  // Pay several, "Person paid lender" on a shared installment: why it can't be saved yet. Checked BEFORE the first write —
+  // the lender records commit first, so anything People would refuse (or credit wrongly) has to be stopped here.
+  const directBlocker = ((): string | null => {
+    if (!fromAccount || lent || !plan.ok) return null;
+    const open = plan.items.filter(
+      (i) => payerOf(i.installment.id) === "other" && reconcile.lines.some((l) => l.installmentId === i.installment.id && l.remaining > 0.005),
+    );
+    if (open.length === 0) return null;
+    if (!reconcile.plan.ok) return "Finish each person's amount.";
+    const ids = new Set(open.map((i) => i.installment.id));
+    const invalid = directSettlementError({
+      lender: open.map((i) => ({ installmentId: i.installment.id, sequenceNumber: i.installment.sequenceNumber, amount: i.amount })),
+      items: reconcile.plan.items.filter((r) => ids.has(r.installmentId)),
+      lines: reconcile.lines,
+      requirePayer: true,
+    });
+    if (invalid != null) return invalid;
+    return reconcile.blocker == null ? null : "Choose the account for the People record. No money moves through it.";
+  })();
   // Past payments: the date answer is complete (a chosen mode; "one date" needs that date).
   const datesReady = dateMode != null && !(dateMode === "same" && sameDate === "");
   const steps: { id: Step; label: string }[] = fromAccount
@@ -209,11 +277,11 @@ export function BulkHistoricalDialog({
   }
   const setField = (id: string, field: "amount" | "date", value: string) => setDraft((d) => ({ ...d, [id]: { amount: d[id]?.amount ?? "", date: d[id]?.date ?? "", [field]: value } }));
 
-  async function recordOne(item: BulkItem): Promise<{ alreadyRecorded: boolean }> {
+  async function recordOne(item: BulkItem, people: readonly ReimbursementItem[]): Promise<{ alreadyRecorded: boolean }> {
     // From my account only for the installments I pay; one someone else paid directly is the plain recorded-earlier write.
     const mine = fromAccount && payerOf(item.installment.id) === "me";
     const recordedEarlier = mine ? null : { dateKnown: item.dateKnown };
-    const note = fromAccount && !mine ? "Paid directly by someone else — no account of mine moved" : undefined;
+    const note = fromAccount && !mine ? `${directLenderNote(people.filter((p) => p.installmentId === item.installment.id), "someone else")} — no account of mine moved` : undefined;
     const peopleGateAcknowledgement = mine
       ? { acknowledgedUnsettledPeople: true as const, reason: `Bulk payment from my account — people's shares stay owed` }
       : RECORDED_EARLIER_PEOPLE_ACK;
@@ -252,6 +320,7 @@ export function BulkHistoricalDialog({
   }
 
   async function submit() {
+    if (loanCardBillHref || checkingLoanPurchase) return;
     if (step === "select") {
       if (picked.length === 0) return;
       // One past installment: the single past-payment form records it, unchanged, when it can.
@@ -270,12 +339,13 @@ export function BulkHistoricalDialog({
     }
     if (running || !plan.ok || (accountRequired && accountId === "") || underfunded || directPeopleChecking) return;
     if (!fromAccount && !started && reconcile.blocker != null) return;
+    if (!started && directBlocker != null) return;
     // Frozen at the first save: exactly what the user answered.
     const people = peopleItems ?? (reconcile.plan.ok ? reconcile.plan.items : []);
     if (peopleItems == null) setPeopleItems(people);
     setRunning(true);
     try {
-      const final = await runBulkRecordedEarlier(plan.items, recordOne, {
+      const final = await runBulkRecordedEarlier(plan.items, (item) => recordOne(item, people), {
         previous: results,
         onResult: (id, r) => setResults((prev) => ({ ...prev, [id]: r })),
       });
@@ -283,12 +353,14 @@ export function BulkHistoricalDialog({
       let peopleOk = true;
       if (lenderDone && (people.length > 0 || reconcile.reminderWanted)) {
         // First run: every answered item; a retry: only those not yet recorded.
-        const todo = reconcile.failed.length > 0 ? reconcile.failed : people.filter((i) => reconcile.results[i.key]?.status !== "recorded");
+        const unsaved = reconcile.failed.length > 0 ? reconcile.failed : people.filter((i) => reconcile.results[i.key]?.status !== "recorded");
+        // Paid to the lender: an installment whose lender record was refused (and dropped from the retry) must not credit anyone.
+        const todo = fromAccount ? unsaved.filter((i) => isBulkDone(final[i.installmentId])) : unsaved;
         const r = await reconcile.run(todo);
         peopleOk = todo.every((i) => r[i.key]?.status === "recorded");
       }
       await Promise.all(DERIVED_QUERY_PREFIXES.map((key) => queryClient.invalidateQueries({ queryKey: [key], exact: false })));
-      if (lenderDone && peopleOk) {
+      if (lenderDone && peopleOk && picked.every((c) => isBulkDone(final[c.installment.id]))) {
         setSuccess(true);
         window.setTimeout(() => onOpenChange(false), SUCCESS_HOLD_MS);
       }
@@ -325,7 +397,7 @@ export function BulkHistoricalDialog({
                 : fromAccount && !lent && otherCount > 0
                   ? `Record ${plural(picked.length)}${mineCount > 0 && mineTotal != null ? ` · ${displayAmount(mineTotal)} from my account` : " as paid by someone else"}`
                   : `${fromAccount ? (lent ? "Receive" : "Pay") : "Record"} ${plural(picked.length)}${reviewTotal != null ? ` · ${displayAmount(reviewTotal)}` : ""}${reconcileTotal > 0.005 ? ` · ${displayAmount(reconcileTotal)} from people` : ""}`;
-  const confirmDisabled =
+  const confirmDisabled = Boolean(loanCardBillHref || checkingLoanPurchase) || (
     step === "select"
       ? picked.length === 0 || history.isLoading
       : step === "lender"
@@ -334,7 +406,7 @@ export function BulkHistoricalDialog({
           ? reconcile.blocker != null
           : peopleFailed > 0 && failed.length === 0
             ? running
-            : !plan.ok || plan.items.length === 0 || (accountRequired && accountId === "") || underfunded || directPeopleChecking || (!fromAccount && !started && reconcile.blocker != null);
+            : !plan.ok || plan.items.length === 0 || (accountRequired && accountId === "") || underfunded || directPeopleChecking || (!started && (directBlocker != null || (!fromAccount && reconcile.blocker != null))));
 
   // Review: what each person's answers come to — received now (already in the balance vs added) and still owed.
   const peopleReview = (() => {
@@ -359,7 +431,8 @@ export function BulkHistoricalDialog({
           ? "on the dates you entered (blank = not known)"
           : "dates not known — saved on each due date, marked as such";
   const pendingFields: string[] = [];
-  if (workspace && (step === "lender" || step === "review")) {
+  const savedFromMe = fromAccount && picked.some(({ installment }) => payerOf(installment.id) === "me" && results[installment.id]?.status === "recorded");
+  if (step === "lender" || step === "review") {
     if (step === "lender" && !datesReady) pendingFields.push("Payment date");
     if (accountRequired && !accountId) pendingFields.push(fromAccount && mineCount > 0 ? "Paying account" : "Account for records");
     if (underfunded) pendingFields.push("Enough balance");
@@ -369,58 +442,45 @@ export function BulkHistoricalDialog({
     <PaymentSheet
       open={open}
       onOpenChange={onOpenChange}
-      toolbar={toolbar}
+      onBack={onBack}
+      backDisabled={started}
       instant={instant}
       workspace={workspace}
-      eyebrow={fromAccount ? "Pay several" : "Past payments"}
+      compactHeader
+      eyebrow={loanRow ? "Loan" : cardEmi ? "Credit Card EMI" : "EMI"}
       icon={fromAccount ? Wallet : History}
       title={fromAccount ? (lent ? "Receive several repayments" : `Pay several ${unit}s`) : lent ? "Record past repayments" : "Record past payments"}
-      description={workspace ? (loanRow?.loan.name || undefined) : (
-        fromAccount
-          ? lent
-            ? "Money received into an account now."
-            : "Paid to the lender from an account now."
-          : lent
-            ? "Received before FlowFi — your account balance won't change."
-            : "Paid before FlowFi — recording them won't change your account balance."
-      )}
+      description={target.kind === "loan" ? target.row.loan.name || undefined : target.row.emi.name}
+      hero={step === "select" && picked.length > 0 ? <Money exact amount={selectedTotal} className="font-heading text-lg text-current" /> : undefined}
       onConfirm={submit}
-      confirmLabel={confirmLabel}
+      confirmLabel={loanCardBillHref ? "Pay card bill" : confirmLabel}
+      confirmHref={loanCardBillHref ?? undefined}
       confirmDisabled={confirmDisabled}
       pending={pendingFields}
       loading={running}
       success={success}
+      successFeedback={<PaymentSavedMotion
+        kind={savedFromMe ? (lent ? "receive" : cardEmi ? "card" : "pay") : "recorded"}
+        label={!savedFromMe ? (fromAccount ? "Direct payments recorded" : lent ? "Past repayments recorded" : "Past payments recorded") : lent ? `Repayments saved into ${account?.name ?? "the selected account"}` : cardEmi ? `EMIs recorded on ${cardName}` : `Payments saved from ${account?.name ?? "the selected account"}`}
+      />}
       cancelLabel={started ? "Close" : "Cancel"}
     >
-      <div className={cn("mx-auto flex w-full flex-col gap-3", !workspace && "max-w-[58rem] gap-4")}>
-      {workspace ? (
-        <nav aria-label="Steps" className="flex flex-wrap items-center gap-2">
-          <span className="sr-only" aria-live="polite" data-testid="bulk-step">Step {stepIndex + 1} of {steps.length} · {steps[stepIndex]?.label}</span>
-          <ol className="flex min-w-0 flex-1 flex-wrap gap-1.5">
-            {steps.map((s, i) => (
-              <li key={s.id} aria-current={i === stepIndex ? "step" : undefined} className={cn("flex items-center gap-1.5 rounded-[7px] border px-2 py-1 text-xs font-medium", i === stepIndex ? "border-primary-accent-text/30 bg-primary/15 text-foreground" : "border-transparent text-muted-foreground")}>
-                <span aria-hidden className={cn("grid size-5 place-items-center rounded-full text-[11px] tabular-nums", i <= stepIndex ? "bg-primary text-primary-foreground" : "bg-secondary")}>
-                  {i < stepIndex ? <Check className="size-3" /> : i + 1}
-                </span>
-                {s.label}
-              </li>
-            ))}
-          </ol>
-          {previousStep && <PreviousStep onClick={() => setStep(previousStep)} label="Previous step" />}
-        </nav>
-      ) : <nav aria-label="Steps" className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-          <span className="font-semibold text-foreground" data-testid="bulk-step">
-            Step {stepIndex + 1} of {steps.length} · {steps[stepIndex]?.label}
-          </span>
-          {previousStep && <PreviousStep onClick={() => setStep(previousStep)} label="Back" />}
-        </div>
-        <div aria-hidden className="flex gap-1">
-          {steps.map((s, i) => (
-            <span key={s.id} className={cn("h-1 flex-1 rounded-full transition-colors duration-200", i <= stepIndex ? "bg-primary-accent-text" : "bg-border")} />
-          ))}
-        </div>
-      </nav>}
+      {loanCardBillHref || checkingLoanPurchase ? (
+        <p role="note" className="text-xs text-foreground">
+          {loanCardBillHref
+            ? "The purchase is already in the card balance. Pay the issuer from the card bill workflow, then use Past payment for installments you have already paid."
+            : transactionsError
+              ? <>The linked purchase could not be checked. <Link href="/credit-cards" className="font-semibold underline underline-offset-2">Open Credit Cards</Link></>
+              : "Checking the linked purchase…"}
+        </p>
+      ) : <div className="mx-auto flex w-full max-w-[58rem] flex-col gap-2">
+      <nav aria-label="Steps" className="flex min-h-7 flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
+        <span className="font-semibold text-foreground" aria-live="polite" data-testid="bulk-step">
+          {steps[stepIndex]?.label} <span className="font-normal text-muted-foreground">· Step {stepIndex + 1} of {steps.length}</span>
+        </span>
+        {step === "select" && picked.length > 0 && <span className="text-muted-foreground">{plural(picked.length)} selected</span>}
+        {previousStep && <PreviousStep onClick={() => setStep(previousStep)} label="Previous step" />}
+      </nav>
 
       {step === "select" && (
         <SelectStep
@@ -433,29 +493,17 @@ export function BulkHistoricalDialog({
           eligibleCount={eligible.length}
           lent={lent}
           source={source}
+          cardName={cardEmi ? cardName : null}
           workspace={workspace}
-          selection={workspace ? (
-            <TotalCard label="Selected amount" amount={selectedTotal} caption={plural(picked.length)}>
-              {!fromAccount ? <ReceiptLine label="Lender account debit"><Money exact amount={0} /></ReceiptLine> : (
-                <p className="text-muted-foreground">Review each installment’s payer and the account total next.</p>
-              )}
-            </TotalCard>
-          ) : undefined}
         />
       )}
 
       {/* Past payments, step 2 — when they were paid (left) and how much each (right); each amount defaults to what it still owes. */}
       {step === "lender" && !fromAccount && (
-        <section aria-label="When and how much" className={cn("grid items-start gap-3", workspace ? "@2xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]" : "@3xl:grid-cols-[17.5rem_minmax(0,1fr)]")}>
-          <div className={cn("flex flex-col gap-3", workspace && "rounded-[10px] border border-border bg-card p-3 shadow-e1 @2xl:col-start-2 @2xl:row-start-1")}>
-            <div role="radiogroup" aria-label={lent ? "When were they received?" : "When were they paid?"} className="flex flex-col gap-2">
-              <span className="text-xs font-semibold text-foreground">{workspace ? "Payment dates" : lent ? "When were they received?" : "When were they paid?"}</span>
-              <div className={cn("grid grid-cols-2 gap-2", workspace ? "@2xl:grid-cols-1 @4xl:grid-cols-2" : "@3xl:grid-cols-1")}>
-                {DATE_MODES.map((m) => (
-                  <ModeCard key={m.value} active={dateMode === m.value} label={m.label} hint={workspace ? (m.value === "unknown" ? "Saved as date unknown" : undefined) : m.hint} onSelect={() => setDateMode(m.value)} />
-                ))}
-              </div>
-            </div>
+        <section aria-label="When and how much" className="grid min-w-0 items-start gap-2 @2xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
+          <PayCard compact title="Payment dates">
+            <PaySegmented className="grid-flow-row grid-cols-2" ariaLabel={lent ? "When were they received?" : "When were they paid?"} options={DATE_MODES} value={dateMode} onChange={setDateMode} />
+            <p className="text-[11px] leading-snug text-muted-foreground">{DATE_MODES.find((m) => m.value === dateMode)?.hint}</p>
             {dateMode === "same" && (
               <PayField label={lent ? "Date received" : "Date paid"}>
                 <DateInput className={PAY_INPUT} aria-label="One date for all" value={sameDate} max={todayInput()} calendar={sharedDateCalendar} onChange={(e) => setSameDate(e.target.value)} />
@@ -466,18 +514,17 @@ export function BulkHistoricalDialog({
                 <AccountSelect className={PAY_INPUT} accounts={accounts} value={accountId} onChange={setAccountId} ariaLabel="Account (record only)" />
               </PayField>
             )}
-          </div>
-          <div className={cn("flex min-w-0 flex-col gap-3", workspace && "@container @2xl:col-start-1 @2xl:row-start-1")}>
-            {!workspace && <p className="text-xs text-muted-foreground">Each amount is what that installment still owes — change it if a different sum was paid.</p>}
-            <ul className="flex flex-col divide-y divide-border overflow-hidden rounded-[10px] border border-border bg-card shadow-e1" aria-label="Installments">
-              {workspace && <li className="flex justify-between gap-2 bg-secondary/45 px-3 py-2 text-xs font-semibold text-foreground"><span>Installments</span><span>Amount paid{dateMode === "each" ? " · Date" : ""}</span></li>}
+          </PayCard>
+          <div className="@container flex min-w-0 flex-col gap-2">
+            <ul className="flex flex-col divide-y divide-border rounded-lg border border-border bg-card" aria-label="Installments">
+              <li className="flex justify-between gap-2 rounded-t-lg bg-secondary/35 px-3 py-1.5 text-xs font-semibold text-foreground"><span>Installments</span><span>Amount paid{dateMode === "each" ? " · Date" : ""}</span></li>
               {picked.map((c) => {
                 const id = c.installment.id;
                 const error = !plan.ok ? plan.errors[id] : null;
                 return (
-                  <li key={id} className="flex flex-col gap-1 px-3 py-2.5" data-testid={`review-${id}`}>
-                    <div className={cn("grid items-center gap-2", dateMode === "each" ? (workspace ? "grid-cols-2 @sm:grid-cols-[minmax(0,1fr)_6rem_8rem]" : "grid-cols-[minmax(0,1fr)_7rem_9rem]") : "grid-cols-[minmax(0,1fr)_8rem]")}>
-                      <span className={cn("min-w-0 truncate text-sm font-semibold text-foreground", workspace && dateMode === "each" && "col-span-2 @sm:col-span-1")}>
+                  <li key={id} className="flex flex-col gap-1 px-3 py-1.5" data-testid={`review-${id}`}>
+                    <div className={cn("grid min-w-0 items-center gap-2", dateMode === "each" ? "grid-cols-1 @[16rem]:grid-cols-2 @sm:grid-cols-[minmax(0,1fr)_6rem_8rem]" : "grid-cols-[minmax(0,1fr)_minmax(5rem,8rem)]")}>
+                      <span className={cn("min-w-0 text-xs font-semibold text-foreground", dateMode === "each" && "@[16rem]:col-span-2 @sm:col-span-1")}>
                         #{c.installment.sequenceNumber} <span className="font-normal text-muted-foreground">· due {formatDueDate(c.installment.dueDate)}</span>
                       </span>
                       <input
@@ -505,9 +552,9 @@ export function BulkHistoricalDialog({
                 );
               })}
             </ul>
-            <div className="flex items-baseline justify-between gap-3 rounded-[10px] bg-primary/15 px-3 py-2">
-              <span className="text-sm font-medium text-foreground/80">{workspace ? "Total to record" : plural(picked.length)}</span>
-              {reviewTotal != null ? <Money exact amount={reviewTotal} className="text-xl text-foreground" /> : <span className="text-xl font-semibold text-muted-foreground">—</span>}
+            <div className="flex flex-wrap items-baseline justify-between gap-2 px-1 text-xs">
+              <span className="font-medium text-muted-foreground">Total to record</span>
+              {reviewTotal != null ? <Money exact amount={reviewTotal} className="text-base text-foreground" /> : <span className="font-semibold text-muted-foreground">—</span>}
             </div>
           </div>
         </section>
@@ -519,16 +566,16 @@ export function BulkHistoricalDialog({
           {!workspace && <p className="text-xs text-muted-foreground">
             Mark what each person has paid you back. The rest stays owed in People.
           </p>}
-          <PayCard title={workspace ? "People’s shares" : undefined} tone={workspace ? "people" : "plain"} className={workspace ? undefined : "border-0 bg-transparent shadow-none [&>div]:p-0"}>
-            <HistoricalPeopleReconcile compact={workspace} state={reconcile} accounts={accounts} showInstallment locked={false} />
+          <PayCard compact title={workspace ? "People’s shares" : undefined} tone={workspace ? "people" : "plain"} className={workspace ? undefined : "border-0 bg-transparent shadow-none [&>div]:p-0"}>
+            <HistoricalPeopleReconcile compact state={reconcile} accounts={accounts} showInstallment locked={false} />
           </PayCard>
         </section>
       )}
 
       {/* Review — past payments: the installments on the left, what will be saved on the right. */}
       {step === "review" && !fromAccount && (
-        <section aria-label="Review" className={cn("grid items-start gap-3", workspace ? "@2xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]" : "@3xl:grid-cols-[minmax(0,1fr)_19rem]")}>
-          <div className="flex flex-col gap-3">
+        <section aria-label="Review" className="grid items-start gap-2 @2xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
+          <div className="flex flex-col gap-2">
             <ul className="flex flex-col divide-y divide-border overflow-hidden rounded-[10px] border border-border bg-card text-xs shadow-e1" aria-label="Installments to record">
               {workspace && <li className="bg-secondary/45 px-3 py-2 text-xs font-semibold text-foreground">Installments to record</li>}
               {picked.map((c) => {
@@ -536,7 +583,7 @@ export function BulkHistoricalDialog({
                 const item = plan.ok ? plan.items.find((i) => i.installment.id === id) : null;
                 const result = results[id];
                 return (
-                  <li key={id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5" data-testid={`review-${id}`}>
+                  <li key={id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5" data-testid={`review-${id}`}>
                     <span className="min-w-0 truncate text-sm text-foreground">
                       <span className="font-semibold">#{c.installment.sequenceNumber}</span>{" "}
                       <span className="text-muted-foreground">
@@ -598,8 +645,8 @@ export function BulkHistoricalDialog({
 
       {/* Review — several paid now: the installments (amounts editable) on the left; what you pay, from where and when on the right. */}
       {step === "review" && fromAccount && (
-        <section aria-label="Review" className={cn("grid items-start gap-3", workspace ? "@2xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]" : "@3xl:grid-cols-[minmax(0,1fr)_19rem]")}>
-          <div className="flex flex-col gap-3">
+        <section aria-label="Review" className="grid items-start gap-2 @2xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
+          <div className="@container flex min-w-0 flex-col gap-2">
             {!workspace && <p className="text-xs text-muted-foreground">Lower an amount to pay only part of that installment.</p>}
             <ul className="flex flex-col divide-y divide-border overflow-hidden rounded-[10px] border border-border bg-card shadow-e1" aria-label="Installments to pay">
               {workspace && <li className="flex justify-between gap-2 bg-secondary/45 px-3 py-2 text-xs font-semibold text-foreground"><span>Installment and payer</span><span>Amount</span></li>}
@@ -609,9 +656,9 @@ export function BulkHistoricalDialog({
                 const locked = started && (running || isBulkDone(result));
                 const error = !plan.ok ? plan.errors[id] : null;
                 return (
-                  <li key={id} className="flex flex-col gap-1.5 px-3 py-2.5" data-testid={`review-${id}`}>
-                    <div className="grid grid-cols-[minmax(0,1fr)_8rem] items-center gap-2">
-                      <span className="min-w-0 truncate text-sm font-semibold text-foreground">
+                  <li key={id} className="flex flex-col gap-1 px-3 py-1.5" data-testid={`review-${id}`}>
+                    <div className={cn("grid grid-cols-[minmax(0,1fr)_minmax(5rem,7rem)] items-center gap-1.5", !lent && "@[24rem]:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_6rem]")}>
+                      <span className="min-w-0 text-xs font-semibold text-foreground">
                         #{c.installment.sequenceNumber} <span className="font-normal text-muted-foreground">· due {formatDueDate(c.installment.dueDate)}</span>
                         <span className="ml-2 align-middle">
                           <ResultBadge result={result} />
@@ -620,41 +667,46 @@ export function BulkHistoricalDialog({
                       <input
                         type="number"
                         inputMode="decimal"
-                        className={PAY_INPUT}
+                        className={cn(PAY_INPUT, !lent && "@[24rem]:col-start-3 @[24rem]:row-start-1")}
                         aria-label={`Amount for #${c.installment.sequenceNumber}`}
                         placeholder={String(c.remaining)}
                         value={draft[id]?.amount ?? ""}
                         disabled={locked}
                         onChange={(e) => setField(id, "amount", e.target.value)}
                       />
-                    </div>
                     {!lent && (
-                      <div role="radiogroup" aria-label={`Who paid #${c.installment.sequenceNumber}`} className="flex w-fit gap-0.5 rounded-[8px] border border-border bg-secondary p-0.5">
-                        {([["me", "I pay"], ["other", "Paid by someone else"]] as const).map(([value, label]) => (
-                          <button
-                            key={value}
-                            type="button"
-                            role="radio"
-                            aria-label={workspace ? label : undefined}
-                            aria-checked={payerOf(id) === value}
-                            disabled={started}
-                            onClick={() => setPaidBy((p) => ({ ...p, [id]: value }))}
-                            className={cn(
-                              "h-6 rounded-[6px] px-2 text-[11px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60",
-                              payerOf(id) === value ? "bg-card text-foreground shadow-e1 ring-1 ring-primary-accent-text" : "text-muted-foreground hover:text-foreground",
-                            )}
-                          >
-                            {workspace ? (value === "me" ? "I pay" : "Paid directly") : label}
-                          </button>
-                        ))}
-                      </div>
+                      <PaySegmented<"me" | "other">
+                        className="col-span-full max-w-xs @[24rem]:col-span-1 @[24rem]:col-start-2 @[24rem]:row-start-1 [&>button]:min-h-7"
+                        ariaLabel={`Who paid #${c.installment.sequenceNumber}`}
+                        value={payerOf(id)}
+                        disabled={started}
+                        options={[
+                          { value: "me", label: "I pay" },
+                          ...(card.purchaseOnCard ? [] : [{ value: "other" as const, label: card.onCard ? "Person paid card issuer" : "Person paid lender" }]),
+                        ]}
+                        onChange={(value) => setPaidBy((p) => ({ ...p, [id]: value }))}
+                      />
                     )}
+                    </div>
                     {error && <span className="text-xs text-expense">{error}</span>}
                     {result?.status === "failed" && <span className="text-xs text-expense">{result.error}</span>}
                   </li>
                 );
               })}
             </ul>
+            {!lent && fromAccount && directIds !== "" && reconcile.lines.some((l) => l.remaining > 0.005) && (
+              <section aria-label="Who paid the lender" className="flex flex-col gap-2 rounded-[10px] border border-border bg-card p-3 shadow-e1">
+                <h3 className="text-sm font-semibold text-foreground">Who paid the lender?</h3>
+                <p className="text-[11px] text-muted-foreground">Choose only the people who actually paid, and how much each covered. Everyone else still owes their share.</p>
+                <HistoricalPeopleReconcile compact directPaymentLabels noBalanceChange showInstallment state={reconcile} accounts={accounts} locked={started} />
+              </section>
+            )}
+            {peopleFailed > 0 && (
+              <p role="alert" className="text-xs font-semibold text-expense" data-testid="bulk-people-failed">
+                Only partly saved: the installments are recorded, but {peopleFailed} People update{peopleFailed === 1 ? "" : "s"} failed. Retry below. If you close this, don&apos;t record the installments again —{" "}
+                {fromAccount ? "open each installment on the schedule to finish its People record." : "add the missing amounts in People."}
+              </p>
+            )}
             {started && (
               <p className="text-xs font-semibold text-foreground" role="status" data-testid="bulk-progress">
                 {doneCount} recorded · {failed.length} failed · {Math.max(0, picked.length - doneCount - failed.length)} pending
@@ -662,12 +714,12 @@ export function BulkHistoricalDialog({
               </p>
             )}
           </div>
-          <TotalCard label={lent ? "You receive" : workspace ? "From your account" : "You pay"} amount={lent ? reviewTotal : mineTotal} caption={`${plural(picked.length)}${otherCount > 0 ? ` · ${otherCount} paid directly` : ""}`}>
+          <TotalCard label={lent ? "You receive" : workspace && !cardEmi ? "From your account" : "You pay"} amount={lent ? reviewTotal : mineTotal} caption={`${plural(picked.length)}${otherCount > 0 ? ` · ${otherCount} paid directly` : ""}`}>
             {needsAccount && accountRequired && (
               <PayField label={lent ? "Received into" : mineCount === 0 ? (workspace ? "Account for records" : "Record under account · no balance change") : "Paid from"}>
                 <AccountSelect
                   className={PAY_INPUT}
-                  accounts={accounts}
+                  accounts={payingAccounts}
                   value={accountId}
                   onChange={(id) => !started && setAccountId(id)}
                   placeholder={lent || (workspace && mineCount === 0) ? "Choose account" : "Choose paying account"}
@@ -684,9 +736,9 @@ export function BulkHistoricalDialog({
                 </span>
               )}
             </PayField>
-            <div className="flex flex-col gap-1.5 border-t border-border pt-3" data-testid="bulk-balance-preview">
+            <div className="flex flex-col gap-1.5 border-t border-border pt-2" data-testid="bulk-balance-preview">
               {!lent && mineCount === 0 && otherCount > 0 ? (
-                <span className="text-muted-foreground">{workspace ? "Direct payments are recorded for reference." : "No money leaves your accounts — these are recorded as paid by someone else."}</span>
+                <span className="text-muted-foreground">Paid directly to lender · No movement in your accounts or cards.</span>
               ) : needsAccount && account && reviewTotal != null ? (
                 lent ? (
                   <span className="text-muted-foreground">
@@ -696,16 +748,42 @@ export function BulkHistoricalDialog({
                   <PaymentSourceSummary account={account} amount={mineTotal} paymentLabel={`${plural(picked.length)} payment`} className="border-0 bg-transparent p-0" />
                 )
               ) : (
-                !needsAccount && <span className="text-muted-foreground">Charged to the linked card.</span>
+                !needsAccount && (
+                  <span className="text-muted-foreground" data-testid="bulk-card-effect">
+                    {cardCase == null || cardCharge == null
+                      ? `Paid through ${cardName} — no bank account is debited.`
+                      : cardCase === "B"
+                        ? `Charged to ${cardName} · ${formatCurrencyExact(cardCharge)}. No bank account is debited.`
+                        : cardCharge > 0.005
+                          ? `Charged to ${cardName} · ${formatCurrencyExact(cardCharge)} interest & fees only — the principal is already in its balance. No bank account is debited.`
+                          : `Nothing new is charged to ${cardName} — the principal is already in its balance. No bank account is debited.`}
+                  </span>
+                )
               )}
+              {!started && directBlocker != null && (
+                <p role="alert" className="font-semibold text-expense" data-testid="bulk-direct-blocker">
+                  {directBlocker}
+                </p>
+              )}
+              {directCovered.length > 0 && (
+                <div className="flex flex-col gap-0.5 text-foreground/85" data-testid="bulk-direct-people">
+                  <span className="font-semibold text-foreground">Will be settled in People (no money through your accounts):</span>
+                  {directCovered.map((p) => (
+                    <span key={p.personId}>
+                      {p.personName} · {reconcile.plan.ok ? reconcile.plan.items.filter((r) => r.personId === p.personId).map((r) => `#${installments.find((i) => i.id === r.installmentId)?.sequenceNumber}`).join(", ") : ""} · {formatCurrencyExact(p.receivedNow)}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {fromAccount && !lent && otherCount > 0 && !reconcile.loading && !reconcile.lines.some((l) => l.remaining > 0.005) && <span className="text-muted-foreground">No open People share on the directly-paid installments — nothing changes in People.</span>}
               {!workspace && <span className="text-muted-foreground">
-                {lent ? "Income is posted once per installment." : "One payment is posted per installment."} {!lent && (otherCount > 0 ? "Paying the lender doesn't mark anyone's share as received, except for installments they paid directly — those are covered in People with no money through your accounts." : "Paying the lender doesn't mark anyone's share as received — People stays as it is.")}
+                {lent ? "Income is posted once per installment." : "Each installment is recorded as its own payment."} {!lent && (otherCount > 0 ? "Paying the lender doesn't mark anyone's share as received, only the people you name as having paid it are settled, with no money through your accounts." : "Paying the lender doesn't mark anyone's share as received — People stays as it is.")}
               </span>}
             </div>
           </TotalCard>
         </section>
       )}
-      </div>
+      </div>}
     </PaymentSheet>
   );
 }
@@ -717,30 +795,6 @@ const DATE_MODES: { value: BulkDateMode; label: string; hint: string }[] = [
   { value: "unknown", label: "I don't know the dates", hint: "Saved on each due date and marked “date not known”" },
 ];
 
-/** A compact option card: radio dot, title and one short hint. Selected = lime tint + strong edge. */
-function ModeCard({ active, label, hint, onSelect }: { active: boolean; label: string; hint?: string; onSelect: () => void }) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={active}
-      onClick={onSelect}
-      className={cn(
-        "flex w-full items-start gap-2.5 rounded-[10px] border px-3 py-2 text-left outline-none transition-[background-color,border-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-ring",
-        active ? "border-primary-accent-text bg-primary/15 shadow-e1" : "border-border bg-card hover:border-border-strong hover:bg-secondary/60",
-      )}
-    >
-      <span aria-hidden className={cn("mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border-[1.5px]", active ? "border-foreground" : "border-border-strong")}>
-        {active && <span className="size-2 rounded-full bg-foreground" />}
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="text-[13px] font-semibold text-foreground">{label}</span>
-        {hint && <span className="text-[11px] leading-snug text-muted-foreground">{hint}</span>}
-      </span>
-    </button>
-  );
-}
-
 function PreviousStep({ onClick, label }: { onClick: () => void; label: string }) {
   return (
     <button type="button" onClick={onClick} className="inline-flex h-7 items-center gap-0.5 rounded-[6px] border border-border bg-card pr-2.5 pl-1.5 text-xs font-semibold text-foreground outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring">
@@ -750,16 +804,16 @@ function PreviousStep({ onClick, label }: { onClick: () => void; label: string }
   );
 }
 
-/** The review's summary: the figure that matters on a lime band, then the details beneath. */
+/** The review's total and its supporting details. */
 function TotalCard({ label, amount, caption, children }: { label: string; amount: number | null; caption?: string; children: React.ReactNode }) {
   return (
-    <aside className="flex min-w-0 flex-col overflow-hidden rounded-[10px] border border-border bg-card shadow-e1">
-      <div className="flex flex-col gap-0.5 border-b border-primary-accent-text/15 bg-primary/15 px-3 py-2.5">
+    <aside className="flex min-w-0 flex-col rounded-lg border border-border bg-card">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 rounded-t-lg border-b border-border bg-secondary/35 px-3 py-1.5">
         <span className="text-[11px] font-semibold tracking-[0.08em] text-foreground/70 uppercase">{label}</span>
-        {amount != null ? <Money exact amount={amount} className="font-heading text-[24px] leading-tight text-foreground" /> : <span className="text-[24px] leading-tight font-semibold text-muted-foreground">—</span>}
-        {caption && <span className="text-xs text-foreground/70">{caption}</span>}
+        {amount != null ? <Money exact amount={amount} className="text-lg leading-tight text-foreground" /> : <span className="text-lg leading-tight font-semibold text-muted-foreground">—</span>}
+        {caption && <span className="basis-full text-xs text-foreground/70">{caption}</span>}
       </div>
-      <div className="flex flex-col gap-2.5 p-3 text-xs">{children}</div>
+      <div className="flex flex-col gap-2 px-3 py-2 text-xs">{children}</div>
     </aside>
   );
 }
@@ -791,8 +845,8 @@ function SelectStep({
   eligibleCount,
   lent,
   source,
+  cardName,
   workspace,
-  selection,
 }: {
   candidates: HistoricalCandidate[];
   loading: boolean;
@@ -803,22 +857,24 @@ function SelectStep({
   eligibleCount: number;
   lent: boolean;
   source: PaySource | null;
+  /** Card-linked EMI: the card it is paid through (no account is debited). */
+  cardName: string | null;
   workspace: boolean;
-  selection?: React.ReactNode;
 }) {
   return (
-    <div className={cn("grid items-start gap-3", workspace && "@2xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]")}>
     <section aria-label={source === "account" ? "Installments to pay now" : "Past installments"} className={cn("flex min-w-0 flex-col gap-2", workspace && "gap-0 overflow-hidden rounded-[10px] border border-border bg-card shadow-e1")}>
       {!workspace && <p className="rounded-[10px] border border-primary-accent-text/25 bg-primary/10 px-3 py-2 text-xs leading-snug text-foreground/85" data-testid="bulk-source-note">
         {source === "account"
           ? lent
             ? "Money received into an account now — its balance goes up once per installment."
-            : "Paid to the lender from an account now — its balance goes down once per installment."
+            : cardName
+              ? `Paid to the lender now through ${cardName} — no bank account is debited. The next step shows what the card is charged.`
+              : "Paid to the lender from an account now — its balance goes down once per installment."
           : lent
             ? "Received before FlowFi — your balance already includes it, so no account changes."
             : "Paid before FlowFi — your balance already reflects it, so no account changes. People shares are never marked received unless you say so."}
       </p>}
-      <div className={cn("flex flex-wrap items-center gap-2", workspace ? "justify-between border-b border-border bg-secondary/45 px-3 py-2.5" : "justify-end")}>
+      <div className={cn("flex flex-wrap items-center gap-2", workspace ? "justify-between border-b border-border bg-secondary/45 px-3 py-1.5" : "justify-end")}>
         {workspace && <h3 className="text-xs font-semibold text-foreground">Installments</h3>}
         <span className="flex gap-3">
           <button type="button" onClick={onSelectAll} disabled={eligibleCount === 0} className="text-xs font-semibold text-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">
@@ -836,17 +892,16 @@ function SelectStep({
       ) : candidates.length === 0 ? (
         <p className={cn("text-sm text-muted-foreground", workspace && "p-3")}>No installments were due before today.</p>
       ) : (
-        // A compact grid of selectable cards (same look as the EMI schedule); already-paid ones are shown but locked.
-        <ul className={workspace ? "divide-y divide-border" : "grid grid-cols-2 gap-2 p-0.5 @[26rem]:grid-cols-3 @[40rem]:grid-cols-4 @[56rem]:grid-cols-5"} aria-label="Installments">
+        <ul className={workspace ? "grid @2xl:grid-cols-2" : "grid grid-cols-2 gap-2 p-0.5 @[26rem]:grid-cols-3 @[40rem]:grid-cols-4 @[56rem]:grid-cols-5"} aria-label="Installments">
           {candidates.map((c) => {
             const id = c.installment.id;
             const checked = selected.has(id);
             return (
-              <li key={id} className="min-w-0">
+              <li key={id} className={cn("min-w-0", workspace && "border-b border-border @2xl:odd:border-r")}>
                 <label
                   className={cn(
                     "flex h-full min-w-0 gap-0.5 transition-[background-color,border-color] duration-150",
-                    workspace ? "flex-row flex-wrap items-center gap-x-2.5 px-3 py-2" : "flex-col rounded-[8px] border px-2.5 py-1.5",
+                    workspace ? "min-h-9 flex-row flex-wrap items-center gap-x-2 px-2.5 py-1" : "flex-col rounded-[8px] border px-2.5 py-1.5",
                     checked ? "border-primary-accent-text bg-primary/12" : "border-border bg-card",
                     c.eligible ? "cursor-pointer hover:border-border-strong" : "cursor-not-allowed bg-secondary/60 opacity-60",
                     workspace && c.eligible && (checked ? "hover:bg-primary/20" : "hover:bg-secondary/50"),
@@ -876,7 +931,5 @@ function SelectStep({
       )}
       {!lent && !workspace && <p className="text-[11px] text-muted-foreground">Only installments due up to today are listed. Paid ones can&apos;t be picked again.</p>}
     </section>
-    {selection}
-    </div>
   );
 }

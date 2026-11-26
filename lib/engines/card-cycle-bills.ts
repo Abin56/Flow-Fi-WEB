@@ -35,6 +35,8 @@ export interface CardBill {
   dueDate: Date;
   totalAmount: number;
   amountPaid: number;
+  /** Part of amountPaid supplied by live incoming transfers, after stored payments and net statement credits. */
+  paidByTransfers?: number;
   remaining: number;
   /** The statement period has ended (the bill is generated) — false for the cycle still in progress. */
   isClosed: boolean;
@@ -112,12 +114,14 @@ export function cardBillsForCard(
   }
   bills.push(...derived.values());
 
+  const beforeTransfers = settleCardPayments(bills, 0, 0).statements;
   const settled = settleCardPayments(bills, 0, cardPaymentTotal(cardTransactions)).statements;
   return settled
-    .map((b) => ({
+    .map((b, index) => ({
       ...b,
       totalAmount: round2(b.totalAmount),
       amountPaid: round2(b.amountPaid),
+      paidByTransfers: round2(b.amountPaid - beforeTransfers[index].amountPaid),
       remaining: round2(Math.min(Math.max(b.totalAmount - b.amountPaid, 0), Math.max(b.totalAmount, 0))),
     }))
     .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());

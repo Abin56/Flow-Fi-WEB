@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, Building2, CreditCard, History, Lock, LockOpen, Pencil, Trash2, UserRound, Wallet } from "lucide-react";
+import { ArrowUpRight, Building2, CreditCard, History, Layers, Lock, LockOpen, Pencil, Trash2, UserRound, Wallet } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { AgreementPeopleTab } from "@/features/loans/components/agreement-people-tab";
@@ -18,9 +18,11 @@ import { InstallmentList, PaymentHistoryList } from "@/features/loans/components
 import type { RecordedPaymentAction } from "@/features/loans/lib/recorded-payments";
 import type { EmiRow } from "@/features/emi/hooks/use-emi-data";
 import { EMI_TYPE_LABEL, emiBadges, emiCardLabel } from "@/features/emi/components/emi-card";
-import { hasPastDue } from "@/features/loans/lib/record-payment";
+import { hasPastDue, pastDueCount } from "@/features/loans/lib/record-payment";
+import { MorePaymentActions } from "@/features/loans/components/more-payment-actions";
 import { useInstallmentPeopleStatus } from "@/features/loans/hooks/use-installment-people-status";
-import { DetailSectionTitle, FactGrid, LinkedList, LinkedRow, daysUntil } from "@/features/loans/components/loan-emi-ui";
+import { agreementOwnerLabel, DetailSectionTitle, FactGrid, LinkedList, LinkedRow, daysUntil } from "@/features/loans/components/loan-emi-ui";
+import { useLoanPersons } from "@/hooks/use-loans";
 import { LenderPayoffBreakdown } from "@/features/loans/components/lender-payoff-breakdown";
 import { outstandingPrincipalFor } from "@/lib/engines/loan-outstanding";
 
@@ -32,6 +34,8 @@ interface EmiScheduleDialogProps {
   onRecordPayment: (row: EmiRow, installment: Installment) => void;
   /** Opens "Record past payments" — EMIs paid before FlowFi, recorded without moving any account or card. */
   onRecordPastPayments?: (row: EmiRow) => void;
+  /** Opens "Pay several" — several EMIs recorded in one go. */
+  onPaySeveral?: (row: EmiRow) => void;
   onToggleClose: (row: EmiRow) => void;
   /** Opens "Edit terms" (rate, tenure, frequency, due day of the unpaid installments). */
   onEditTerms?: (row: EmiRow) => void;
@@ -61,11 +65,12 @@ function GoTo({ href, label }: { href: string; label: string }) {
 /** EMI details, laid out exactly like `LoanScheduleDialog` — outstanding balance first, key facts,
  *  what it's linked to, then the installment schedule. `row` is resolved live by the parent from
  *  Firestore-backed rows, so every persisted change re-renders it in place. */
-export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordPayment, onRecordPastPayments, onToggleClose, onEditTerms, statusBusy = false, paymentActions, historyLoading, onViewPayment, page }: EmiScheduleDialogProps) {
+export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordPayment, onRecordPastPayments, onPaySeveral, onToggleClose, onEditTerms, statusBusy = false, paymentActions, historyLoading, onViewPayment, page }: EmiScheduleDialogProps) {
   // Shared EMI: each installment's People side on its row, next to (never merged with) the lender status.
   const peopleStatus = useInstallmentPeopleStatus(row ? { sourceKind: "emi", source: row.emi, installments: row.installments } : null);
   const pathname = usePathname();
-  const { people } = useAgreementPeople(page && row ? { sourceKind: "emi", source: row.emi, installments: row.installments } : null);
+  const { data: persons } = useLoanPersons();
+  const { people, cycleBalance } = useAgreementPeople(page && row ? { sourceKind: "emi", source: row.emi, installments: row.installments } : null);
   // "They paid": the installment whose share the person already paid — the dialog mounts fresh per open (one batch id per save).
   const [theyPaid, setTheyPaid] = useState<{ id: string; n: number } | null>(null);
   const askTheyPaid = (installmentId: string) => setTheyPaid((prev) => ({ id: installmentId, n: (prev?.n ?? 0) + 1 }));
@@ -116,13 +121,8 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
         page
           ? {
               facts: `${row.emi.lenderName ?? EMI_TYPE_LABEL[row.emi.loanType]}${interest ? ` · ${+interest.ratePercent.toFixed(2)}% ${interest.period === "monthly" ? "p.m." : "p.a."} ${interest.type === "flat" ? "flat" : "reducing"}` : " · No interest"}${cardLabel ? ` · ${cardLabel}` : ""}`,
-              stats: [
-                { label: "Original", value: formatCurrency(row.emi.principalAmount) },
-                { label: "Installment", value: formatCurrency(installmentAmount) },
-                { label: "Paid so far", value: formatCurrency(totalPaid) },
-                { label: "Total left", value: formatCurrency(row.remainingBalance) },
-                { label: "Next due", value: nextPayable ? formatDateLong(nextPayable.dueDate) : "—", tone: nextOverdue ? "expense" : undefined },
-              ],
+              remaining: row.remainingBalance,
+              ownerLabel: agreementOwnerLabel(row.emi, (id) => persons?.find((person) => person.id === id)?.name),
               schedule: (
                 <AgreementScheduleTab
                   installments={row.installments}
@@ -131,6 +131,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
                   total={row.emi.installmentCount}
                   lent={false}
                   people={people}
+                  cycleBalance={cycleBalance}
                   onPay={(i) => onRecordPayment(row, i)}
                   onViewPayment={onViewPayment}
                   onTheyPaid={(i) => askTheyPaid(i.id)}
@@ -144,7 +145,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
             }
           : undefined
       }
-      eyebrow="EMI"
+      eyebrow={cardLabel ? "Credit Card EMI" : "EMI"}
       title={row.emi.name}
       subtitle={`${row.emi.lenderName ?? EMI_TYPE_LABEL[row.emi.loanType]}${interest ? ` · ${+interest.ratePercent.toFixed(2)}% ${interest.period === "monthly" ? "p.m." : "p.a."} ${interest.type === "flat" ? "flat" : "reducing"}` : " · No interest"}`}
       badges={emiBadges(row)}
@@ -200,17 +201,15 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
           note={isClosed ? "This EMI is closed. Reopen it to record payments." : undefined}
           money={
             <>
-              {onRecordPastPayments && !isClosed && hasPastDue(row.installments) && (
-                <ClayButton
-                  variant="secondary"
-                  className={cn(moneyBtn, "border-border-strong font-medium text-foreground hover:bg-card")}
-                  onClick={() => onRecordPastPayments(row)}
-                  title="EMIs paid before you used FlowFi — recorded without changing any account or card balance"
-                >
-                  <History className="size-3.5" />
-                  Record past payments
-                </ClayButton>
-              )}
+              <MorePaymentActions
+                className={moneyBtn}
+                items={[
+                  ...(onRecordPastPayments && !isClosed && hasPastDue(row.installments)
+                    ? [{ label: "Record past payments", icon: History, title: "EMIs paid before you used FlowFi — recorded without changing any account or card balance", onSelect: () => onRecordPastPayments(row) }]
+                    : []),
+                  ...(onPaySeveral && !isClosed && pastDueCount(row.installments) > 1 ? [{ label: "Pay several", icon: Layers, onSelect: () => onPaySeveral(row) }] : []),
+                ]}
+              />
               <ClayButton
                 variant="primary"
                 className={cn(moneyBtn, "border-primary-accent-text font-semibold")}
@@ -218,7 +217,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
                 onClick={() => nextPayable && onRecordPayment(row, nextPayable)}
               >
                 <Wallet className="size-3.5" />
-                Record Payment
+                Pay Now
               </ClayButton>
             </>
           }

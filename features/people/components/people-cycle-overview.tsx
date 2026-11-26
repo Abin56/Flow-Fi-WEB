@@ -19,13 +19,25 @@ import { cn } from "@/lib/utils";
 /** Opacity steps for the people segments — one hue per side, restrained. */
 const STEPS = [1, 0.7, 0.5, 0.36, 0.24];
 
-export function PeopleCycleOverview({ rows }: { rows: PeopleLedgerRow[] }) {
+export function PeopleCycleOverview({ rows, receiveDue = null }: { rows: PeopleLedgerRow[]; /** How the Receive total splits — null for a closed cycle or when nothing is postponed. */ receiveDue?: { dueNow: number; postponed: number } | null }) {
   const t = cycleTotals(rows);
   const o = buildCycleOverview(rows);
 
   return (
     <section aria-label="Cycle summary" className="flex flex-wrap items-center gap-x-0 gap-y-2 border-y border-border py-2.5">
       <SideFigure side="receive" amount={t.toReceive} count={t.receiveCount} shares={o.receiveShares} />
+      {receiveDue && (
+        <Item label="Of Receive">
+          <span className="inline-flex items-baseline gap-1">
+            <span className="text-muted-foreground">Due now</span>
+            <Money amount={receiveDue.dueNow} exact className="text-sm text-foreground" />
+          </span>
+          <span className="inline-flex items-baseline gap-1">
+            <span className="text-muted-foreground">Postponed</span>
+            <Money amount={receiveDue.postponed} exact className="text-sm text-foreground" />
+          </span>
+        </Item>
+      )}
       <SideFigure side="give" amount={t.toPay} count={t.payCount} shares={o.giveShares} />
 
       <Item label={`This cycle · ${t.activity} ${t.activity === 1 ? "entry" : "entries"}`}>

@@ -98,6 +98,10 @@ import {
 } from "@/lib/engines/disbursement-reamortization-policy";
 import { loanTransactionId, planLoanPaymentCore } from "@/lib/engines/loan-payment-core";
 import { mergeInstallmentWrites, netBalanceDeltas, reversePaymentPortions } from "@/lib/engines/payment-correction";
+import { findStrandedDirectCredit, strandedCreditMessage } from "@/lib/repositories/direct-credit-guard";
+import { assertDirectIssuerPaymentSupported } from "@/lib/repositories/direct-issuer-guard";
+import { TxSession } from "@/lib/firestore/tx-session";
+import type { PairedReceiptRevert } from "@/lib/repositories/paired-receipt-revert";
 import { principalPrepaidFor } from "@/lib/engines/loan-outstanding";
 import { assertLinkedPeopleSettled } from "@/lib/repositories/people-settlement-gate";
 import type { UnsettledPeopleAcknowledgement } from "@/lib/engines/linked-people-readiness";
@@ -238,6 +242,8 @@ export interface PaymentReversalResult {
 }
 
 export interface ReversePaymentParams {
+  /** People receipts to revert in the SAME transaction (the paired undo). */
+  pairedReceipts?: PairedReceiptRevert;
   loan: Loan;
   transactionId: string;
   paymentIds: string[];
@@ -534,6 +540,15 @@ export class LoanAdvancePaymentRepository {
           prepaymentPrincipalAmount: existingOverflow?.prepaymentPrincipalAmount ?? null,
         };
       }
+
+      await assertDirectIssuerPaymentSupported({
+        firestore: this.firestore,
+        uid: this.uid,
+        tx,
+        kind: "loan",
+        agreement: loan,
+        writing: [{ amount, recordedEarlier: params.recordedEarlier ?? null, note, deletedAt: null }],
+      });
 
       const accountSnap = await tx.get(this.accountRef(accountId));
       if (!accountSnap.exists()) throw new Error("Account not found");
@@ -862,7 +877,11 @@ export class LoanAdvancePaymentRepository {
 
     const seen = await this.assertReversible(loan, transactionDoc, event);
 
-    const alreadyReversed = await runTransaction<boolean>(this.firestore, async (tx) => {
+    const alreadyReversed = await runTransaction<boolean>(this.firestore, async (raw) => {
+      // With paired receipts everything goes through one session: reads see the receipts' revert, nothing is written
+      // until both have passed. Without them the transaction is used directly, as before.
+      const session = params.pairedReceipts ? new TxSession(raw) : null;
+      const tx = session ? session.asTransaction() : raw;
       // --- All reads first (Firestore transaction constraint). ---
       const freshTransactionSnap = await tx.get(this.transactionRef(transactionId));
       if (!freshTransactionSnap.exists()) throw new Error("Transaction not found");
@@ -870,6 +889,8 @@ export class LoanAdvancePaymentRepository {
       if (freshTransaction.deletedAt != null) return true; // idempotent race guard
       // Only a still-live payment needs the schedule to be as checked — an already-reversed one returns above.
       await this.assertScheduleUnchanged(tx, loan, seen);
+      // Before the account is read: a receipt and this payment can move the same account, and the second must see the first.
+      if (session) await params.pairedReceipts!.apply(session);
 
       const freshAccountSnap = await tx.get(this.accountRef(freshTransaction.accountId));
       if (!freshAccountSnap.exists()) throw new Error("Account not found");
@@ -892,6 +913,15 @@ export class LoanAdvancePaymentRepository {
       const linkedIds = [...new Set([...freshPayments.values()].map((p) => p.linkedTransactionId).filter((id): id is string => !!id))];
       const linkedSnaps = new Map((await Promise.all(linkedIds.map(async (id) => [id, await tx.get(this.transactionRef(id))] as const))));
 
+      await this.assertDirectCreditsKept(
+        tx,
+        loan,
+        [...freshPayments.values(), ...(freshOverflowPayment != null ? [freshOverflowPayment] : [])].filter((p) => p.deletedAt == null),
+        [],
+        (id) => freshInstallments.get(id)?.sequenceNumber ?? null,
+        params.pairedReceipts?.keys,
+      );
+
       // --- Then all writes. ---
       for (let i = 0; i < paymentIds.length; i++) {
         const paymentId = paymentIds[i];
@@ -911,7 +941,7 @@ export class LoanAdvancePaymentRepository {
         // Unlink only: the user's own transaction, its amount and its account are NOT touched — it simply stops explaining a payment.
         const linkedSnap = payment.linkedTransactionId ? linkedSnaps.get(payment.linkedTransactionId) : undefined;
         if (linkedSnap?.exists() && linkedSnap.data().earlierPaymentLink?.paymentId === paymentId) {
-          tx.set(linkedSnap.ref, { ...linkedSnap.data(), earlierPaymentLink: null });
+          tx.set(this.transactionRef(payment.linkedTransactionId!), { ...linkedSnap.data(), earlierPaymentLink: null });
         }
       }
 
@@ -936,6 +966,7 @@ export class LoanAdvancePaymentRepository {
       tx.set(this.accountRef(freshTransaction.accountId), updatedAccount);
       tx.set(this.transactionRef(transactionId), { ...freshTransaction, deletedAt: new Date() });
 
+      session?.flush();
       return false;
     });
 
@@ -1125,6 +1156,20 @@ export class LoanAdvancePaymentRepository {
     return this.recordCorrection(params, true, recordedEarlier);
   }
 
+  /** Refuses a reversal / correction that would leave People credited with more than stays paid to the lender (`direct-credit-guard.ts`). */
+  private async assertDirectCreditsKept(
+    tx: Parameters<Parameters<typeof runTransaction>[1]>[0],
+    loan: Loan,
+    removed: InstallmentPayment[],
+    added: InstallmentPayment[],
+    sequenceNumberOf: (installmentId: string) => number | null,
+    /** Credits reverted in this same transaction. */
+    ignore?: ReadonlySet<string>,
+  ): Promise<void> {
+    const stranded = await findStrandedDirectCredit({ firestore: this.firestore, uid: this.uid, tx, ownerType: "loan", scheduleId: loan.scheduleId, removed, added, sequenceNumberOf, ignore });
+    if (stranded) throw new PaymentReversalBlockedError(strandedCreditMessage(stranded));
+  }
+
   /** The original action's "already paid earlier" mark (its first payment doc — soft-deleted or not), carried to `newDate`. */
   private async originalRecordedEarlier(loan: Loan, original: EditLoanPaymentParams["original"], newDate: Date): Promise<RecordedEarlier | null> {
     const paymentId = original.paymentIds[0] ?? original.overflowPaymentId ?? null;
@@ -1232,6 +1277,9 @@ export class LoanAdvancePaymentRepository {
         paymentDate: params.date,
         acknowledgement: params.peopleGateAcknowledgement,
       });
+
+      await this.assertDirectCreditsKept(tx, loan, oldPayments, core.payments, (id) => fresh.find((i) => i.id === id)?.sequenceNumber ?? null);
+      await assertDirectIssuerPaymentSupported({ firestore: this.firestore, uid: this.uid, tx, kind: "loan", agreement: loan, writing: core.payments, replacing: oldPayments });
 
       // --- Then all writes. ---
       for (const installment of mergeInstallmentWrites(fresh, reversed, core.installments)) {

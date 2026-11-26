@@ -159,6 +159,7 @@ export function CompactAmountInput({
   label,
   inputRef,
   placeholder = "0",
+  inputClassName,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -167,6 +168,7 @@ export function CompactAmountInput({
   label: string;
   inputRef?: React.Ref<HTMLInputElement>;
   placeholder?: string;
+  inputClassName?: string;
 }) {
   return (
     <div className="relative">
@@ -186,6 +188,7 @@ export function CompactAmountInput({
         className={cn(
           WS_FIELD,
           "pl-7 font-semibold tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+          inputClassName,
         )}
       />
     </div>
@@ -326,6 +329,8 @@ export function AccountField({
   className,
   outflow,
   refund,
+  open,
+  onOpenChange,
 }: {
   choice: ReturnType<typeof useAccountChoice>;
   label?: string;
@@ -334,11 +339,13 @@ export function AccountField({
   outflow?: number | null;
   /** Editing a payment I made: its original debit on `accountId` is refunded first, so only the net extra is previewed. */
   refund?: { accountId: string | null; amount: number };
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const paying = outflow !== undefined;
   return (
     <WsField label={label} className={className}>
-      <Select value={choice.accountId} onValueChange={choice.setAccountId}>
+      <Select value={choice.accountId} onValueChange={choice.setAccountId} open={open} onOpenChange={onOpenChange}>
         <SelectTrigger className={WS_SELECT_TRIGGER}>
           <SelectValue placeholder="Select account" />
         </SelectTrigger>

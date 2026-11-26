@@ -11,8 +11,8 @@ async function openPay(page, loan = "QA Loan 12") {
   await h.go(page, "/loans-installments");
   await page.getByText(loan).first().click();
   await page.getByRole("button", { name: "Record Payment" }).click();
-  const dlg = page.getByRole("dialog", { name: /Pay installment|Pay EMI/ });
-  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
+  const dlg = page.locator("[data-stack-layer]");
+  await dlg.getByText(/TO PAY LENDER|Pay the lender/i).first().waitFor();
   return dlg;
 }
 async function pickAccount(page, dlg, acct) {
@@ -194,8 +194,8 @@ scenario("loan-stale-two-tabs", "Loan: two tabs open Pay for the same installmen
   await tabB.goto(`${BASE_URL}/loans-installments`, { waitUntil: "domcontentloaded" });
   await tabB.getByText("QA Loan 12").first().click();
   await tabB.getByRole("button", { name: "Record Payment" }).click();
-  const dlgB = tabB.getByRole("dialog", { name: /Pay installment|Pay EMI/ });
-  await dlgB.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
+  const dlgB = tabB.locator("[data-stack-layer]");
+  await dlgB.getByText(/TO PAY LENDER|Pay the lender/i).first().waitFor();
   await pickAccount(tabB, dlgB, "QA Bank");
 
   await page.bringToFront();

@@ -15,13 +15,14 @@
 
 import { readFileSync } from "node:fs";
 import { initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing";
-import { collection, doc, getDoc, getDocs, type Firestore } from "firebase/firestore";
+import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, type Firestore } from "firebase/firestore";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { planReimbursements, reimbursementLineKey as lk, reimbursementLines, runReimbursements, type ReimbursementItem } from "@/lib/engines/historical-reimbursement";
 import { buildPersonCycleStatement, type StatementEmiSource, type StatementInstallment, type StatementLedgerEntry } from "@/lib/engines/person-cycle-statement";
 import { accountFromFirestore, accountToFirestore } from "@/lib/models/account";
+import { emiFromFirestore, emiToFirestore } from "@/lib/models/emi";
 import { expenseFromFirestore, expenseToFirestore } from "@/lib/models/expense";
-import { installmentFromFirestore, installmentPaymentFromFirestore, installmentPaymentToFirestore, installmentToFirestore, type Installment } from "@/lib/models/payment-schedule";
+import { installmentFromFirestore, installmentPaymentFromFirestore, installmentPaymentToFirestore, installmentToFirestore, paymentScheduleFromFirestore, paymentScheduleToFirestore, type Installment } from "@/lib/models/payment-schedule";
 import {
   advanceApplicationFromFirestore,
   advanceApplicationToFirestore,
@@ -34,7 +35,8 @@ import {
 import { purposeFundFromFirestore, purposeFundToFirestore } from "@/lib/models/purpose-fund";
 import { transactionFromFirestore, transactionToFirestore } from "@/lib/models/transaction";
 import { AccountRepository } from "@/lib/repositories/account-repository";
-import { InstallmentPaymentRepository, InstallmentRepository } from "@/lib/repositories/payment-schedule-repository";
+import { EmiRepository } from "@/lib/repositories/emi-repository";
+import { InstallmentPaymentRepository, InstallmentRepository, PaymentScheduleRepository } from "@/lib/repositories/payment-schedule-repository";
 import { PersonPaymentRepository, StalePersonPaymentError, type RecordPaymentInput } from "@/lib/repositories/person-payment-repository";
 import { LedgerRepository, PersonRepository } from "@/lib/repositories/person-repository";
 import { OwnedTransactionDeleteError, OwnedTransactionEditError, TransactionRepository } from "@/lib/repositories/transaction-repository";
@@ -85,9 +87,16 @@ function setup() {
           installments(scheduleId),
         ).docRef(paymentId),
       cashLegCategoryId: "personal-loan",
+      // The same agreement check and share limit the app wires (`repository-factory.ts`), over the saved EMI below.
+      liveAgreementScheduleIds: async () => ["sch"],
+      scheduleDocRef: (scheduleId) => doc(schedulesCol(), scheduleId),
+      shareLimit: { firestore: db, uid: UID },
       purposeFunds: col("people", personId, "purposeFunds").withConverter({ toFirestore: purposeFundToFirestore, fromFirestore: purposeFundFromFirestore }),
     });
-  return { db, accounts, transactions, people, paymentsFor };
+  const emisCol = () => col("emis").withConverter({ toFirestore: emiToFirestore, fromFirestore: emiFromFirestore });
+  const schedulesCol = () => col("paymentSchedules").withConverter({ toFirestore: paymentScheduleToFirestore, fromFirestore: paymentScheduleFromFirestore });
+  const emiRepository = () => new EmiRepository(emisCol(), new PaymentScheduleRepository(schedulesCol()), installments);
+  return { db, accounts, transactions, people, paymentsFor, emisCol, schedulesCol, emiRepository, installments };
 }
 type R = ReturnType<typeof setup>;
 
@@ -116,7 +125,39 @@ async function seed(r: R) {
     { personId: sanju.id, amount: 30000 },
     { personId: amma.id, amount: 30000 },
   ];
+  await persistEmi(r, sanju.id, amma.id);
   return { bank, sanju, amma };
+}
+
+/**
+ * SAVES the EMI the statements describe. The real `createEmi` builds the EMI, its schedule and its installments; they are
+ * then saved under this file's fixed ids ("emi" / "sch" / "i1" / "i2") with the same fields, and the generated copies removed.
+ */
+async function persistEmi(r: R, sanjuId: string, ammaId: string) {
+  const created = await r.emiRepository().createEmi({
+    name: "Phone EMI",
+    principalAmount: 90_000,
+    startDate: new Date(2026, 7, 5, 12),
+    installmentFrequency: "monthly",
+    installmentCount: 10,
+    linkedCreditCardId: null,
+    ownershipShares: [
+      { personId: null, amount: 30_000 },
+      { personId: sanjuId, amount: 30_000 },
+      { personId: ammaId, amount: 30_000 },
+    ],
+  });
+  const generated = (await r.installments(created.scheduleId).getAll()).sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+  const schedule = (await getDoc(doc(r.schedulesCol(), created.scheduleId))).data()!;
+  await setDoc(doc(r.schedulesCol(), "sch"), { ...schedule, id: "sch", ownerId: "emi" });
+  await setDoc(doc(r.emisCol(), "emi"), { ...created, id: "emi", scheduleId: "sch" });
+  for (const [i, [id, due, amountPaid]] of ([["i1", SEP_5, 9000], ["i2", OCT_5, 4500]] as const).entries()) {
+    expect(generated[i].amountDue).toBe(9000);
+    await setDoc(r.installments("sch").docRef(id), { ...generated[i], id, scheduleId: "sch", ownerId: "emi", dueDate: due, amountPaid });
+  }
+  for (const g of generated) await deleteDoc(r.installments(created.scheduleId).docRef(g.id));
+  await deleteDoc(doc(r.schedulesCol(), created.scheduleId));
+  await deleteDoc(doc(r.emisCol(), created.id));
 }
 
 const balanceOf = async (r: R, id: string) => (await r.accounts.getByKey(id))!.currentBalance;
@@ -359,6 +400,18 @@ describe("historical reimbursement — People settlement without double counting
     expect(sanjuDates).toEqual([8, 9]);
     // Deterministic payment documents — the retry wrote the failed one only.
     expect((await getDoc(doc(r.db, "users", UID, "people", amma.id, "ledger", `pp_hist_b2_${amma.id}_i2_0`))).exists()).toBe(true);
+  });
+});
+
+describe("the share limit is on for these saved records", () => {
+  it("a second receipt past a person's share is refused and moves nothing", async () => {
+    const r = setup();
+    const { bank, sanju } = await seed(r);
+    await r.paymentsFor(sanju.id).recordPayment(await person(r, sanju.id), { ...receipt("emi-inst:i1", 3000), accountId: bank.id });
+    await expect(r.paymentsFor(sanju.id).recordPayment(await person(r, sanju.id), { ...receipt("emi-inst:i1", 1), accountId: bank.id })).rejects.toThrow(/nothing left open on installment #1/);
+    expect(await entriesOf(r, sanju.id)).toHaveLength(1);
+    expect(await balanceOf(r, bank.id)).toBe(53_000);
+    expect((await person(r, sanju.id)).currentBalance).toBe(-3000);
   });
 });
 

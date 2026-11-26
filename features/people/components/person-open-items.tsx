@@ -28,12 +28,6 @@ const KIND: Record<Kind, { label: string; chip: string }> = {
 const DESKTOP_PREVIEW_LIMIT = 4;
 const PREVIEW_LIMIT = 8;
 
-/**
- * "Open items" — one table of what is still unpaid: Due · Item · Status · Amount · actions, overdue first, then by date.
- * Totals close the table (open total, already received but not linked to an item, still to collect).
- * Actions: Received / Paid (Record payment with that item picked) and Postpone (money they owe).
- * Rows are `payableObligations` (the same list Record payment offers); nothing is computed here beyond layout.
- */
 /** A paid-for-them expense is stored as a "gave" share, but no cash was handed over — say what it was. */
 function captionOf(o: PayableObligation, first: string): string {
   const assigned = (o.target.kind === "split" && o.target.sourceKind === "assignedExpense") || (o.target.kind === "entry" && o.target.entry.sourceKind === "assignedExpense");
@@ -92,54 +86,65 @@ export function PersonOpenItems({
   const ordered = [...items].sort((a, b) => Number(b.kind === "overdue") - Number(a.kind === "overdue") || a.o.date.getTime() - b.o.date.getTime());
   const shown = showAll ? ordered : ordered.slice(0, PREVIEW_LIMIT);
   const foot = "px-2 py-1 text-[12px] tabular-nums";
+  const cell = cn(TD, "@max-[40rem]:block @max-[40rem]:border-0 @max-[40rem]:p-0");
+  const amountCell = cn(cell, "text-right text-[13px] font-semibold whitespace-nowrap tabular-nums");
+  const mobileLabel = "mr-1.5 text-xs font-medium text-muted-foreground @min-[40rem]:hidden";
 
   return (
-    <div data-testid="open-items" className="@container overflow-x-auto">
-      <table role="table" aria-label="Open items across all cycles" className="isolate w-full border-separate border-spacing-0 text-sm">
-        <thead>
-          <tr>
-            <th scope="col" className={cn(TH, "w-[6.25rem]")}>Date</th>
-            <th scope="col" className={TH}>Description</th>
-            <th scope="col" className={cn(TH, "w-40")}>Status</th>
-            <th scope="col" className={cn(TH, "w-28 text-right sm:w-36")}>Amount</th>
-            <th scope="col" className={cn(TH, "w-[6.25rem]")}>
-              <span className="sr-only sm:not-sr-only">Actions</span>
+    <div data-testid="open-items" className="@container">
+      <table role="table" aria-label="Open items across all cycles" className="isolate w-full border-separate border-spacing-0 text-sm @max-[40rem]:block">
+        <thead role="rowgroup" className="@max-[40rem]:sr-only">
+          <tr role="row">
+            <th role="columnheader" scope="col" className={cn(TH, "w-[7rem]")}>Date</th>
+            <th role="columnheader" scope="col" className={TH}>Item</th>
+            <th role="columnheader" scope="col" className={cn(TH, "w-[7rem] text-right")}>Paid</th>
+            <th role="columnheader" scope="col" className={cn(TH, "w-[7rem] text-right")}>Pending</th>
+            <th role="columnheader" scope="col" className={cn(TH, "w-[9rem]")}>Status</th>
+            <th role="columnheader" scope="col" className={cn(TH, "w-[5rem]")}>
+              <span className="sr-only">Actions</span>
             </th>
           </tr>
         </thead>
-        <tbody role="rowgroup">
+        <tbody role="rowgroup" className="@max-[40rem]:block @max-[40rem]:space-y-1.5 @max-[40rem]:px-3 @max-[40rem]:pb-2">
           {shown.map(({ o, theirs, moved, kind }, index) => {
             const isCovered = coveredKeys.has(o.key);
+            const paid = Math.max(0, o.amount - o.outstanding);
+            const title = o.isEmi ? o.title.replace(/ · EMI share$/, "") : o.title;
+            const caption = o.isEmi ? (/\bEMI\b/i.test(title) ? null : "EMI") : captionOf(o, first);
             return (
-              <tr key={o.key} role="row" className={cn("group transition-colors hover:bg-secondary/70", !showAll && index >= DESKTOP_PREVIEW_LIMIT && "lg:hidden")}>
-                <td role="cell" className={cn(TD, "whitespace-nowrap")}>
-                  <span className="text-[13px] font-semibold text-foreground">{o.date.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</span>{" "}
-                  <span className="text-[11px] text-muted-foreground tabular-nums">{o.date.getFullYear()}</span>
+              <tr key={o.key} role="row" className={cn("group transition-colors hover:bg-secondary/50 @max-[40rem]:grid @max-[40rem]:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] @max-[40rem]:items-center @max-[40rem]:gap-x-2 @max-[40rem]:gap-y-1 @max-[40rem]:rounded-lg @max-[40rem]:border @max-[40rem]:border-border @max-[40rem]:px-2.5 @max-[40rem]:py-1.5", !showAll && index >= DESKTOP_PREVIEW_LIMIT && "lg:hidden")}>
+                <td role="cell" className={cn(cell, "whitespace-nowrap text-xs text-muted-foreground tabular-nums @max-[40rem]:col-start-1 @max-[40rem]:row-start-2")}>
+                  {o.date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
                 </td>
-                <td role="cell" className={cn(TD, "max-w-0")}>
-                  <div className="flex min-w-0 items-center gap-2">
-                    <p className="min-w-[35%] shrink truncate text-[13px] leading-tight font-semibold text-foreground">{o.title}</p>
-                    {!(o.isEmi && o.title.endsWith(" · EMI share")) && <span className="truncate text-[11.5px] text-muted-foreground">{captionOf(o, first)}</span>}
+                <td role="cell" className={cn(cell, "@max-[40rem]:col-span-2 @max-[40rem]:col-start-1 @max-[40rem]:row-start-1 @min-[40rem]:max-w-0")}>
+                  <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <span className="min-w-0 truncate text-[13px] font-semibold text-foreground" title={title}>{title}</span>
+                    {caption && <span className="min-w-0 truncate text-[11px] text-muted-foreground">{caption}</span>}
                   </div>
                 </td>
-                <td role="cell" className={TD}>
+                <td role="cell" className={cn(amountCell, "text-muted-foreground @max-[40rem]:col-start-1 @max-[40rem]:row-start-3 @max-[40rem]:text-left")}>
+                  <span aria-hidden className={mobileLabel}>Paid</span>
+                  <span className={paid > 0.005 ? "text-success" : undefined}>{money(paid)}</span>
+                </td>
+                <td role="cell" className={cn(amountCell, "@max-[40rem]:col-span-2 @max-[40rem]:col-start-2 @max-[40rem]:row-start-3", isCovered ? "text-muted-foreground" : !theirs ? "text-settle-payable-text" : kind === "overdue" ? "text-expense" : "text-foreground")}>
+                  <span aria-hidden className={mobileLabel}>Pending</span>
+                  {money(o.outstanding)}
+                </td>
+                <td role="cell" className={cn(cell, "@max-[40rem]:col-span-2 @max-[40rem]:col-start-2 @max-[40rem]:row-start-2 @max-[40rem]:text-right")}>
                   {isCovered ? (
                     <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-success" title="You already received money from them toward the overall balance. It covers this item, but it isn't linked to it — so the item stays listed.">
                       <CheckCircle2 className="size-3.5" aria-hidden />
                       Covered
                     </span>
                   ) : (
-                    <span className={cn("inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap", KIND[kind].chip)}>
+                    <span className={cn("inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs font-semibold @max-[40rem]:justify-end", KIND[kind].chip)}>
                       {kind === "postponed" ? <CalendarClock className="size-3.5 shrink-0" aria-hidden /> : <span className="size-[5px] shrink-0 rounded-full bg-current" aria-hidden />}
-                      {kind === "postponed" ? `Moved to ${moved?.date ? shortDate(moved.date, year) : `${moved?.name} cycle`}` : KIND[kind].label}
+                      {KIND[kind].label}
+                      {moved && <span className="text-[11px] font-medium">{moved.date ? shortDate(moved.date, year) : `${moved.name} cycle`}</span>}
                     </span>
                   )}
                 </td>
-                <td role="cell" className={cn(TD, "text-right whitespace-nowrap")}>
-                  <p className={cn("text-[13.5px] font-semibold tabular-nums", theirs ? "text-foreground" : "text-settle-payable-text")}>{money(o.outstanding)}</p>
-                  {o.outstanding < o.amount - 0.005 && <p className="text-[11px] text-muted-foreground tabular-nums">of {money(o.amount)}</p>}
-                </td>
-                <td role="cell" className={cn(TD, "px-1.5")}>
+                <td role="cell" className={cn(cell, "px-1.5 @max-[40rem]:col-start-3 @max-[40rem]:row-start-1")}>
                   <span className="flex items-center justify-end gap-0.5 opacity-60 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 motion-reduce:transition-none">
                     {onPostpone && theirs && o.isEmi && !moved && !isCovered && kind !== "later" && (
                       <button type="button" title={`Postpone — move collecting this to a later date; ${first} still owes it`} aria-label={`Postpone ${o.title}`} onClick={() => onPostpone(o.key)} className={cn(ICON_BTN, "hover:bg-primary/25")}>
@@ -158,23 +163,23 @@ export function PersonOpenItems({
           })}
         </tbody>
         {covered > 0.005 && generalCreditOwed != null && (
-          <tfoot data-testid="open-items-general" className="bg-secondary/35">
-            <tr>
-              <th scope="row" colSpan={3} className={cn(foot, "text-left font-medium text-foreground/65")}>Total open</th>
-              <td className={cn(foot, "text-right font-semibold text-foreground")}>{money(theirTotal)}</td>
-              <td />
+          <tfoot role="rowgroup" data-testid="open-items-general" className="bg-secondary/35 @max-[40rem]:block @max-[40rem]:px-2">
+            <tr role="row" className="@max-[40rem]:flex @max-[40rem]:justify-between">
+              <th role="rowheader" scope="row" colSpan={3} className={cn(foot, "text-left font-medium text-foreground/65")}>Total open</th>
+              <td role="cell" className={cn(foot, "text-right font-semibold text-foreground")}>{money(theirTotal)}</td>
+              <td role="cell" colSpan={2} className="@max-[40rem]:hidden" />
             </tr>
-            <tr>
-              <th scope="row" colSpan={3} className={cn(foot, "text-left font-medium text-foreground/65")} title="Money they paid you toward the overall balance, not linked to any one item">
+            <tr role="row" className="@max-[40rem]:flex @max-[40rem]:justify-between">
+              <th role="rowheader" scope="row" colSpan={3} className={cn(foot, "text-left font-medium text-foreground/65")} title="Money they paid you toward the overall balance, not linked to any one item">
                 Received toward the overall balance
               </th>
-              <td className={cn(foot, "text-right font-semibold text-success")}>− {money(covered)}</td>
-              <td />
+              <td role="cell" className={cn(foot, "text-right font-semibold whitespace-nowrap text-success")}>− {money(covered)}</td>
+              <td role="cell" colSpan={2} className="@max-[40rem]:hidden" />
             </tr>
-            <tr>
-              <th scope="row" colSpan={3} className={cn(foot, "border-t border-border-strong/60 text-left font-semibold text-foreground")}>Still to collect</th>
-              <td className={cn(foot, "border-t border-border-strong/60 text-right font-heading text-[14px] font-bold", generalCreditOwed < 0.005 ? "text-success" : "text-settle-receivable-text")}>{money(generalCreditOwed)}</td>
-              <td className="border-t border-border-strong/60" />
+            <tr role="row" className="@max-[40rem]:flex @max-[40rem]:justify-between @max-[40rem]:border-t @max-[40rem]:border-border">
+              <th role="rowheader" scope="row" colSpan={3} className={cn(foot, "text-left font-semibold text-foreground @min-[40rem]:border-t @min-[40rem]:border-border-strong/60")}>Still to collect</th>
+              <td role="cell" className={cn(foot, "text-right font-heading text-[14px] font-bold @min-[40rem]:border-t @min-[40rem]:border-border-strong/60", generalCreditOwed < 0.005 ? "text-success" : "text-settle-receivable-text")}>{money(generalCreditOwed)}</td>
+              <td role="cell" colSpan={2} className="border-t border-border-strong/60 @max-[40rem]:hidden" />
             </tr>
           </tfoot>
         )}

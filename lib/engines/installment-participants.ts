@@ -42,6 +42,8 @@ export interface ShareLine {
   dueDate: Date;
   share: number;
   received: number;
+  /** The part of `received` an applied advance covered (no new money). Absent when none. Display only. */
+  fromAdvance?: number;
   remaining: number;
   state: LinkedPersonState;
 }
@@ -55,6 +57,8 @@ export interface InstallmentParticipant {
   carried: ShareLine[];
   /** current.remaining + every carried remaining — this schedule only. */
   outstanding: number;
+  /** Several installments in one lender payment (`coverageBreakdown`): their share of each. `current` is then null. */
+  covered?: ShareLine[];
   /**
    * Money this person already gave me that is HELD as an unapplied advance (all-time, People statement's
    * `advanceBalance`, they-paid-me side only). Display only: it settles nothing until applied in People.
@@ -77,6 +81,8 @@ export interface InstallmentBreakdown {
   participants: InstallmentParticipant[];
   /** Still owed by others across this schedule (current + carried). */
   othersOwe: number;
+  /** Set when the figures span several installments (`coverageBreakdown`). */
+  covered?: { installmentIds: string[]; first: number; last: number };
 }
 
 /** My part (`personId: null`) of one installment under the source's ownership — the parts sum to the installment. */
@@ -94,6 +100,8 @@ function lineFrom(st: StatementLike, inst: InstallmentLike, prefix: string): Sha
   if (!row || row.category !== "emi" || row.signedAmount <= 0 || row.remainingNow == null) return null;
   const share = round2(row.amount);
   const remaining = round2(Math.min(share, Math.max(0, row.remainingNow)));
+  const applied = st.rows.filter((r) => r.category === "advanceApplied" && r.settlesKey === key).reduce((t, r) => t + r.amount, 0);
+  const fromAdvance = round2(Math.min(applied, share - remaining));
   return {
     key,
     installmentId: inst.id,
@@ -101,6 +109,7 @@ function lineFrom(st: StatementLike, inst: InstallmentLike, prefix: string): Sha
     dueDate: inst.dueDate,
     share,
     received: round2(share - remaining),
+    ...(fromAdvance > PAYMENT_EPSILON ? { fromAdvance } : {}),
     remaining,
     state: linkedStateOf(share, remaining),
   };
@@ -142,6 +151,40 @@ export function installmentBreakdown(params: {
     yourShare: ownerInstallmentShare(params.source, installmentAmount),
     participants,
     othersOwe: round2(participants.reduce((t, p) => t + p.outstanding, 0)),
+  };
+}
+
+/**
+ * The same reading when ONE lender payment covers several installments: each person's share of EACH covered one stays
+ * its own line (its own People item), and their other open shares up to the last covered one stay `carried`. Money
+ * figures are the covered installments' own, summed; nothing is re-allocated. Fewer than two → `installmentBreakdown`.
+ */
+export function coverageBreakdown(params: Omit<Parameters<typeof installmentBreakdown>[0], "installmentId"> & { installmentIds: readonly string[] }): InstallmentBreakdown | null {
+  const parts = [...new Set(params.installmentIds)]
+    .map((installmentId) => ({ installmentId, sequence: params.installments.find((i) => i.id === installmentId)?.sequenceNumber ?? 0, breakdown: installmentBreakdown({ ...params, installmentId }) }))
+    .filter((p): p is { installmentId: string; sequence: number; breakdown: InstallmentBreakdown } => p.breakdown != null)
+    .sort((a, b) => a.sequence - b.sequence);
+  if (parts.length < 2) return parts[0]?.breakdown ?? null;
+  const last = parts[parts.length - 1];
+  const ids = new Set(parts.map((p) => p.installmentId));
+  const everyone = parts.flatMap((p) => p.breakdown.participants);
+  const participants = [...new Set(everyone.map((p) => p.personId))].map((personId): InstallmentParticipant => {
+    const seen = everyone.find((p) => p.personId === personId)!;
+    const covered = parts.flatMap((p) => p.breakdown.participants.find((x) => x.personId === personId)?.current ?? []);
+    // The last covered installment's carried list already holds every earlier open share.
+    const carried = (last.breakdown.participants.find((x) => x.personId === personId)?.carried ?? []).filter((l) => !ids.has(l.installmentId));
+    return { ...seen, current: null, covered, carried, outstanding: round2([...covered, ...carried].reduce((t, l) => t + l.remaining, 0)) };
+  });
+  participants.sort((a, b) => b.outstanding - a.outstanding || a.personName.localeCompare(b.personName));
+  const sum = (pick: (b: InstallmentBreakdown) => number) => round2(parts.reduce((t, p) => t + pick(p.breakdown), 0));
+  return {
+    installmentAmount: sum((b) => b.installmentAmount),
+    lenderPaid: sum((b) => b.lenderPaid),
+    lenderRemaining: sum((b) => b.lenderRemaining),
+    yourShare: sum((b) => b.yourShare),
+    participants,
+    othersOwe: round2(participants.reduce((t, p) => t + p.outstanding, 0)),
+    covered: { installmentIds: parts.map((p) => p.installmentId), first: parts[0].sequence, last: last.sequence },
   };
 }
 

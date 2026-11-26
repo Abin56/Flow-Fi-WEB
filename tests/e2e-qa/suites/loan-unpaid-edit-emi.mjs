@@ -12,8 +12,8 @@ async function openDrawer(page, loan) {
   await h.go(page, "/loans-installments");
   await page.getByText(loan).first().click();
   await page.getByRole("button", { name: "Record Payment" }).click();
-  const dlg = page.getByRole("dialog", { name: /Pay installment|Pay EMI/ });
-  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
+  const dlg = page.locator("[data-stack-layer]");
+  await dlg.getByText(/TO PAY LENDER|Pay the lender/i).first().waitFor();
   return dlg;
 }
 async function payFromBank(page, dlg, label) {
@@ -27,10 +27,7 @@ async function payFromBank(page, dlg, label) {
   await page.waitForFunction(() => !/recorded successfully/i.test(document.body.innerText), null, { timeout: 20000 });
 }
 async function openDetails(page, seq) {
-  await h.showSchedule(page);
-  await page.getByRole("button", { name: new RegExp(`Installment ${seq}.*edit or mark unpaid`) }).click();
-  await page.getByRole("dialog", { name: /Recorded payment/ }).waitFor();
-  return page.getByRole("dialog", { name: /Recorded payment/ });
+  return h.openRecordedPayment(page, seq);
 }
 
 scenario("loan-mark-unpaid", "Loan: mark a recorded payment as unpaid (incl. Keep payment)", async ({ page }, chk) => {
@@ -40,16 +37,16 @@ scenario("loan-mark-unpaid", "Loan: mark a recorded payment as unpaid (incl. Kee
   const afterPay = await bal("QA Bank");
   const det = await openDetails(page, 2);
   await det.getByRole("button", { name: "Mark as unpaid" }).click();
-  const confirm = page.getByRole("dialog").last();
+  const confirm = h.paySurface(page);
   await confirm.getByText("This installment goes back to unpaid").waitFor();
   await page.evaluate(() => window.__reset());
   await confirm.getByRole("button", { name: "Keep payment" }).click();
   await page.waitForTimeout(800);
   chk("Keep payment performs no write", (await commits(page)) === 0 && (await bal("QA Bank")) === afterPay, `commits ${await commits(page)}`);
   await det.getByRole("button", { name: "Mark as unpaid" }).click();
-  await page.getByRole("dialog").last().getByText("This installment goes back to unpaid").waitFor();
+  await h.paySurface(page).getByText("This installment goes back to unpaid").waitFor();
   await page.evaluate(() => window.__reset());
-  const unpaid = page.getByRole("dialog").last().getByRole("button", { name: "Mark as unpaid" });
+  const unpaid = h.paySurface(page).getByRole("button", { name: "Mark as unpaid" });
   await unpaid.evaluate((b) => { b.click(); b.click(); });
   await page.waitForTimeout(5000);
   const tl = await h.timeline(page);
@@ -69,7 +66,7 @@ scenario("loan-unpaid-slow-refresh", "Loan: mark unpaid with a slow (3 s) refres
   await h.arm(page, { mode: "slow", delayMs: 3000 });
   const det = await openDetails(page, 2);
   await det.getByRole("button", { name: "Mark as unpaid" }).click();
-  const confirm = page.getByRole("dialog").last();
+  const confirm = h.paySurface(page);
   await confirm.getByText("This installment goes back to unpaid").waitFor();
   await page.evaluate(() => window.__reset());
   await confirm.getByRole("button", { name: "Mark as unpaid" }).click();
@@ -89,7 +86,7 @@ scenario("loan-edit-payment", "Loan: edit a recorded payment (₹5,331 → ₹4,
   await payFromBank(page, dlg, /Pay ₹5,330\.93 to lender/);
   const det = await openDetails(page, 2);
   await det.getByRole("button", { name: "Edit payment" }).click();
-  const ed = page.getByRole("dialog", { name: /Edit payment/ });
+  const ed = h.paySurface(page, /Originally|Edit payment/);
   await ed.getByText("Originally").waitFor();
   const amount = ed.locator("input:visible").first();
   await amount.fill("4000");

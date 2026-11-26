@@ -1,12 +1,12 @@
 "use client";
 
 import { createContext, useContext, useLayoutEffect, useState, type ReactNode } from "react";
-import { CheckCircle2, ChevronRight } from "lucide-react";
+import { CheckCircle2, ChevronRight, UserRound } from "lucide-react";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { InlineHostSlot, StackBase, useInlineLayerId, useStackBase } from "@/components/finance/stack-layer";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { PaymentAwareness, type UpcomingPayment } from "@/features/loans/components/payment-awareness";
-import { AmountDisplay, InstallmentProgress, LE_RADIUS, Money, dueLabel, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
+import { AmountDisplay, InstallmentProgress, LE_RADIUS, Money, dueLabel, formatDueDate, type DebtCardBadge } from "@/features/loans/components/loan-emi-ui";
 import { cn } from "@/lib/utils";
 
 /**
@@ -254,18 +254,12 @@ function AgreementWindow({
   );
 }
 
-/** One cell of the workspace's stats strip. */
-export interface WorkspaceStat {
-  label: string;
-  value: ReactNode;
-  tone?: "expense" | "success";
-}
-
 /** Where the record opens as the workspace's right panel instead of a window — set by the dedicated `/loans/[id]` route. */
 export interface AgreementPageOptions {
   /** The one-line facts under the title (lender · rate · next due …). */
   facts: string;
-  stats: WorkspaceStat[];
+  ownerLabel?: string | null;
+  remaining: number;
   /** The Schedule tab: the installment grid and the selected installment's strip (built by the dialog, which owns selection). */
   schedule: ReactNode;
   people?: ReactNode;
@@ -294,10 +288,9 @@ function AgreementPage({
   eyebrow,
   title,
   facts,
+  ownerLabel,
   badges,
-  stats,
-  outstandingLabel,
-  outstanding,
+  remaining,
   paid,
   total,
   partial,
@@ -326,50 +319,51 @@ function AgreementPage({
     { value: "details", label: "Details" },
     ...(layerId != null ? [{ value: "form" as const, label: "Open form" }] : []),
   ];
-  const percent = total > 0 ? Math.min(100, Math.round((paid / total) * 100)) : 0;
-
   return (
-    <div data-testid={testId} className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[10px] border border-border bg-card shadow-e2">
-      <header className="flex shrink-0 flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-border bg-gradient-to-b from-secondary/70 to-card px-4 pt-3 pb-2.5">
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="rounded-[4px] bg-foreground/[0.07] px-1.5 py-px text-[10px] font-bold tracking-[0.08em] text-muted-foreground uppercase">{eyebrow}</span>
-            <h1 className="min-w-0 truncate font-heading text-base leading-tight font-bold tracking-tight text-foreground">{title}</h1>
-            {badges.map((b) => (
-              <ClayBadge key={b.label} tone={b.tone} className="rounded-[4px] px-1.5 py-px text-[10.5px] font-semibold">
-                {b.label}
-              </ClayBadge>
-            ))}
+    <div data-testid={testId} className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
+      <header className={cn("shrink-0 border-b border-border px-3 py-2.5 sm:px-4", showLayer && "hidden")}>
+        <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-4 gap-y-2">
+          <div className="flex min-w-0 flex-1 basis-52 flex-col gap-0.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <h1 className="min-w-0 font-heading text-base leading-tight font-bold tracking-tight break-words text-foreground">{title}</h1>
+              <span className="rounded bg-secondary px-1.5 py-px text-[11px] font-semibold text-muted-foreground">{eyebrow}</span>
+              {ownerLabel && (
+                <span className="inline-flex max-w-full items-center gap-1 rounded border border-border bg-secondary px-1.5 py-0.5 text-xs font-semibold text-foreground" data-testid="agreement-owner">
+                  <UserRound className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+                  <span className="min-w-0 wrap-anywhere">{ownerLabel}</span>
+                </span>
+              )}
+              {badges.map((b) => (
+                <ClayBadge key={b.label} tone={b.tone} className="rounded-[4px] px-1.5 py-px text-[10.5px] font-semibold">
+                  {b.label}
+                </ClayBadge>
+              ))}
+            </div>
+            {!showLayer && <p className="text-xs break-words text-muted-foreground">{facts}</p>}
           </div>
-          <p className="truncate text-xs text-muted-foreground">{facts}</p>
+          {!showLayer && <FooterLayout.Provider value="page">{footer}</FooterLayout.Provider>}
         </div>
-        {/* Payment awareness: read-only, fed by the open Record Payment dialog; empty (but reserved) otherwise. */}
-        <PaymentAwareness className="min-w-[11rem] flex-1 basis-0 self-center" upcoming={nextPayment} progressPercent={total > 0 ? (paid / total) * 100 : 0} />
-        <FooterLayout.Provider value="page">{footer}</FooterLayout.Provider>
-      </header>
-
-      <div className="grid shrink-0 grid-cols-[minmax(9rem,1.3fr)_repeat(auto-fit,minmax(6.5rem,1fr))] divide-x divide-border border-b border-border bg-card" aria-label="Summary">
-        <div className="flex min-w-0 flex-col justify-center gap-0.5 px-4 py-2">
-          <span className="text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{outstandingLabel}</span>
-          <AmountDisplay amount={outstanding} size="md" className="text-[22px]" />
-        </div>
-        {stats.map((st) => (
-          <div key={st.label} className="flex min-w-0 flex-col justify-center gap-0.5 px-3 py-2">
-            <span className="truncate text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">{st.label}</span>
-            <span className={cn("truncate text-[13px] font-semibold tabular-nums", st.tone === "expense" ? "text-expense" : st.tone === "success" ? "text-success" : "text-foreground")}>{st.value}</span>
-          </div>
-        ))}
-        {total > 0 && (
-          <div className="flex min-w-0 flex-col justify-center gap-1 px-3 py-2">
-            <span className="flex items-baseline justify-between gap-1 text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">
-              Progress <span className="text-xs tracking-normal text-foreground normal-case tabular-nums">{percent}%</span>
-            </span>
-            <InstallmentProgress paid={paid} total={total} partial={partial} />
+        {!showLayer && (
+          <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border pt-2" aria-label="Summary">
+            {nextPayment && (
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <Money exact amount={nextPayment.amount} className="text-lg text-foreground" />
+                <span className={cn("text-xs font-medium", nextPayment.overdue ? "text-expense" : "text-muted-foreground")}>
+                  #{nextPayment.sequenceNumber} · {nextPayment.overdue ? "Overdue" : "Due"} {formatDueDate(nextPayment.dueDate)}
+                </span>
+              </div>
+            )}
+            <div className="flex min-w-0 items-baseline gap-1.5 text-xs">
+              <span className="text-muted-foreground">Total remaining</span>
+              <Money exact amount={remaining} className="text-sm text-foreground" />
+            </div>
+            {total > 0 && <InstallmentProgress paid={paid} total={total} partial={partial} className="min-w-32 flex-1 max-w-56 gap-1" />}
           </div>
         )}
-      </div>
+        <PaymentAwareness confirmationOnly />
+      </header>
 
-      <div role="tablist" aria-label="Sections" className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border bg-secondary/40 px-2">
+      <div role="tablist" aria-label="Sections" className="flex shrink-0 flex-wrap items-center gap-x-1 border-b border-border bg-secondary/35 px-1.5 sm:px-2">
         {tabs.map(({ value, label, count }) => {
           const active = value === (showLayer ? "form" : tab);
           return (
@@ -377,6 +371,7 @@ function AgreementPage({
               key={value}
               type="button"
               role="tab"
+              aria-label={label}
               aria-selected={active}
               onClick={() => {
                 if (value === "form") setParkedLayer(null);
@@ -386,13 +381,18 @@ function AgreementPage({
                 }
               }}
               className={cn(
-                "relative inline-flex h-9 shrink-0 items-center gap-1.5 px-2.5 text-[12.5px] whitespace-nowrap outline-none transition-colors duration-150 focus-visible:rounded-[6px] focus-visible:ring-2 focus-visible:ring-ring",
+                "relative inline-flex h-9 shrink-0 items-center gap-1 px-1 text-xs whitespace-nowrap outline-none focus-visible:rounded-md focus-visible:ring-2 focus-visible:ring-ring sm:px-2.5",
                 active ? "font-semibold text-foreground" : "font-medium text-muted-foreground hover:text-foreground",
-                value === "form" && "ml-1 rounded-t-[6px] bg-primary/15 px-3 text-foreground",
+                value === "form" && "rounded-t-md bg-primary/15 text-foreground sm:ml-1 sm:px-3",
               )}
             >
-              {label}
-              {count != null && <span className={cn("grid h-[18px] min-w-[18px] place-items-center rounded-full px-1 text-[10.5px] tabular-nums", active ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground")}>{count}</span>}
+              {value === "history" || value === "form" ? (
+                <>
+                  <span className="sm:hidden">{value === "history" ? "History" : "Form"}</span>
+                  <span className="hidden sm:inline">{label}</span>
+                </>
+              ) : label}
+              {count != null && <span className={cn("hidden h-[18px] min-w-[18px] place-items-center rounded-full px-1 text-[10.5px] tabular-nums sm:grid", active ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground")}>{count}</span>}
               <span aria-hidden className={cn("absolute inset-x-2 bottom-0 h-0.5 rounded-full transition-opacity duration-150", active ? "bg-foreground opacity-100" : "opacity-0")} />
             </button>
           );
@@ -430,7 +430,7 @@ export function AgreementFooter({ note, money, manage }: { note?: string; money:
     return (
       <div className="flex min-w-0 flex-col items-end gap-1.5" data-testid="agreement-actions">
         {note && <p className="text-xs text-muted-foreground">{note}</p>}
-        <div className="flex flex-wrap items-center justify-end gap-1.5 [&_button]:h-8 [&_button]:rounded-[6px] [&_button]:px-2.5 [&_button]:text-xs">{money}</div>
+        <div className="flex flex-wrap items-center justify-end gap-1.5 [&_button]:h-9 [&_button]:rounded-[6px] [&_button]:px-2.5 [&_button]:text-xs">{money}</div>
         <div className="flex flex-wrap items-center justify-end gap-0.5 [&_button]:h-7">{manage}</div>
       </div>
     );

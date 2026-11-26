@@ -22,8 +22,8 @@ async function openPay(page) {
   await h.go(page, "/loans-installments");
   await page.getByText(EMI).first().click();
   await page.getByRole("button", { name: "Record Payment" }).click();
-  const dlg = page.getByRole("dialog", { name: /Pay EMI/ });
-  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
+  const dlg = page.locator("[data-stack-layer]");
+  await dlg.getByText(/TO PAY LENDER|Pay the lender/i).first().waitFor();
   return dlg;
 }
 const paidList = async () => (await f.scheduleState("emi", EMI)).map((i) => i.amountPaid);
@@ -46,15 +46,12 @@ scenario("card-emi-pay-and-reverse", "Card EMI: pay ₹3,000 (double-click) → 
   chk("exactly one EMI transaction of ₹3,000, on the card account (persisted)", txs.length === 1 && txs[0].amount === 3000 && txs[0].accountId === card.id, txs.map((t) => `${t.amount}@${t.accountId}`).join(","));
   chk("installment #1 amountPaid = ₹3,000, nothing else (persisted)", JSON.stringify(await paidList()) === JSON.stringify([3000, 0, 0, 0]), JSON.stringify(await paidList()));
 
-  await h.showSchedule(page);
-  await page.getByRole("button", { name: /Installment 1.*(edit or mark unpaid|view payment)/ }).click();
-  const det = page.getByRole("dialog", { name: /Recorded payment/ });
-  await det.waitFor();
+  const det = await h.openRecordedPayment(page, 1);
   const charged = (((await f.flat(det)).match(/Charged to \| ([^|]*)/) ?? [])[1] ?? "?").trim();
   await h.shot(page, "card-emi-details");
   chk("details: 'Charged to' names the card (••9090)", /••9090/.test(charged), charged);
   await det.getByRole("button", { name: "Mark as unpaid" }).click();
-  const confirm = page.getByRole("dialog").last();
+  const confirm = h.paySurface(page);
   await confirm.getByText("This installment goes back to unpaid").waitFor();
   await confirm.getByRole("button", { name: "Mark as unpaid" }).evaluate((b) => { b.click(); b.click(); });
   await page.waitForTimeout(4500);
@@ -70,8 +67,8 @@ scenario("card-emi-stale-two-tabs", "Card EMI: A pays #1, B's stale dialog is re
   await tabB.goto(`${BASE_URL}/loans-installments`, { waitUntil: "domcontentloaded" });
   await tabB.getByText(EMI).first().click();
   await tabB.getByRole("button", { name: "Record Payment" }).click();
-  const dlgB = tabB.getByRole("dialog", { name: /Pay EMI/ });
-  await dlgB.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
+  const dlgB = tabB.locator("[data-stack-layer]");
+  await dlgB.getByText(/TO PAY LENDER|Pay the lender/i).first().waitFor();
 
   await page.bringToFront();
   const dlgA = await openPay(page);
@@ -96,8 +93,8 @@ scenario("card-emi-stale-two-tabs", "Card EMI: A pays #1, B's stale dialog is re
   await tabB.reload({ waitUntil: "domcontentloaded" });
   await tabB.getByText(EMI).first().click();
   await tabB.getByRole("button", { name: "Record Payment" }).click();
-  const dlgB2 = tabB.getByRole("dialog", { name: /Pay EMI/ });
-  await dlgB2.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
+  const dlgB2 = tabB.locator("[data-stack-layer]");
+  await dlgB2.getByText(/TO PAY LENDER|Pay the lender/i).first().waitFor();
   const shown = await f.flat(dlgB2);
   await dlgB2.getByRole("button", { name: PAY3000 }).click();
   await dlgB2.waitFor({ state: "hidden", timeout: 25000 });
@@ -132,14 +129,11 @@ scenario("card-emi-bank-funded", "Card EMI paid from savings: the dialog offers 
   chk("the card is untouched — no statement charge (persisted)", f.close2(await cardBal(), card0), `${card0} -> ${await cardBal()}`);
   chk("exactly one EMI transaction of ₹3,000, on the bank account (persisted)", txs.length === 1 && txs[0].amount === 3000 && txs[0].accountId === bankAcc.id, txs.map((t) => `${t.amount}@${t.accountId}`).join(","));
   chk("installment #1 amountPaid = ₹3,000 (persisted)", JSON.stringify(await paidList()) === JSON.stringify([3000, 0, 0, 0]), JSON.stringify(await paidList()));
-  await h.showSchedule(page);
-  await page.getByRole("button", { name: /Installment 1.*(edit or mark unpaid|view payment)/ }).click();
-  const det = page.getByRole("dialog", { name: /Recorded payment/ });
-  await det.waitFor();
+  const det = await h.openRecordedPayment(page, 1);
   const charged = (((await f.flat(det)).match(/Paid from \| ([^|]*)/) ?? [])[1] ?? "?").trim();
   chk("details: 'Paid from' names QA Bank, not the card", /QA Bank/.test(charged) && !/••9090/.test(charged), charged);
   await det.getByRole("button", { name: "Mark as unpaid" }).click();
-  const confirm = page.getByRole("dialog").last();
+  const confirm = h.paySurface(page);
   await confirm.getByText("This installment goes back to unpaid").waitFor();
   await confirm.getByRole("button", { name: "Mark as unpaid" }).evaluate((b) => { b.click(); b.click(); });
   await page.waitForTimeout(4500);
@@ -158,20 +152,17 @@ async function openAPay(page, name) {
   await h.go(page, "/loans-installments");
   await page.getByText(name).first().click();
   await page.getByRole("button", { name: "Record Payment" }).click();
-  const dlg = page.getByRole("dialog", { name: /Pay EMI/ });
-  await dlg.getByText(/TO PAY LENDER|Lender installment balance/i).waitFor();
+  const dlg = page.locator("[data-stack-layer]");
+  await dlg.getByText(/TO PAY LENDER|Pay the lender/i).first().waitFor();
   return dlg;
 }
 async function openDetails(page) {
-  await h.showSchedule(page);
-  await page.getByRole("button", { name: /Installment 1.*(edit or mark unpaid|view payment)/ }).click();
-  const det = page.getByRole("dialog", { name: /Recorded payment/ });
-  await det.waitFor();
+  const det = await h.openRecordedPayment(page, 1);
   return det;
 }
 async function unpay(page, det) {
   await det.getByRole("button", { name: "Mark as unpaid" }).click();
-  const confirm = page.getByRole("dialog").last();
+  const confirm = h.paySurface(page);
   await confirm.getByText("This installment goes back to unpaid").waitFor();
   const text = await f.flat(confirm);
   await confirm.getByRole("button", { name: "Mark as unpaid" }).evaluate((b) => { b.click(); b.click(); });

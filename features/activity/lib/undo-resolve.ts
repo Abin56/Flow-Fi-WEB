@@ -14,6 +14,7 @@ import { lenderActionForReceipt, receiptsPairedWithPayment } from "@/features/lo
 import { groupRecordedPayments, type RecordedPaymentAction } from "@/features/loans/lib/recorded-payments";
 import { createBillOccurrenceRepository, createPaymentRepository } from "@/features/bills/lib/bill-occurrence-factory";
 import { splitExpenseDetailFor } from "@/lib/engines/history-builder";
+import { preparePairedReceiptRevert, type PairedReceiptRevert } from "@/lib/repositories/paired-receipt-revert";
 import { paymentImpact, type PaymentImpact } from "@/lib/engines/person-payment-impact";
 import { purposeCashOf } from "@/lib/engines/purpose-funds";
 import { FirestoreCollections } from "@/lib/firestore/collections";
@@ -312,12 +313,63 @@ export interface ExecuteDeps {
     overflowPaymentId: string | null;
     overflowInstallmentId: string | null;
     reversalIdempotencyKey: string;
+    pairedReceipts?: PairedReceiptRevert;
   }) => Promise<{ alreadyReversed: boolean; scheduleRestorationSkippedReason: string | null }>;
-  reverseEmiPayment: (emi: Emi, params: { original: { paymentIds: string[]; installmentIds: string[] } }) => Promise<{ alreadyReversed: boolean }>;
+  reverseEmiPayment: (emi: Emi, params: { original: { paymentIds: string[]; installmentIds: string[] }; pairedReceipts?: PairedReceiptRevert }) => Promise<{ alreadyReversed: boolean }>;
   cancelBillPayment: (params: { billId: string; paymentId: string }) => Promise<{ alreadyReversed: boolean }>;
 }
 
 export type ExecuteResult = { outcome: "undone" | "alreadyUndone"; warning: string | null };
+
+type PairedHandler = Extract<UndoHandler, { kind: "reversePaired" }>;
+
+/** What a paired undo has left on each side, read from stored records. */
+async function pairedState(handler: PairedHandler, deps: ExecuteDeps): Promise<{ lenderLive: boolean; receiptsLive: number }> {
+  const lender = handler.lender;
+  const owner = lender.kind === "reverseLoanPayment" ? await createLoanRepository(deps.uid).getByKey(lender.loanId) : await createEmiRepository(deps.uid).getByKey(lender.emiId);
+  if (owner == null) throw new Error(`This ${lender.kind === "reverseLoanPayment" ? "loan" : "EMI"} no longer exists — nothing was changed.`);
+  const installmentRepository = createInstallmentRepositoryFor(deps.uid, owner.scheduleId);
+  let lenderLive = false;
+  for (let i = 0; i < lender.refs.paymentIds.length; i++) {
+    const payment = await createInstallmentPaymentRepositoryFor(deps.uid, owner.scheduleId, lender.refs.installmentIds[i], installmentRepository).getByKey(lender.refs.paymentIds[i]);
+    if (payment != null && payment.deletedAt == null) lenderLive = true;
+  }
+  let receiptsLive = 0;
+  for (const r of handler.receipts) {
+    const entries = await createLedgerRepositoryFor(deps.uid, r.personId, createPersonRepository(deps.uid)).getByPaymentId(r.paymentId);
+    if (entries.some((e) => e.deletedAt == null)) receiptsLive++;
+  }
+  return { lenderLive, receiptsLive };
+}
+
+/**
+ * A lender payment and its People receipts, undone in ONE Firestore transaction (the lender module's own reversal,
+ * with People's own revert inside it) — so one side can't be left without the other. A refusal, a failed write or a
+ * lost connection leaves both exactly as they were.
+ */
+async function undoPaired(handler: PairedHandler, deps: ExecuteDeps): Promise<ExecuteResult> {
+  try {
+    const pairedReceipts = await preparePairedReceiptRevert(deps.uid, handler.receipts);
+    const result = await executeUndo(
+      handler.lender,
+      {
+        ...deps,
+        reverseLoanPayment: (params) => deps.reverseLoanPayment({ ...params, pairedReceipts }),
+        reverseEmiPayment: (emi, params) => deps.reverseEmiPayment(emi, { ...params, pairedReceipts }),
+      },
+      handler.lenderAnchorId,
+    );
+    if (result.outcome === "undone") return result;
+    const state = await pairedState(handler, deps);
+    if (state.receiptsLive === 0) return result;
+    throw new Error("The lender payment was already undone on its own. The people's received payments are still recorded — revert them in People if they shouldn't be.");
+  } catch (error) {
+    // "Already undone" only when BOTH sides are verifiably gone (a repeat click, or another tab finished first).
+    const state = await pairedState(handler, deps).catch(() => null);
+    if (state != null && !state.lenderLive && state.receiptsLive === 0) return { outcome: "alreadyUndone", warning: null };
+    throw error;
+  }
+}
 
 export async function executeUndo(handler: UndoHandler, deps: ExecuteDeps, anchorId: string): Promise<ExecuteResult> {
   const transactionRepository = createTransactionRepository(deps.uid, createAccountRepository(deps.uid));
@@ -344,31 +396,16 @@ export async function executeUndo(handler: UndoHandler, deps: ExecuteDeps, ancho
         const result = await deps.reverseEmiPayment(emi, { original: handler.refs });
         return { outcome: result.alreadyReversed ? "alreadyUndone" : "undone", warning: null };
       }
-      case "reversePaired": {
-        // The lender payment first: its own checks are the likeliest to refuse, and a refusal leaves everything untouched.
-        // The receipts were verified revertible when the decision was made; each is still the People module's own whole-payment revert.
-        const lender = await executeUndo(handler.lender, deps, handler.lenderAnchorId);
-        const failed: string[] = [];
-        for (const r of handler.receipts) {
-          try {
-            const person = await createPersonRepository(deps.uid).getByKey(r.personId);
-            if (person == null) throw new Error("This person no longer exists.");
-            await deps.revertPersonPayment(person, r.paymentId);
-          } catch (e) {
-            failed.push(e instanceof Error ? e.message : String(e));
-          }
-        }
-        if (failed.length > 0) {
-          throw new Error(`The lender payment was undone, but ${failed.length === 1 ? "a person's received payment" : `${failed.length} received payments`} could not be removed (${failed[0]}). Remove ${failed.length === 1 ? "it" : "them"} from People.`);
-        }
-        return lender;
-      }
+      case "reversePaired":
+        return await undoPaired(handler, deps);
       case "reverseBillPayment": {
         const result = await deps.cancelBillPayment({ billId: handler.billId, paymentId: handler.paymentId });
         return { outcome: result.alreadyReversed ? "alreadyUndone" : "undone", warning: null };
       }
     }
   } catch (error) {
+    // The paired undo decides this itself, from both sides.
+    if (handler.kind === "reversePaired") throw error;
     // A repeat / second-tab undo can surface as an error from a handler that refuses an already-reverted record
     // (e.g. People "already reverted"). Nothing was written either way; report it as already undone only when the
     // anchor is verifiably gone.

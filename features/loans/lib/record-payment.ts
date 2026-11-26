@@ -46,6 +46,12 @@ export function payableInstallments(installments: Installment[]): Installment[] 
     .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
 }
 
+/** How many installments due up to today still owe money — "Pay several" lists exactly these. */
+export function pastDueCount(installments: readonly Installment[], today: Date = new Date()): number {
+  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999).getTime();
+  return installments.filter((i) => i.deletedAt == null && !i.isSkipped && remainingAmount(i) > 0.005 && i.dueDate.getTime() <= end).length;
+}
+
 /** Some installment due up to today still owes money — what "Record past payments" can record. */
 export function hasPastDue(installments: readonly Installment[], today: Date = new Date()): boolean {
   const end = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999).getTime();

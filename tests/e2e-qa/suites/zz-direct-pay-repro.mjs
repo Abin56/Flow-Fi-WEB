@@ -40,6 +40,7 @@ scenario("zz-direct-pay-single", "Pay directly (single installment, shared loan)
   await payment.getByRole("radio", { name: "QA Priya paid directly" }).click();
   await page.waitForTimeout(500);
   await h.pickPaidDate(page, payment);
+  await payment.getByRole("radiogroup", { name: "QA Priya", exact: true }).getByRole("radio", { name: "Cover full share" }).click();
   await payment.getByLabel("Account for this record").click();
   await page.getByRole("option").first().click();
   await page.waitForTimeout(500);
@@ -139,10 +140,12 @@ scenario("zz-direct-pay-several", "Pay several, both installments paid by the pe
     if (!(await box.isChecked())) await box.check();
   }
   await payment.getByRole("button", { name: /^Review 2 installments/ }).click();
-  for (const i of installments) await payment.getByRole("radiogroup", { name: `Who paid #${i.sequenceNumber}`, exact: true }).getByRole("radio", { name: "Paid by someone else" }).click();
+  for (const i of installments) await payment.getByRole("radiogroup", { name: `Who paid #${i.sequenceNumber}`, exact: true }).getByRole("radio", { name: "Person paid lender" }).click();
   await page.waitForTimeout(400);
+  chk("several 0a. nobody is preselected: Confirm is off until the payer is named", await payment.getByRole("button", { name: /^Record 2 installments/ }).isDisabled());
+  for (const i of installments) await payment.getByRole("radiogroup", { name: `QA Priya #${i.sequenceNumber}`, exact: true }).getByRole("radio", { name: "Cover full share" }).click();
   await h.shot(page, "zz-several-1-review");
-  const account = payment.getByRole("combobox").first();
+  const account = payment.getByRole("combobox", { name: "Paid from account" }); // the lender record's account; it fills the People one too
   if (await account.isVisible().catch(() => false)) { await account.click(); await page.getByRole("option").first().click(); }
   const confirm = payment.getByRole("button", { name: /^Record 2 installments/ });
   console.log("SEVERAL CONFIRM:", await confirm.innerText().catch(() => "(none)"), await confirm.isEnabled().catch(() => null));

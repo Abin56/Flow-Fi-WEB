@@ -8,9 +8,10 @@
 
 import { useMemo } from "react";
 import { usePeopleCycleStatements } from "@/features/people/hooks/use-person-cycle-statement";
+import { usePeopleLedgerEntries } from "@/features/people/hooks/use-people-data";
 import { usePeoplePaymentDeferrals } from "@/features/people/hooks/use-payment-deferrals";
-import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
-import { agreementPeople, type AgreementPerson } from "@/features/loans/lib/agreement-people";
+import { useGlobalCycle } from "@/features/month-cycle/hooks/use-global-cycle";
+import { agreementPeople, agreementPeopleDueThrough, type AgreementPerson } from "@/features/loans/lib/agreement-people";
 import type { OwnershipSource } from "@/lib/engines/debt-ownership";
 import { installmentBreakdown, type InstallmentParticipant } from "@/lib/engines/installment-participants";
 import type { StatementCycle } from "@/lib/engines/person-cycle-statement";
@@ -20,9 +21,10 @@ const ALL_TIME: StatementCycle = { start: new Date(1970, 0, 1), end: new Date(22
 
 export function useAgreementPeople(
   target: { sourceKind: "emi" | "loan"; source: OwnershipSource; installments: readonly Installment[] } | null,
-): { people: AgreementPerson[]; isLoading: boolean } {
+): { people: AgreementPerson[]; cycleBalance: { remaining: number; label: string } | null } {
   const { statementsByPersonId, isLoading } = usePeopleCycleStatements(ALL_TIME);
-  const startDay = useMonthCycleStartDay();
+  const { entriesByPersonId } = usePeopleLedgerEntries();
+  const { cycleRange, label, now, monthCycleStartDay: startDay } = useGlobalCycle();
   const sourceKind = target?.sourceKind;
   const source = target?.source;
   const installments = target?.installments;
@@ -39,10 +41,15 @@ export function useAgreementPeople(
   }, [sourceKind, source, installments, statementsByPersonId]);
   const personIdsKey = [...new Set([...participantsById.values()].flat().map((p) => p.personId))].sort().join(",");
   const personIds = useMemo(() => (personIdsKey ? personIdsKey.split(",") : []), [personIdsKey]);
-  const { deferralsByPerson } = usePeoplePaymentDeferrals(personIds);
+  const { deferralsByPerson, isLoading: deferralsLoading } = usePeoplePaymentDeferrals(personIds);
   const people = useMemo(
-    () => (installments ? agreementPeople({ participantsByInstallment: participantsById, installments, deferralsByPerson, startDay }) : []),
-    [participantsById, installments, deferralsByPerson, startDay],
+    () => (installments ? agreementPeople({ participantsByInstallment: participantsById, installments, deferralsByPerson, startDay, entriesByPersonId }) : []),
+    [participantsById, installments, deferralsByPerson, startDay, entriesByPersonId],
   );
-  return { people, isLoading: target != null && isLoading };
+  const cycleBalance = useMemo(() => (
+    people.length > 0 && !isLoading && !deferralsLoading
+      ? { remaining: agreementPeopleDueThrough(people, statementsByPersonId, cycleRange, now), label }
+      : null
+  ), [people, statementsByPersonId, cycleRange, label, now, isLoading, deferralsLoading]);
+  return { people, cycleBalance };
 }

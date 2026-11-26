@@ -7,10 +7,12 @@ import type { Transaction } from "@/lib/models/transaction";
 import { cardBillsForCard, cardStatementPaymentScope } from "@/lib/engines/card-cycle-bills";
 import { computeCreditCardStandings } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import {
+  cardBillBreakdowns,
   cardDueStatus,
   cardOutstandingSplit,
   classifyCardTransaction,
   financedPurchasesFrom,
+  financedTransferTargetsFrom,
   summarizeCardActivity,
   usageBreakdown,
 } from "./card-usage-breakdown";
@@ -140,6 +142,36 @@ describe("cardOutstandingSplit — always adds up to the card's own outstanding"
     expect(scope.cardOutstanding).toBe(7000);
     expect(s).toEqual({ loanEmiCharges: 0, purchases: 1000, unsplit: 6000 });
     expect(sum(s)).toBe(scope.cardOutstanding);
+    const bills = cardBillsForCard(CARD, rows, [], NOW);
+    expect(cardBillBreakdowns({ bills, cardTransactions: rows, financed: NONE }).get(scope.current!.id)).toEqual({
+      billed: { purchases: 5000, loanEmi: 3000 }, remaining: null,
+    });
+  });
+
+  it("does not claim a linked EMI transfer paid its own purchase when it was absorbed by an older bill", () => {
+    const purchase = txn(3000, d(9, 25));
+    const emi = { id: "phone", linkedCreditCardId: CARD.id, purchaseTransactionId: purchase.id };
+    const financed = financedPurchasesFrom([emi], [], [CARD]);
+    const older = txn(2000, d(8, 25));
+    const mixedRetail = txn(1000, d(9, 26));
+    const principal = { ...payment(1500, d(10, 3)), emiId: emi.id, installmentPaymentId: "payment-1" };
+    const rows = [older, purchase, mixedRetail, principal];
+    const bills = cardBillsForCard(CARD, rows, [], NOW);
+    const parts = cardBillBreakdowns({ bills, cardTransactions: rows, financed, transferTargets: financedTransferTargetsFrom([emi], [], financed) });
+    expect(parts.get(bills[0].id)?.remaining).toEqual({ purchases: 500, loanEmi: 0 });
+    expect(parts.get(bills[1].id)?.remaining).toEqual({ purchases: 1000, loanEmi: 3000 });
+  });
+
+  it("keeps the excess over a linked purchase unattributed on a mixed bill", () => {
+    const purchase = txn(1000, d(9, 25));
+    const emi = { id: "phone", linkedCreditCardId: CARD.id, purchaseTransactionId: purchase.id };
+    const financed = financedPurchasesFrom([emi], [], [CARD]);
+    const rows = [purchase, txn(2500, d(9, 25), { emiId: "other" }), txn(1000, d(9, 26)),
+      { ...payment(1600, d(10, 3)), emiId: emi.id, installmentPaymentId: "bank-payment" }];
+    const bills = cardBillsForCard(CARD, rows, [], NOW);
+    const parts = cardBillBreakdowns({ bills, cardTransactions: rows, financed, transferTargets: financedTransferTargetsFrom([emi], [], financed) });
+    expect(bills[0].remaining).toBe(2900);
+    expect(parts.get(bills[0].id)?.remaining).toBeNull();
   });
 
   it("a partly paid single-kind bill is still unambiguous", () => {

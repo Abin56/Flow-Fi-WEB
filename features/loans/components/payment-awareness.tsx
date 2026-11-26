@@ -78,7 +78,7 @@ const DONE_HOLD_MS = 4500;
  * The header's centre slot. Always occupies its place (so nothing around it moves); empty while there is nothing to say.
  * Priority: confirmation → the payment being set up → the next installment.
  */
-export function PaymentAwareness({ className, upcoming, progressPercent }: { className?: string; upcoming?: UpcomingPayment | null; progressPercent?: number }) {
+export function PaymentAwareness({ className, upcoming, progressPercent, confirmationOnly }: { className?: string; upcoming?: UpcomingPayment | null; progressPercent?: number; confirmationOnly?: boolean }) {
   const model = useContext(ModelContext);
   const [done, setDone] = useState<string | null>(null);
   // The existing workflow reporting success is the only way in. A retry / reopened dialog (success false) clears it.
@@ -89,6 +89,14 @@ export function PaymentAwareness({ className, upcoming, progressPercent }: { cla
     const t = window.setTimeout(() => setDone(null), DONE_HOLD_MS);
     return () => window.clearTimeout(t);
   }, [done]);
+
+  if (confirmationOnly) {
+    return done && (
+      <p role="status" data-testid="payment-awareness" data-awareness="done" className="mt-2 text-xs font-semibold text-success">
+        {done}
+      </p>
+    );
+  }
 
   const shown: Shown | null = done != null ? "done" : model ? model.kind : upcoming ? "upcoming" : null;
 
@@ -141,15 +149,39 @@ function Dot({ icon: Icon, tone, pop, dashed, arrive }: { icon: LucideIcon; tone
   );
 }
 
-/** The path between two nodes: dashes march toward the destination and a coin makes the trip four times (~7s), then it rests. */
-function Track({ tone }: { tone: Tone }) {
+/** Show one coin movement for a confirmed transfer. */
+function Track({ tone, once = false }: { tone: Tone; once?: boolean }) {
   const color = tone === "good" ? "text-success/70" : "text-foreground/35";
   return (
     <span aria-hidden className="relative mx-1.5 h-4 w-12 shrink-0 @md:w-24">
-      <span className={cn("absolute inset-x-0 top-1/2 h-px -translate-y-1/2 [background:repeating-linear-gradient(90deg,currentColor_0_5px,transparent_5px_8px)] [animation:pa-march_700ms_linear_10_both]", color)} />
-      <span className="absolute top-1/2 grid size-4 place-items-center rounded-full bg-primary text-[9px] leading-none font-bold text-primary-foreground shadow-e2 ring-4 ring-primary/20 [animation:pa-coin_1.8s_ease-in-out_4_both]">₹</span>
+      <span className={cn("absolute inset-x-0 top-1/2 h-px -translate-y-1/2 [background:repeating-linear-gradient(90deg,currentColor_0_5px,transparent_5px_8px)]", color)} />
+      {once && <span className="absolute top-1/2 grid size-4 place-items-center rounded-full bg-primary text-[9px] leading-none font-bold text-primary-foreground [animation:pa-coin_650ms_ease-in-out_1_both] motion-reduce:hidden">₹</span>}
     </span>
   );
+}
+
+export function PaymentSavedMotion({ kind, label }: { kind: "pay" | "receive" | "card" | "recorded"; label: string }) {
+  return (
+    <div role="status" className="flex flex-wrap items-center gap-2 text-xs font-semibold text-foreground">
+      <span aria-hidden className="flex shrink-0 items-center">
+        {kind === "pay" || kind === "receive" ? (
+          <>
+            <Dot icon={kind === "pay" ? Landmark : UserRound} tone="good" />
+            <Track tone="good" once />
+            <Dot icon={kind === "pay" ? Wallet : Landmark} tone="good" />
+          </>
+        ) : <Dot icon={kind === "card" ? CreditCard : CheckCircle2} tone="good" />}
+      </span>
+      {label}
+    </div>
+  );
+}
+
+export function PaymentSuccessFeedback({ input }: { input: AwarenessInput }) {
+  const model = deriveAwareness(input);
+  if (!model?.success) return null;
+  const kind = model.kind === "pay" || model.kind === "receive" || model.kind === "card" ? model.kind : "recorded";
+  return <PaymentSavedMotion kind={kind} label={kind === "card" ? `Card EMI recorded on ${model.from}` : model.doneText} />;
 }
 
 /** The pill's interior: a small graphic on the left, a two-line label on the right (fits the ~260px the header leaves). */

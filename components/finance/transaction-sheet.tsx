@@ -473,7 +473,7 @@ export function TransactionSheet({
           className,
         )}
       >
-        <header className="relative shrink-0 bg-surface-hero pt-[env(safe-area-inset-top)] text-hero-foreground" data-testid="sheet-header">
+        <header inert={layer?.open} className="relative shrink-0 bg-surface-hero pt-[env(safe-area-inset-top)] text-hero-foreground" data-testid="sheet-header">
           {/* A soft lime glow from the top-left corner gives the near-black surface some depth. */}
           <div aria-hidden className="pointer-events-none absolute inset-0 bg-[radial-gradient(70%_180%_at_0%_0%,oklch(0.34_0.07_126/0.5),transparent_62%)]" />
           <div className={cn(CONTENT, "relative flex items-start gap-3", compact ? "px-4 py-2.5 sm:px-5" : "gap-4 px-4 py-4 sm:px-6 lg:px-8")}>
@@ -497,17 +497,17 @@ export function TransactionSheet({
         </header>
 
         {/* Hidden, not unmounted, while peeking — values, open sections and split rows all survive. */}
-        <div className={cn("min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-secondary/55 scrollbar-gutter-stable", peek && "hidden")} data-testid="sheet-body">
+        <div inert={layer?.open} className={cn("min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-secondary/55 scrollbar-gutter-stable", peek && "hidden")} data-testid="sheet-body">
           <div className={CONTENT}>{children}</div>
         </div>
 
         {footer && (
-          <div className="shrink-0 border-t border-border bg-card">
+          <div inert={layer?.open} className="shrink-0 border-t border-border bg-card">
             <div className={CONTENT}>{footer}</div>
           </div>
         )}
 
-        <div className={cn("flex shrink-0 justify-center bg-card pb-2 pt-0.5", compact && "hidden")}>
+        <div inert={layer?.open} className={cn("flex shrink-0 justify-center bg-card pb-2 pt-0.5", compact && "hidden")}>
           <button
             type="button"
             aria-label={peek ? "Show details" : "Collapse sheet"}

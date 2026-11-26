@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { agreementPeople } from "@/features/loans/lib/agreement-people";
+import { agreementPeople, agreementPeopleDueThrough } from "@/features/loans/lib/agreement-people";
 import type { InstallmentParticipant, ShareLine } from "@/lib/engines/installment-participants";
+import { cycleContaining, type StatementRow } from "@/lib/engines/person-cycle-statement";
 import type { Installment } from "@/lib/models/payment-schedule";
 
 const D = new Date(2026, 9, 5);
@@ -46,10 +47,33 @@ describe("agreementPeople — statuses of each person's share", () => {
     const c = amma.lines.find((l) => l.installmentId === "c")!;
     expect(c).toMatchObject({ status: "postponed", remaining: 1500 });
     expect(c.postponedDate?.getFullYear()).toBe(2099);
+    expect(c.expectedCycle?.start).toEqual(new Date(2099, 0, 1));
     expect(amma.lines.find((l) => l.installmentId === "d")!.status).toBe("pending");
   });
 
   it("nobody shares it → no people", () => {
     expect(agreementPeople({ participantsByInstallment: new Map(), installments, deferralsByPerson: {}, startDay: 1 })).toEqual([]);
+  });
+
+  it("reads linked settlements through the cycle end, carries unpaid shares and honours live postponements", () => {
+    const today = new Date(2026, 10, 20);
+    const current = cycleContaining(today, 17);
+    const next = cycleContaining(new Date(2026, 11, 20), 17);
+    const previous = cycleContaining(new Date(2026, 10, 16), 17);
+    const [amma] = agreementPeople({ participantsByInstallment: map, installments, deferralsByPerson: {}, startDay: 17 });
+    amma.lines[2] = { ...amma.lines[2], status: "postponed", expectedCycle: next, postponedDate: new Date(2027, 0, 10) };
+    amma.lines[3] = { ...amma.lines[3], dueDate: new Date(2026, 11, 24) };
+    const settled = (key: string, date: Date, left: number) => ({
+      date, settlesKey: key, settles: { title: "", originalAmount: 1500, remainingAfter: left },
+    }) as StatementRow;
+    const statements = { amma: { rows: [
+      settled("emi-inst:b", new Date(2026, 10, 16), 1000),
+      settled("emi-inst:a", new Date(2026, 10, 20), 0),
+      { date: new Date(2026, 10, 21), amount: 4000 } as StatementRow, // general balance only
+      settled("emi-inst:b", new Date(2026, 11, 17), 200),
+    ] } };
+    expect(agreementPeopleDueThrough([amma], statements, previous, today)).toBe(4000);
+    expect(agreementPeopleDueThrough([amma], statements, current, today)).toBe(1000);
+    expect(agreementPeopleDueThrough([amma], statements, next, today)).toBe(3200);
   });
 });

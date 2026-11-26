@@ -26,7 +26,7 @@ export function GlobalCycleNavigator() {
   return (
     <div
       className={cn(
-        "flex h-8.5 shrink-0 items-center rounded-full border bg-muted/70 pr-0.5 pl-1 transition-colors",
+        "flex h-8.5 min-w-0 items-center rounded-full border bg-muted/70 pr-0.5 pl-1 transition-colors",
         cycle.isCurrentCycle ? "border-border" : "border-primary-accent-text/50 bg-primary/10",
       )}
     >
@@ -50,14 +50,15 @@ export function GlobalCycleNavigator() {
           <button
             type="button"
             aria-label="Choose cycle"
+            title={cycle.label}
             className="flex h-7 min-w-0 items-center gap-1.5 overflow-hidden rounded-full px-2 text-xs font-semibold whitespace-nowrap text-foreground transition-colors hover:bg-background sm:text-[13px]"
           >
-            <CalendarRange className="size-3 shrink-0 text-muted-foreground" />
+            <CalendarRange className="size-3 shrink-0 text-muted-foreground max-[380px]:hidden" />
             <span
               aria-hidden
               className={cn("size-1.5 shrink-0 rounded-full", cycle.isCurrentCycle ? "bg-primary-accent-text" : "bg-muted-foreground/50")}
             />
-            <span className="relative grid">
+            <span className="relative grid min-w-0">
               <AnimatePresence mode="popLayout" initial={false}>
                 <motion.span
                   key={cycle.cycleRange.start.getTime()}

@@ -7,6 +7,8 @@ import { useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import { InstallmentPeoplePanel } from "@/features/loans/components/installment-people-panel";
 import { useInstallmentBreakdown } from "@/features/loans/hooks/use-installment-breakdown";
+import { usePeopleLedgerEntries } from "@/features/people/hooks/use-people-data";
+import { isDirectLenderPayment, LENDER_DIRECT_NOTE_PREFIX, strandedDirectCredits } from "@/lib/engines/direct-lender-settlement";
 import { ClayBadge } from "@/components/clay/clay-badge";
 import { useOperation } from "@/components/feedback/operation-progress";
 import { useEmiActions, type EmiRow } from "@/features/emi/hooks/use-emi-data";
@@ -145,6 +147,7 @@ export function RecordedPaymentDialog({
   // People shares of the last installment this payment touched — read-only. The lender side (this payment) and the
   // People side (what each person paid me) are separate: recording or editing this payment never changes a share.
   const peopleInstallmentId = action?.portions[action.portions.length - 1]?.installmentId ?? null;
+  const { entriesByPersonId } = usePeopleLedgerEntries();
   const pathname = usePathname();
   const { breakdown: peopleBreakdown, isLoading: peopleLoading } = useInstallmentBreakdown(
     target && peopleInstallmentId && !(target.source === "loan" && target.row.direction === "given")
@@ -265,6 +268,21 @@ export function RecordedPaymentDialog({
     }
   }
   if (!error && loanRow && accountId === "") error = "Choose the account this payment was made from.";
+  // A payment a person made straight to the lender: People receipts recorded against it stay when it changes, so no
+  // correction or "Mark as unpaid" should leave them crediting more than is still recorded as paid directly.
+  const directEntries = Object.values(entriesByPersonId).flat();
+  const activeDocs = target.all.filter((a) => !a.reversed).flatMap((a) => a.portions);
+  const strandedBy = (removed: typeof target.all, added: Parameters<typeof strandedDirectCredits>[0]["payments"] = []) => {
+    const gone = removed.flatMap((a) => a.portions).filter(isDirectLenderPayment);
+    if (gone.length === 0) return [];
+    const affected = [...new Set(gone.map((p) => p.installmentId))].map((id) => ({
+      installmentId: id,
+      sequenceNumber: installments.find((i) => i.id === id)?.sequenceNumber ?? 0,
+      obligationKey: `${loanRow ? "loan" : "emi"}-inst:${id}`,
+    }));
+    const removedIds = new Set(removed.flatMap((a) => a.portions.map((p) => p.id)));
+    return strandedDirectCredits({ installments: affected, payments: [...activeDocs.filter((p) => !removedIds.has(p.id)), ...added], entries: directEntries });
+  };
 
   const unchanged =
     amountValid &&
@@ -275,6 +293,21 @@ export function RecordedPaymentDialog({
     (!emiRow || (gst || "0") === String(originalBreakdowns[0]?.gst ?? 0)) &&
     (!emiRow || (processingFee || "0") === String(originalBreakdowns[0]?.processingFee ?? 0)) &&
     (!loanRow || loanExtraAtDue === 0 || (treatment === "reducePrincipal") === (action.overflow != null));
+
+  if (!error && !unchanged && amountValid) {
+    // What the correction would leave on each installment — still a direct payment only while the note says so.
+    const next = emiRow
+      ? (() => {
+          const preview = planEmiPaymentEdit({ installments: active, original: action.portions, amount: amountNum, date: paymentDate, idempotencyKey: "preview" });
+          return preview.ok ? preview.allocation.portions.map((p) => ({ installmentId: p.installment.id, amount: p.amount })) : [];
+        })()
+      : (loanCore?.payments ?? []).map((p) => ({ installmentId: p.installmentId, amount: p.amount }));
+    const kept = note.trim().startsWith(LENDER_DIRECT_NOTE_PREFIX) ? next.map((p) => ({ ...p, recordedEarlier: earlierMark, note: note.trim(), deletedAt: null })) : [];
+    const [stranded] = strandedBy([action], kept);
+    if (stranded) {
+      error = `People credit ${formatCurrencyExact(stranded.credited)} as paid directly to the lender for #${stranded.sequenceNumber}, but this would leave ${formatCurrencyExact(stranded.lenderDirect)} recorded as paid that way. Revert that receipt in People first${kept.length === 0 ? `, or keep the note starting “${LENDER_DIRECT_NOTE_PREFIX.trim()}”` : ""}.`;
+    }
+  }
 
   const twoUnit = loanRow != null && (action.overflow != null || (loanCore?.overflow ?? 0) > 0) && !originalReversed;
   const reamortizes = (loanCore?.overflow ?? 0) > 0;
@@ -508,6 +541,7 @@ export function RecordedPaymentDialog({
         title="Mark as unpaid?"
         description={`Later payments are undone first — ${chain.length} in all`}
         onConfirm={markUnpaidChain}
+        confirmDisabled={strandedBy(chain).length > 0}
         confirmLabel={saving ? "Marking as unpaid…" : chainDone.size > 0 ? `Continue (${chain.length - chainDone.size} left)` : `Mark ${chain.length} payments as unpaid`}
         cancelLabel={chainDone.size > 0 ? "Close" : "Keep payments"}
         loading={saving}
@@ -537,6 +571,7 @@ export function RecordedPaymentDialog({
             ))}
           </ol>
         </section>
+        <StrandedPeopleNote rows={strandedBy(chain)} />
         <section className="flex flex-col gap-1.5 text-xs text-muted-foreground">
           <p className="flex items-start gap-2">
             <Info className="mt-px size-3.5 shrink-0" strokeWidth={1.75} />
@@ -578,6 +613,7 @@ export function RecordedPaymentDialog({
         title="Mark as unpaid?"
         description={`${formatCurrencyExact(action.amount)} recorded ${action.date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`}
         onConfirm={markUnpaid}
+        confirmDisabled={strandedBy([action]).length > 0}
         confirmLabel={saving ? "Marking as unpaid…" : "Mark as unpaid"}
         cancelLabel="Keep payment"
         loading={saving}
@@ -585,6 +621,7 @@ export function RecordedPaymentDialog({
         refreshing={refreshing}
         operation={operation.snapshot}
       >
+        <StrandedPeopleNote rows={strandedBy([action])} />
         <section className="flex flex-col gap-2">
           <span className="text-xs font-medium text-foreground">
             {unpaidAgain.length === 1 ? "This installment goes back to unpaid" : "These installments go back to unpaid"}
@@ -917,5 +954,20 @@ export function RecordedPaymentDialog({
                 : "The original payment is replaced and the schedule is recalculated."}
       </p>
     </LoanEmiFormDialog>
+  );
+}
+
+/** "Mark as unpaid" is blocked while People are credited against this payment: their receipts are never removed with it. */
+function StrandedPeopleNote({ rows }: { rows: ReturnType<typeof strandedDirectCredits> }) {
+  if (rows.length === 0) return null;
+  return (
+    <div role="alert" className="flex flex-col gap-1 rounded-[6px] border border-warning/50 bg-warning/10 px-3 py-2 text-xs text-foreground" data-testid="unpay-people-stay">
+      {rows.map((r) => (
+        <p key={r.sequenceNumber}>
+          <span className="font-semibold">{formatCurrencyExact(r.credited)} is recorded in People</span> as paid directly to the lender for installment {r.sequenceNumber}.
+        </p>
+      ))}
+      <p>Revert that payment in People first. This can&apos;t be marked unpaid while it&apos;s there.</p>
+    </div>
   );
 }

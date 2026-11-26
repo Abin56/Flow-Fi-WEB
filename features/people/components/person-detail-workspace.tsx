@@ -18,7 +18,8 @@ import { planBulkDeletion, planEntryDeletion, type BulkDeletionPlan, type EntryD
 import type { AdvanceApplication, LedgerEntry, Person } from "@/lib/models/person";
 import type { LedgerSourceKind } from "@/lib/models/person";
 import type { PersonViewRow } from "@/features/people/hooks/use-people-data";
-import { usePersonCycleStatement } from "@/features/people/hooks/use-person-cycle-statement";
+import { usePeopleCycleStatements, usePersonCycleStatement } from "@/features/people/hooks/use-person-cycle-statement";
+import { projectDueNow } from "@/lib/engines/person-due-now";
 import { useSelectedCycle } from "@/features/people/hooks/use-selected-cycle";
 import { usePersonPendingSplitParticipants } from "@/features/people/hooks/use-person-pending-split-participants";
 import { usePersonUpcomingEmi } from "@/features/people/hooks/use-person-upcoming-emi";
@@ -63,6 +64,9 @@ import { SplitExpenseMode } from "@/features/people/components/workspace/split-e
 import { TransactionLedgerMode, type LedgerView } from "@/features/people/components/workspace/transaction-ledger-mode";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
+
+/** Every item a person has, whenever it is dated — what the read-only due-now split looks through. */
+const WHOLE_HISTORY = { start: new Date(1970, 0, 1), end: new Date(2200, 0, 1) };
 
 const toInputDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
@@ -533,6 +537,13 @@ export function PersonDetailWorkspace({
   // Payment deferrals — expected-collection timing on open rows; status derived from each row's live remaining.
   const { deferrals } = usePersonPaymentDeferrals(person.id);
   const deferralActions = usePaymentDeferralActions();
+  // Total / postponed / due now for the selected cycle — read-only, and nothing at all for a closed cycle.
+  const { statementsByPersonId: everyCycle } = usePeopleCycleStatements(WHOLE_HISTORY);
+  const wholeHistoryRows = everyCycle[person.id]?.rows;
+  const duePosition = useMemo(
+    () => (statement && wholeHistoryRows ? projectDueNow({ total: statement.toReceive, rows: wholeHistoryRows, deferrals, cycle: statement.cycle, startDay: cycleStartDay }) : null),
+    [statement, wholeHistoryRows, deferrals, cycleStartDay],
+  );
   const deferralContext = useMemo<DeferralContextValue>(() => {
     const remainingByKey = new Map(allRows.map((r) => [r.key, r.remaining ?? 0]));
     const byKey = new Map<string, DeferralView>();
@@ -873,14 +884,26 @@ export function PersonDetailWorkspace({
     emiCount > 0 || upcomingEmi.length > 0 ? (
       <EmiHeaderColumn
         summaries={linkedEmiSummaries}
-        owedNow={b.emiReceivableOpen}
+        includedInReceivable={b.emiReceivableOpen}
+        totalReceivable={b.toReceive}
         fallbackLater={{ label: upcomingEmi.length > 0 ? `${upcomingEmi.length} upcoming` : "Upcoming", amount: upcomingTotal }}
       />
     ) : undefined;
 
   const highlights = (
     <>
-      <DeferralCycleSummary cycle={cycle} />
+      {duePosition && duePosition.postponed > 0.005 && (
+        <span
+          data-testid="person-due-now"
+          title="Due now = what they owe at this cycle's end, less what is postponed to a later cycle. The total does not change."
+          className="inline-flex items-center gap-1 rounded-full bg-warning/12 px-2 py-0.5 text-[11.5px] font-medium text-foreground tabular-nums ring-1 ring-warning/30"
+        >
+          Due now <span className="font-bold">{formatCurrency(duePosition.dueNow)}</span>
+          <span aria-hidden>·</span> Postponed <span className="font-bold">{formatCurrency(duePosition.postponed)}</span>
+          <span aria-hidden>·</span> Total to receive <span className="font-bold">{formatCurrency(duePosition.total)}</span>
+        </span>
+      )}
+      <DeferralCycleSummary cycle={cycle} hideLater={duePosition != null && duePosition.postponed > 0.005} />
       {upcomingEmi.length > 0 && (
         <span
           title={upcomingEmi.slice(0, 5).map((e) => `${e.label} · ${formatCurrency(e.amount)}`).join("\n")}

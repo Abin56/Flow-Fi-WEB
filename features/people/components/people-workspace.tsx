@@ -42,6 +42,8 @@ import {
   usePeopleRows,
 } from "@/features/people/hooks/use-people-data";
 import { usePeopleCycleStatements } from "@/features/people/hooks/use-person-cycle-statement";
+import { useAllPersonDeferrals } from "@/features/people/hooks/use-payment-deferrals";
+import { projectDueNow } from "@/lib/engines/person-due-now";
 import { usePeople } from "@/hooks/use-people";
 import type { StatementCycle } from "@/lib/engines/person-cycle-statement";
 import { useSelectedCycle } from "@/features/people/hooks/use-selected-cycle";
@@ -50,6 +52,9 @@ import { sortPeople, type PeopleSort } from "@/features/people/lib/people-sort";
 import type { LedgerEntry, Person } from "@/lib/models/person";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
+
+/** Every item a person has, whenever it is dated — what the read-only due-now split looks through. */
+const WHOLE_HISTORY = { start: new Date(1970, 0, 1), end: new Date(2200, 0, 1) };
 
 /** Receivables first, then payables, largest first; settled people last, by name. */
 function byPosition(a: PeopleLedgerRow, b: PeopleLedgerRow): number {
@@ -267,6 +272,21 @@ export function PeopleWorkspace() {
     [rawPeople, statementsByPersonId, lastActiveById],
   );
 
+  // How the "Receive" total splits into due now / postponed — read-only; nothing for a closed cycle.
+  const { deferralsByPerson } = useAllPersonDeferrals();
+  const { statementsByPersonId: everyCycle } = usePeopleCycleStatements(WHOLE_HISTORY);
+  const receiveDue = useMemo(() => {
+    let dueNow = 0;
+    let postponed = 0;
+    for (const r of ledgerRows) {
+      const projection = projectDueNow({ total: r.statement.toReceive, rows: everyCycle[r.id]?.rows ?? [], deferrals: deferralsByPerson[r.id] ?? [], cycle: r.statement.cycle, startDay });
+      if (!projection) return null;
+      dueNow += projection.dueNow;
+      postponed += projection.postponed;
+    }
+    return postponed > 0.005 ? { dueNow, postponed } : null;
+  }, [ledgerRows, everyCycle, deferralsByPerson, startDay]);
+
   const searched = useMemo(() => {
     const q = search.trim().toLowerCase();
     return q
@@ -303,7 +323,7 @@ export function PeopleWorkspace() {
           open={deletingPerson != null}
           onOpenChange={(open) => !open && setDeletingPerson(null)}
           title={`Delete ${deletingPerson?.name ?? "person"}?`}
-          description="This permanently removes this person and their entire ledger history. This action cannot be undone."
+          description="This permanently removes this person and any reverted records. It's only allowed when they have no balance, live entries, transactions or linked EMIs. This action cannot be undone."
           variant="destructive"
           confirmLabel="Delete"
           onConfirm={handleDeletePerson}
@@ -480,7 +500,7 @@ export function PeopleWorkspace() {
           key={cycle.start.getTime()}
           className="flex animate-in flex-col gap-4 fade-in duration-200"
         >
-          <PeopleCycleOverview rows={ledgerRows} />
+          <PeopleCycleOverview rows={ledgerRows} receiveDue={receiveDue} />
           <MonthlyPaymentSummary rows={ledgerRows} cycle={cycle} onOpenPerson={openPerson} />
           <UpcomingCycleAlert onOpen={openPerson} />
           <PeopleAttention onOpenPerson={openPerson} />

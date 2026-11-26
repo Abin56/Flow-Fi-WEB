@@ -96,6 +96,26 @@ export function financedPurchasesFrom(
   return map;
 }
 
+/** Which original card purchase an agreement's own bank-to-card principal transfer identifies. */
+export function financedTransferTargetsFrom(
+  emis: readonly (FinancedEmiLike & { id: string })[],
+  loans: readonly (FinancedLoanLike & { id: string })[],
+  financed: FinancedPurchases,
+): ReadonlyMap<string, string> {
+  const targets = new Map<string, string>();
+  for (const e of emis) {
+    if (e.deletedAt == null && e.linkedCreditCardId && e.purchaseTransactionId && financed.has(e.purchaseTransactionId)) {
+      targets.set(`emi:${e.id}`, e.purchaseTransactionId);
+    }
+  }
+  for (const l of loans) {
+    if (l.deletedAt == null && l.direction === "taken" && l.fundingSource === "creditCard" && l.linkedCreditCardId && l.purchaseTransactionId && financed.has(l.purchaseTransactionId)) {
+      targets.set(`loan:${l.id}`, l.purchaseTransactionId);
+    }
+  }
+  return targets;
+}
+
 function isLoanEmiLinked(t: Transaction, financed: FinancedPurchases): boolean {
   if (t.emiId != null || t.loanId != null || t.lenderChargeId != null) return true;
   const cardAccountId = financed.get(t.id);
@@ -123,24 +143,67 @@ export interface CardUsageSplit {
 
 const ZERO_SPLIT: CardUsageSplit = { loanEmiCharges: 0, purchases: 0, unsplit: 0 };
 
-/**
- * One PHYSICAL card's own outstanding, split by what its unpaid bills are made of. Always sums to
- * `ownOutstanding` exactly: anything that cannot be attributed lands in `unsplit`.
- */
-export function cardOutstandingSplit(input: {
+type BillAmounts = { purchases: number; loanEmi: number };
+
+export interface CardBillBreakdown {
+  billed: BillAmounts;
+  /** Null when payments or credits cannot be attributed to the two parts. */
+  remaining: BillAmounts | null;
+}
+
+interface BillBreakdownInput {
   bills: readonly CardBill[];
   cardTransactions: readonly Transaction[];
   financed: FinancedPurchases;
-  ownOutstanding: number;
-}): CardUsageSplit {
-  const { bills, cardTransactions, financed, ownOutstanding } = input;
-  if (ownOutstanding <= EPS) return { ...ZERO_SPLIT };
+  transferTargets?: ReadonlyMap<string, string>;
+}
 
-  // Assign each statement row to its bill exactly as `cardBillsForCard` does: a stored statement covering
-  // its day first, else the derived window that contains it.
+/** Replays only the transfer-funded part of the canonical oldest-first settlement for display. */
+function linkedEmiPaid({ bills, cardTransactions, financed, transferTargets }: BillBreakdownInput): Map<string, number> {
+  const paid = new Map<string, number>();
+  if (!transferTargets?.size) return paid;
+  // A linked principal transfer only identifies an EMI portion if it reached the bill holding its purchase.
+  const billByPurchase = new Map<string, string>();
+  for (const bill of bills) {
+    for (const id of bill.chargeIds) {
+      if (financed.has(id) && !billByPurchase.has(id)) billByPurchase.set(id, bill.id);
+    }
+  }
+  const purchaseLeft = new Map(cardTransactions.filter((t) => billByPurchase.has(t.id)).map((t) => [t.id, t.amount]));
+  const slots = bills.filter((b) => (b.paidByTransfers ?? 0) > EPS)
+    .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())
+    .map((bill) => ({ id: bill.id, left: bill.paidByTransfers! }));
+  const payments = cardTransactions.filter((t) => t.deletedAt == null && isCardBillPaymentLeg(t) && t.amount > EPS)
+    .sort((a, b) => a.dateTime.getTime() - b.dateTime.getTime() || a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
+  let index = 0;
+  for (const payment of payments) {
+    const agreement = payment.emiId ? `emi:${payment.emiId}` : payment.loanId ? `loan:${payment.loanId}` : null;
+    const purchase = agreement && payment.installmentPaymentId ? transferTargets.get(agreement) : undefined;
+    const relatedBill = purchase && financed.get(purchase) === payment.accountId ? billByPurchase.get(purchase) : undefined;
+    let left = payment.amount;
+    while (left > EPS && index < slots.length) {
+      const slot = slots[index];
+      const applied = Math.min(left, slot.left);
+      if (purchase && slot.id === relatedBill) {
+        const outstanding = purchaseLeft.get(purchase) ?? 0;
+        const matched = Math.min(applied, Math.max(0, outstanding));
+        paid.set(slot.id, (paid.get(slot.id) ?? 0) + matched);
+        purchaseLeft.set(purchase, round2(outstanding - matched));
+      }
+      left = round2(left - applied);
+      slot.left = round2(slot.left - applied);
+      if (slot.left <= EPS) index++;
+    }
+  }
+  return paid;
+}
+
+/** Splits a statement's existing charges. All remaining amounts reconcile to that statement's authoritative balance. */
+export function cardBillBreakdowns(input: BillBreakdownInput): ReadonlyMap<string, CardBillBreakdown> {
+  const { bills, cardTransactions, financed } = input;
   const stored = bills.filter((b) => b.isMaterialized);
   const derived = bills.filter((b) => !b.isMaterialized);
-  const net = new Map<string, { loanEmi: number; purchases: number }>();
+  const net = new Map<string, BillAmounts>();
   for (const t of cardTransactions) {
     const { bucket } = classifyCardTransaction(t, financed);
     if (bucket == null) continue;
@@ -151,20 +214,51 @@ export function cardOutstandingSplit(input: {
     net.set(bill.id, entry);
   }
 
+  const emiPaid = linkedEmiPaid(input);
+  const result = new Map<string, CardBillBreakdown>();
+  for (const bill of bills) {
+    const netBill = net.get(bill.id);
+    if (!netBill) continue;
+    const billed = { loanEmi: round2(netBill.loanEmi), purchases: round2(netBill.purchases) };
+    if (billed.loanEmi < 0 || billed.purchases < 0 || Math.abs(round2(billed.loanEmi + billed.purchases - bill.totalAmount)) > EPS) continue;
+
+    let remaining: BillAmounts | null = null;
+    if (bill.remaining <= EPS) remaining = { loanEmi: 0, purchases: 0 };
+    else if (bill.amountPaid <= EPS) remaining = billed;
+    else if (billed.loanEmi <= EPS) remaining = { loanEmi: 0, purchases: bill.remaining };
+    else if (billed.purchases <= EPS) remaining = { loanEmi: bill.remaining, purchases: 0 };
+    else {
+      const linked = round2(Math.min(emiPaid.get(bill.id) ?? 0, billed.loanEmi, bill.amountPaid));
+      const loanEmi = round2(billed.loanEmi - linked);
+      if (loanEmi <= EPS || bill.amountPaid - linked <= EPS) {
+        remaining = { loanEmi, purchases: round2(bill.remaining - loanEmi) };
+      }
+    }
+    result.set(bill.id, { billed, remaining });
+  }
+  return result;
+}
+
+/**
+ * One PHYSICAL card's own outstanding, split by what its unpaid bills are made of. Always sums to
+ * `ownOutstanding` exactly: anything that cannot be attributed lands in `unsplit`.
+ */
+export function cardOutstandingSplit(input: BillBreakdownInput & {
+  ownOutstanding: number;
+  breakdowns?: ReadonlyMap<string, CardBillBreakdown>;
+}): CardUsageSplit {
+  const { bills, ownOutstanding, breakdowns = cardBillBreakdowns(input) } = input;
+  if (ownOutstanding <= EPS) return { ...ZERO_SPLIT };
+
   let loanEmiCharges = 0;
   let purchases = 0;
   let unsplit = 0;
   for (const b of bills) {
     if (b.remaining <= EPS) continue;
-    const n = net.get(b.id) ?? { loanEmi: 0, purchases: 0 };
-    const emiZero = Math.abs(n.loanEmi) < EPS;
-    const purZero = Math.abs(n.purchases) < EPS;
-    if (emiZero && n.purchases > 0) purchases += b.remaining;
-    else if (purZero && n.loanEmi > 0) loanEmiCharges += b.remaining;
-    else if (n.loanEmi > 0 && n.purchases > 0 && b.amountPaid <= EPS && Math.abs(n.loanEmi + n.purchases - b.remaining) < 0.01) {
-      // Untouched bill: its remaining IS its charges, so each part is known exactly.
-      loanEmiCharges += n.loanEmi;
-      purchases += n.purchases;
+    const remaining = breakdowns.get(b.id)?.remaining;
+    if (remaining) {
+      loanEmiCharges += remaining.loanEmi;
+      purchases += remaining.purchases;
     } else unsplit += b.remaining;
   }
 

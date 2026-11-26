@@ -30,15 +30,17 @@ vi.mock("@/hooks/use-credit-cards", () => ({ useCreditCards: () => ({ data: env.
 vi.mock("react", async (importOriginal) => ({ ...(await importOriginal<typeof import("react")>()), useMemo: (factory: () => unknown) => factory() }));
 
 import { useEmiActions as emiActionsFor } from "@/features/emi/hooks/use-emi-data";
+import { cardBillBreakdowns, financedPurchasesFrom, financedTransferTargetsFrom } from "@/features/credit-cards/lib/card-usage-breakdown";
 import { cardEmiCase, planCardEmiLegs } from "@/features/emi/lib/emi-card-funding";
 import { isInsufficientFundsError } from "@/lib/engines/payment-funding";
 import { RECORDED_EARLIER_PEOPLE_ACK } from "@/lib/engines/recorded-earlier";
 import { StaleInstallmentError } from "@/lib/engines/stale-installment";
 import { creditCardStanding, emiPurchaseRepresentedOnCard, sharedCreditLimitStanding, type UtilizationEmi } from "@/lib/engines/credit-utilization";
+import { cardBillsForCard, cardStatementPaymentScope } from "@/lib/engines/card-cycle-bills";
 import type { Emi } from "@/lib/models/emi";
 import type { Installment } from "@/lib/models/payment-schedule";
 import { LoanPaymentTransactionRestrictedError } from "@/lib/repositories/transaction-repository";
-import { createAccountRepository, createEmiPaymentBreakdownRepository, createInstallmentRepositoryFor, createTransactionRepository } from "@/lib/repositories/repository-factory";
+import { createAccountRepository, createCreditCardRepository, createEmiPaymentBreakdownRepository, createInstallmentRepositoryFor, createTransactionRepository } from "@/lib/repositories/repository-factory";
 
 let testEnv: RulesTestEnvironment;
 beforeAll(async () => {
@@ -139,8 +141,65 @@ const pay = async (w: World, key: string, amount: number, index: number, mode: "
   });
 };
 const refs = (key: string, ids: string[]) => ({ paymentIds: ids.map((_, i) => `emi_${key}_p${i}`), installmentIds: ids });
-const billPay = (w: World, amount: number, key: string) =>
-  txns().createTransferPairAtomic({ amount, dateTime: new Date(2026, 1, 20), sourceAccountId: w.bank.id, destinationAccountId: w.card.id, categoryId: "transfer", description: "Card bill", idempotencyKey: key });
+const billPay = (w: World, amount: number, key: string, statementId?: string) =>
+  txns().createTransferPairAtomic({ amount, dateTime: new Date(2026, 1, 20), sourceAccountId: w.bank.id, destinationAccountId: w.card.id, categoryId: "transfer", description: "Card bill", idempotencyKey: key, cardStatementIntent: statementId ? { statementId } : null });
+
+async function mixedStatement(w: World, date: Date) {
+  const card = await createCreditCardRepository(UID).createCard({ accountId: w.card.id, statementDay: 16, paymentDueDay: 5, creditLimit: LIMIT });
+  const emi = { ...w.emi, linkedCreditCardId: card.id };
+  await txns().createTransaction({ type: "expense", amount: 2000, dateTime: date, accountId: w.card.id, categoryId: "shopping" });
+  async function read() {
+    const now = new Date(2026, 1, 20);
+    const cardTransactions = (await txns().getAll()).filter((t) => t.accountId === w.card.id);
+    const bills = cardBillsForCard(card, cardTransactions, [], now);
+    const scope = cardStatementPaymentScope(bills, now);
+    const financed = financedPurchasesFrom([emi], [], [card]);
+    return {
+      scope,
+      parts: cardBillBreakdowns({ bills, cardTransactions, financed, transferTargets: financedTransferTargetsFrom([emi], [], financed) }),
+      bills,
+    };
+  }
+  return { read };
+}
+
+it("separates billed card EMI and retail, then pays both in a single retriable transfer", async () => {
+  const w = await world(false);
+  const { read } = await mixedStatement(w, new Date(2026, 1, 3));
+  await pay(w, "mixed-on-card", 3075.37, 0, "card");
+  const { scope, parts } = await read();
+  expect(scope.statementDue).toBe(5075.37);
+  expect(parts.get(scope.current!.id)?.remaining).toEqual({ purchases: 2000, loanEmi: 3075.37 });
+  expect(fig(await state(w))).toEqual({ bank: 50_000, liab: 5075.37, locked: 9044.63, available: 85_880 });
+  await billPay(w, scope.statementDue, "mixed-bill-payment", scope.current!.id);
+  await billPay(w, scope.statementDue, "mixed-bill-payment", scope.current!.id);
+  const after = await read();
+  expect(after.scope.statementDue).toBe(0);
+  expect(after.parts.get(scope.current!.id)?.remaining).toEqual({ purchases: 0, loanEmi: 0 });
+  expect(fig(await state(w))).toEqual({ bank: 44_924.63, liab: 0, locked: 9044.63, available: 90_955.37 });
+  expect((await installments(w.emi))[0].amountPaid).toBe(3075.37);
+}, 60_000);
+
+it("recognises principal paid from Loan & EMI and leaves only retail after the financed purchase is cleared", async () => {
+  const w = await world(true);
+  const { read } = await mixedStatement(w, new Date(2026, 0, 4));
+  const schedule = await installments(w.emi);
+  await pay(w, "case-a-retail-1", schedule[0].amountDue, 0, "bank");
+  const partial = await read();
+  expect(partial.parts.get(partial.scope.current!.id)?.remaining).toEqual({ purchases: 2000, loanEmi: 9044.63 });
+  for (const [index, inst] of schedule.entries()) {
+    if (index > 0) await pay(w, `case-a-retail-${index + 1}`, inst.amountDue, index, "bank");
+  }
+  const rest = await read();
+  expect(rest.scope.statementDue).toBe(2000);
+  expect(rest.parts.get(rest.scope.current!.id)).toEqual({
+    billed: { purchases: 2000, loanEmi: 12_000 }, remaining: { purchases: 2000, loanEmi: 0 },
+  });
+  const afterEmis = await state(w);
+  expect(fig(afterEmis)).toMatchObject({ liab: 2000, locked: 0, available: 98_000 });
+  await billPay(w, rest.scope.statementDue, "retail-remainder", rest.scope.current!.id);
+  expect(fig(await state(w))).toEqual({ bank: r2(afterEmis.bank - 2000), liab: 0, locked: 0, available: LIMIT });
+}, 60_000);
 
 describe("case detection (persisted records only)", () => {
   it("A only when the linked purchase is ACTIVE on the card; deleted / unlinked / other account → B", async () => {

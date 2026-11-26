@@ -70,16 +70,16 @@ const installmentsOf = async (scheduleId: string): Promise<Installment[]> =>
 const finding = (r: AuditReport, category: string) => r.findings.filter((f) => f.category === category);
 const row = (r: AuditReport, id: string) => r.accounts.find((a) => a.id === id)!;
 
-async function newEmi() {
+async function newEmi(shares: { personId: string | null; amount: number }[] | null = null) {
   return emiActions().createEmi({
     name: "Phone",
-    principalAmount: 12_000,
+    principalAmount: shares?.reduce((t, s) => t + s.amount, 0) ?? 12_000,
     startDate: START,
     installmentFrequency: "monthly",
     installmentCount: 4,
     interest: null,
     linkedCreditCardId: null,
-    ownershipShares: null,
+    ownershipShares: shares,
   });
 }
 
@@ -196,11 +196,11 @@ describe("Financial Audit — People receipts, historical and ordinary", () => {
     const accounts = createAccountRepository(UID);
     const bank = await accounts.createAccount({ name: "SBI", type: "bank", openingBalance: 50_000, colorValue: 0 });
     const people = createPersonRepository(UID);
-    // A repayment must settle a REAL installment (the write refuses one whose EMI does not exist).
-    const realEmi = await newEmi();
-    const KEY = `emi-inst:${(await installmentsOf(realEmi.scheduleId))[0].id}`;
     const sanju = await people.createPerson({ name: "SANJU", avatarColorValue: 0, openingBalance: 0 });
     const amma = await people.createPerson({ name: "AMMA", avatarColorValue: 0, openingBalance: 0 });
+    // A repayment must settle a REAL share of a REAL installment (the write refuses anything else).
+    const realEmi = await newEmi([{ personId: sanju.id, amount: 12_000 }, { personId: amma.id, amount: 4_000 }]);
+    const KEY = `emi-inst:${(await installmentsOf(realEmi.scheduleId))[0].id}`;
 
     await createPersonPaymentRepository(UID, sanju.id, "personal-loan").recordPayment((await people.getByKey(sanju.id))!, { ...receipt(KEY, 3_000, bank.id), recordedEarlier: true, idempotencyKey: "hist_s_i1" });
     await createPersonPaymentRepository(UID, amma.id, "personal-loan").recordPayment((await people.getByKey(amma.id))!, { ...receipt(KEY, 1_000, bank.id), idempotencyKey: "real_a_i1" });
@@ -216,10 +216,9 @@ describe("Financial Audit — People receipts, historical and ordinary", () => {
     const accounts = createAccountRepository(UID);
     const bank = await accounts.createAccount({ name: "SBI", type: "bank", openingBalance: 50_000, colorValue: 0 });
     const people = createPersonRepository(UID);
-    // A repayment must settle a REAL installment (the write refuses one whose EMI does not exist).
-    const realEmi = await newEmi();
-    const KEY = `emi-inst:${(await installmentsOf(realEmi.scheduleId))[0].id}`;
     const sanju = await people.createPerson({ name: "SANJU", avatarColorValue: 0, openingBalance: 0 });
+    const realEmi = await newEmi([{ personId: sanju.id, amount: 12_000 }]);
+    const KEY = `emi-inst:${(await installmentsOf(realEmi.scheduleId))[0].id}`;
     await createPersonPaymentRepository(UID, sanju.id, "personal-loan").recordPayment((await people.getByKey(sanju.id))!, { ...receipt(KEY, 3_000, bank.id), recordedEarlier: true, idempotencyKey: "hist_s_i1" });
 
     const legs = (await getDocs(collection(env.db!, "users", UID, "transactions"))).docs;

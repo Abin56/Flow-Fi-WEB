@@ -33,6 +33,8 @@ import {
   type LoanRow,
 } from "@/features/loans/hooks/use-loans-data";
 import { useAccounts } from "@/hooks/use-accounts";
+import { useCreditCards } from "@/hooks/use-credit-cards";
+import { chargeableOwnCardAccountId } from "@/features/loans/lib/loan-paying-accounts";
 import { friendlyLoanError } from "@/features/loans/lib/loan-live-state";
 import { toast } from "@/store/toast-store";
 
@@ -63,7 +65,9 @@ export function LoansWorkspace({
   const { rows: trashedRows } = useTrashedLoanRows();
   const actions = useLoanActions();
   const { data: accounts = [] } = useAccounts();
-  const { data: transactions = [] } = useTransactions();
+  const transactionsQuery = useTransactions();
+  const { data: transactions = [] } = transactionsQuery;
+  const { data: creditCards = [] } = useCreditCards();
   const originationUiFor = (loanId: string) =>
     loanOriginationUi(
       loanId,
@@ -109,7 +113,7 @@ export function LoansWorkspace({
     loanId: string;
     seq: number;
     installmentId?: string | null;
-    view?: "pay" | "past";
+    view?: "pay" | "past" | "payMany";
   } | null>(null);
   const [paymentSeq, setPaymentSeq] = useState(0);
   const paymentRow = useMemo(
@@ -394,6 +398,14 @@ export function LoansWorkspace({
               view: "past",
             });
           }}
+          onPaySeveral={(row) => {
+            setPaymentSeq((n) => n + 1);
+            setPayment({
+              loanId: row.loan.id,
+              seq: paymentSeq + 1,
+              view: "payMany",
+            });
+          }}
           onAdditionalDisbursement={(row) =>
             setAdjustment({ row, kind: "disbursement" })
           }
@@ -479,6 +491,7 @@ export function LoansWorkspace({
           }
           initialView={payment?.view}
           loanDetail={pageAgreementId != null}
+          ownCardAccountId={paymentRow ? chargeableOwnCardAccountId(paymentRow.loan, creditCards, transactionsQuery.data) : null}
           open={payment != null && paymentRow != null}
           onOpenChange={(open) => !open && setPayment(null)}
         />

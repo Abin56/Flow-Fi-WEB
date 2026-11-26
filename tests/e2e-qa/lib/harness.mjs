@@ -49,7 +49,8 @@ const INIT = () => {
   const scan = () => {
     const txt = document.body ? document.body.innerText : "";
     for (const k in pats) if (pats[k].test(txt)) mark(k);
-    const open = /TO PAY LENDER|TO RECEIVE|Edit payment|Mark as unpaid\?|Payment details|Pay EMI/i.test(txt);
+    // Open = a payment surface is mounted: the inline panel on the Loan / EMI page, or a popup. (Page buttons repeat the same words.)
+    const open = !!document.querySelector('[data-stack-layer], [role="dialog"]');
     if (open) {
       mark("dialogOpen");
       window.__wasOpen = true;
@@ -290,4 +291,17 @@ export async function showSchedule(page) {
   // Wait for it: in a freshly loaded tab the popup is not rendered yet when this is called.
   await tab.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
   if (await tab.isVisible().catch(() => false)) await tab.click();
+}
+
+/** The Loan / EMI payment surfaces: the inline panel on the agreement page, or a popup on top of it. */
+export const paySurface = (page, hasText) => page.locator('[data-stack-layer]:visible, [role="dialog"]:visible').filter(hasText ? { hasText } : {}).last();
+
+/** Opens a recorded payment from the schedule: select the installment's row, then its "Edit payment" / "Payment details". */
+export async function openRecordedPayment(page, seq) {
+  await showSchedule(page);
+  await page.locator(`[data-testid="installment-row-${seq}"]`).click();
+  await page.locator('[data-testid="installment-detail"]').getByRole("button", { name: /^(Edit payment|Payment details)$/ }).click();
+  const view = paySurface(page, /Recorded payment/i);
+  await view.waitFor();
+  return view;
 }

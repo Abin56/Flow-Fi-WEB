@@ -19,7 +19,9 @@ const repoRoot = path.resolve(here, "..", "..");
 const argv = process.argv.slice(2);
 const filter = argv.find((a) => !a.startsWith("-")) ?? "";
 /** --copy: run the app from a temporary copy of the checkout (use when you already have `next dev` running here). --copy=full also copies node_modules. */
-const copyMode = argv.find((a) => a === "--copy" || a === "--copy=full") ?? null;
+/** --manual: no scenarios — keep the emulators and the app running for hand testing. Always runs from a copy without .env files. */
+const manual = argv.includes("--manual");
+const copyMode = argv.find((a) => a === "--copy" || a === "--copy=full") ?? (manual ? "--copy" : null);
 const children = [];
 let tmpDir = null;
 
@@ -190,6 +192,17 @@ async function main() {
     await fetch(`${BASE_URL}${route}`, { signal: AbortSignal.timeout(240_000) }).catch(() => {});
   }
 
+  if (manual) {
+    console.log(`
+MANUAL TEST MODE — emulator only (project ${PROJECT_ID}). Nothing here reaches your live project.
+  1. Open ${BASE_URL}/dev/qa
+  2. Check the page says it is NOT blocked, then sign in as the QA user and reset the test fixtures.
+  3. Test at ${BASE_URL} only. Never use another port or your normal "npm run dev" for this.
+  The app is a snapshot: restart after code changes. Press Ctrl+C to stop; emulator data is discarded.`);
+    await new Promise((resolve) => app.child.on("exit", resolve));
+    return;
+  }
+
   // 3) Scenarios
   const core = await import(pathToFileURL(path.join(here, "lib", "core.mjs")).href);
   const harness = await import(pathToFileURL(path.join(here, "lib", "harness.mjs")).href);
@@ -224,6 +237,7 @@ ${app.output().slice(-2500)}`);
 
 process.on("SIGINT", () => {
   stopAll();
+  cleanupTmp(); // unlinks the node_modules junction first
   process.exit(130);
 });
 

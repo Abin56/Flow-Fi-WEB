@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { CreditCard, Landmark, Users } from "lucide-react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DebtCard, interestRateLabel, type DebtCardProps } from "@/features/loans/components/loan-emi-ui";
+import { agreementOwnerLabel, DebtCard, interestRateLabel, type DebtCardProps } from "@/features/loans/components/loan-emi-ui";
 
 const inDays = (n: number) => {
   const d = new Date();
@@ -66,6 +66,7 @@ describe("DebtCard — Loan & EMI list card (display only)", () => {
       ],
     }).textContent!;
     expect(text).toContain("Split between");
+    expect(text.indexOf("Sanju")).toBeLessThan(text.indexOf("Outstanding"));
     expect(text).toMatch(/Sanju₹1,50,000/);
     expect(text).toMatch(/Shan₹1,50,000/);
     expect(text).toMatch(/You₹2,00,000/);
@@ -97,6 +98,22 @@ describe("DebtCard — Loan & EMI list card (display only)", () => {
     fireEvent.keyDown(button, { key: "Enter" });
     fireEvent.keyDown(button, { key: " " });
     expect(onClick).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("agreementOwnerLabel", () => {
+  const names = new Map([["priya", "Priya"], ["ravi", "Ravi"]]);
+  const nameOf = (id: string) => names.get(id);
+
+  it("identifies the assignee of a legacy EMI without implying repayment", () => {
+    expect(agreementOwnerLabel({ beneficiaryPersonId: "priya", beneficiaryRepaysInstallments: false }, nameOf)).toBe("For Priya");
+    expect(agreementOwnerLabel({}, nameOf)).toBeNull();
+  });
+
+  it("uses confirmed installment ownership for a shared or mine EMI", () => {
+    const ownershipShares = [{ personId: null, amount: 500 }, { personId: "priya", amount: 250 }, { personId: "ravi", amount: 250 }];
+    expect(agreementOwnerLabel({ ownershipShares }, nameOf)).toBe("Shared with Priya and Ravi");
+    expect(agreementOwnerLabel({ ownershipShares: [ownershipShares[0]] }, nameOf)).toBe("For you");
   });
 });
 

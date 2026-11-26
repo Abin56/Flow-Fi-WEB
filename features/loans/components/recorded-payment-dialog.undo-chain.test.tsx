@@ -17,6 +17,8 @@ vi.mock("@/lib/firebase/client", () => ({ firebaseApp: {}, auth: {}, db: {}, sto
 vi.mock("@/features/emi/hooks/use-emi-data", () => ({ useEmiActions: () => ({ reversePayment: emiReverse }) }));
 vi.mock("@/features/loans/hooks/use-loans-data", () => ({ useLoanActions: () => ({ reversePayment: loanReverse }) }));
 vi.mock("@/features/emi/components/emi-card", () => ({ emiCardLabel: () => null }));
+let ledger: Record<string, unknown[]> = {};
+vi.mock("@/features/people/hooks/use-people-data", () => ({ usePeopleLedgerEntries: () => ({ entriesByPersonId: ledger, isLoading: false }) }));
 vi.mock("@tanstack/react-query", () => ({ useQueryClient: () => ({ invalidateQueries: vi.fn(async () => {}) }) }));
 // Not a shared agreement here — the read-only People section stays empty.
 vi.mock("@/features/loans/hooks/use-installment-breakdown", () => ({ useInstallmentBreakdown: () => ({ breakdown: null, isLoading: false }) }));
@@ -34,6 +36,7 @@ beforeAll(() => {
 });
 afterEach(cleanup);
 beforeEach(() => {
+  ledger = {};
   emiReverse.mockClear();
   loanReverse.mockClear();
 });
@@ -108,5 +111,61 @@ describe("older payment → Mark as unpaid together with the later ones", () => 
     // The failed one is retried with the SAME key (a reversal that did land is recognised, never repeated).
     expect(calls[1].reversalIdempotencyKey).toBe(calls[2].reversalIdempotencyKey);
     expect(new Set(calls.map((c) => c.reversalIdempotencyKey)).size).toBe(3);
+  });
+});
+
+describe("a payment a person made straight to the lender, with their People receipt recorded", () => {
+  const DIRECT_NOTE = "Paid directly by AMMA ₹1,000";
+  function directTarget(): RecordedPaymentTarget {
+    const payments = [{ ...pay(4, "emi"), note: DIRECT_NOTE, recordedEarlier: { dateKnown: true } }];
+    const all = groupRecordedPayments(payments, installments, "emi");
+    return {
+      source: "emi",
+      row: { emi: { id: "e", name: "Phone EMI", installmentCount: 12, isClosed: false }, installments, remainingBalance: 40000 } as never,
+      action: all[0],
+      all,
+      breakdowns: [],
+    };
+  }
+  const receipt = { obligationRef: "emi-inst:i4", amount: 1000, note: "Paid directly to lender — no money through my account", recordedEarlier: true, deletedAt: null };
+
+  it("Mark as unpaid is blocked while the People receipt stands, and says what to do", async () => {
+    const user = userEvent.setup();
+    ledger = { amma: [receipt] };
+    renderDialog(directTarget());
+    await user.click(screen.getByRole("button", { name: "Mark as unpaid" }));
+    expect(screen.getByTestId("unpay-people-stay").textContent).toContain("₹1,000 is recorded in People");
+    expect(screen.getByTestId("unpay-people-stay").textContent).toContain("Revert that payment in People first");
+    const confirm = screen.getByRole("button", { name: "Mark as unpaid" }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    await user.click(confirm);
+    expect(emiReverse).not.toHaveBeenCalled();
+  });
+
+  it("no warning without a receipt, or for an ordinary payment", async () => {
+    const user = userEvent.setup();
+    renderDialog(directTarget());
+    await user.click(screen.getByRole("button", { name: "Mark as unpaid" }));
+    expect(screen.queryByTestId("unpay-people-stay")).toBeNull();
+    cleanup();
+    ledger = { amma: [receipt] };
+    renderDialog(emiTarget(4));
+    await user.click(screen.getByRole("button", { name: "Mark as unpaid" }));
+    expect(screen.queryByTestId("unpay-people-stay")).toBeNull();
+  });
+
+  it("an edit can't lower the lender payment below what People credit against it", async () => {
+    const user = userEvent.setup();
+    ledger = { amma: [receipt] };
+    renderDialog(directTarget());
+    await user.click(screen.getByRole("button", { name: /^Edit( payment)?$/ }));
+    const amount = screen.getByRole("spinbutton", { name: /amount/i });
+    const refusal = () => screen.queryByText(/Revert that receipt in People first/);
+    await user.clear(amount);
+    await user.type(amount, "600");
+    expect(refusal()?.textContent).toContain("#4");
+    await user.clear(amount);
+    await user.type(amount, "1200");
+    expect(refusal()).toBeNull();
   });
 });

@@ -1,16 +1,20 @@
 "use client";
 
 import { Check } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TheyPaidForm } from "@/features/loans/components/they-paid-form";
 import { useTheyPaidForm } from "@/features/loans/components/they-paid-dialog";
+import { PaymentSavedMotion } from "@/features/loans/components/payment-awareness";
 import { usePeopleActions, usePeopleAdvanceApplications, usePeopleLedgerEntries } from "@/features/people/hooks/use-people-data";
 import { advanceSources } from "@/features/people/lib/person-payment-obligations";
 import { usePeople } from "@/hooks/use-people";
 import type { OwnershipSource } from "@/lib/engines/debt-ownership";
 import type { InstallmentParticipant } from "@/lib/engines/installment-participants";
-import { advanceRemaining, PAYMENT_EPSILON, planAdvanceApplication } from "@/lib/engines/person-payment";
-import { formatCurrency } from "@/lib/format";
+import { reimbursementLineKey } from "@/lib/engines/historical-reimbursement";
+import { advanceRemaining, PAYMENT_EPSILON, planAdvanceApplication, round2 } from "@/lib/engines/person-payment";
+import { formatCurrency, formatCurrencyExact } from "@/lib/format";
 import type { Installment } from "@/lib/models/payment-schedule";
 import type { Person } from "@/lib/models/person";
 import { cn } from "@/lib/utils";
@@ -40,15 +44,31 @@ export function TheyPaidPanel({
   installments,
   installmentId,
   onClose,
+  personId,
+  onBusyChange,
+  onSaved,
+  editor,
 }: {
+  /** True from the moment a receipt starts saving until the panel closes — a stable setter. */
+  onBusyChange?: (busy: boolean) => void;
+  onSaved?: () => void;
+  /** Show only this person's share (a payment screen's row). Everyone else stays unanswered, so nothing is written for them. */
+  personId?: string;
   sourceKind: "emi" | "loan";
   source: OwnershipSource;
   installments: readonly Installment[];
   installmentId: string;
   onClose: () => void;
+  editor?: { amount: HTMLElement | null; remaining: HTMLElement | null; personName: string };
 }) {
-  const f = useTheyPaidForm({ sourceKind, source, installments, installmentId, onClosed: onClose });
-  const { reconcile, accounts, saved, retrying, saving, success, confirmDisabled, confirmLabel, submit, openLines, general, installment } = f;
+  const f = useTheyPaidForm({ sourceKind, source, installments, installmentId, onClosed: () => {
+    onSaved?.();
+    onClose();
+  } });
+  const { reconcile, accounts, saved, retrying, saving, success, confirmDisabled, confirmLabel, submit, installment } = f;
+  const mine = <T extends { personId: string }>(list: readonly T[]) => (personId ? list.filter((x) => x.personId === personId) : [...list]);
+  const openLines = useMemo(() => (personId ? f.openLines.filter((l) => l.personId === personId) : f.openLines), [f.openLines, personId]);
+  const general = mine(f.general);
   const { data: people = [] } = usePeople();
   const { entriesByPersonId } = usePeopleLedgerEntries();
   const { applicationsByPersonId } = usePeopleAdvanceApplications();
@@ -56,6 +76,12 @@ export function TheyPaidPanel({
   const [linking, setLinking] = useState<string | null>(null);
   const [linked, setLinked] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const busy = saving || success || linking != null;
+  useEffect(() => {
+    onBusyChange?.(busy);
+    return () => onBusyChange?.(false);
+  }, [busy, onBusyChange]);
 
   // Held advance per open person (their advance settles what they owe me) — the only existing way to reuse money already received.
   const held = useMemo(
@@ -85,13 +111,28 @@ export function TheyPaidPanel({
     }
   }
 
-  const participants = f.reconcile.lines;
-  return (
-    <section aria-label="Their payment" data-testid="they-paid-panel" className="mt-2 flex flex-col gap-2 rounded-[8px] border border-border bg-secondary/30 p-2.5">
-      <p className="text-xs font-semibold text-foreground">
-        {sourceKind === "loan" ? "Record or link a People receipt" : "They paid"}{installment ? ` · Installment #${installment.sequenceNumber}` : ""}
-        {sourceKind !== "loan" && <span className="ml-2 font-normal text-muted-foreground">Lender payment is not changed.</span>}
-      </p>
+  const participants = mine(f.reconcile.lines);
+  const line = openLines[0];
+  const key = line && reimbursementLineKey(line);
+  const amount = (key && reconcile.draft[key]?.amount) || "";
+  const typed = round2(Number(amount));
+  const validAmount = line != null && Number.isFinite(typed) && typed > PAYMENT_EPSILON && typed <= line.remaining + PAYMENT_EPSILON;
+  const projection = saved == null && validAmount ? round2(Math.max(0, line.remaining - typed)) : null;
+  const amountError = saved == null && line && amount !== "" && !validAmount ? `Enter a receipt up to ${formatCurrencyExact(line.remaining)}.` : null;
+  const savedIntoAccount = saved?.some((item) => !item.recordedEarlier);
+  const panel = (
+    <section aria-label="Their payment" data-testid="they-paid-panel" className={cn("flex flex-col gap-2", !editor && "mt-2 rounded-[8px] border border-border bg-secondary/30 p-2.5")}>
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+        <p className="text-xs font-semibold text-foreground">
+          {editor ? `Receipt from ${editor.personName}` : personId ? "Record receipt" : sourceKind === "loan" ? "Record or link a People receipt" : "They paid"}
+          {installment && (editor || !personId) && ` · #${installment.sequenceNumber}`}
+        </p>
+        {editor && line && key && saved == null && (
+          <button type="button" disabled={busy} className="rounded text-xs font-semibold text-foreground underline underline-offset-2 focus-visible:ring-2 focus-visible:ring-ring" onClick={() => reconcile.setLine(key, { choice: "some", amount: String(line.remaining) })}>
+            Use remaining {formatCurrencyExact(line.remaining)}
+          </button>
+        )}
+      </div>
 
       {!reconcile.loading && participants.length === 0 && <p className="text-xs text-muted-foreground">Nobody has a share of this installment in People.</p>}
       {!reconcile.loading && participants.length > 0 && openLines.length === 0 && (
@@ -110,29 +151,92 @@ export function TheyPaidPanel({
           </button>
         </div>
       ))}
-      {general.map((p) => (
+      {!editor && general.map((p) => (
         <p key={p.personId} role="note" className="text-[11px] text-muted-foreground" data-testid={`they-paid-general-${p.personId}`}>
           {p.personName} also has {formatCurrency(p.generalCredit ?? 0)} in People that isn&apos;t linked to an installment, so it isn&apos;t counted here.
         </p>
       ))}
 
-      <TheyPaidForm state={reconcile} accounts={accounts} locked={saved != null && !retrying} />
+      <TheyPaidForm state={reconcile} accounts={accounts} locked={saving || saved != null} personId={personId} inlineAmount={Boolean(editor)} />
+      {success && (
+        <PaymentSavedMotion
+          kind={savedIntoAccount ? "receive" : "recorded"}
+          label={savedIntoAccount ? `Receipt saved into ${accounts.find((account) => account.id === reconcile.accountId)?.name ?? "the selected account"}` : "Receipt saved"}
+        />
+      )}
       {error && (
         <p role="alert" className="text-xs font-semibold text-expense">
           {error}
         </p>
       )}
 
-      <div className="flex items-center justify-end gap-2">
-        <button type="button" className={cn(BTN, "border-border-strong bg-card text-foreground hover:bg-secondary")} onClick={onClose} disabled={saving}>
-          {success || openLines.length === 0 ? "Close" : "Cancel"}
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <button type="button" className={cn(BTN, "shrink-0 border-border-strong bg-card whitespace-nowrap text-foreground hover:bg-secondary")} onClick={onClose} disabled={saving || linking != null || (editor != null && success)}>
+          {success || openLines.length === 0 ? "Close" : editor ? "Discard draft" : "Cancel"}
         </button>
-        {openLines.length > 0 && (
-          <button type="button" className={cn(BTN, "border-primary-accent-text bg-primary text-primary-foreground hover:bg-primary/85")} disabled={confirmDisabled} onClick={() => void submit()} data-testid="they-paid-save">
+        {(openLines.length > 0 || retrying) && !success && (
+          <button type="button" className={cn(BTN, "h-auto min-h-8 max-w-full border-primary-accent-text bg-primary py-1 text-center leading-tight text-primary-foreground hover:bg-primary/85")} disabled={confirmDisabled} onClick={() => void submit()} data-testid="they-paid-save">
             {success ? "Saved" : confirmLabel}
           </button>
         )}
       </div>
     </section>
+  );
+
+  if (!editor) return panel;
+  return (
+    <>
+      {editor.amount && createPortal(
+        <div className="grid grid-cols-[minmax(0,6rem)_auto] items-center justify-start gap-x-1.5 gap-y-0.5" data-enter-skip>
+          <label className="flex h-7 min-w-0 items-center gap-1 rounded-md border border-border-strong bg-card px-1.5 focus-within:ring-2 focus-within:ring-ring">
+            <span aria-hidden className="text-muted-foreground">₹</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              autoFocus
+              aria-label={`Amount received from ${editor.personName}`}
+              aria-invalid={Boolean(amountError)}
+              placeholder="Amount"
+              className="min-w-0 flex-1 bg-transparent text-xs tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+              value={amount}
+              disabled={busy || saved != null || !key}
+              onChange={(event) => { if (key) reconcile.setLine(key, { choice: "some", amount: event.target.value }); }}
+            />
+          </label>
+          <Popover open={detailsOpen} onOpenChange={(next) => { if (!busy) setDetailsOpen(next); }}>
+            <PopoverTrigger asChild>
+              <button type="button" className={cn(BTN, "h-7 px-2 border-border-strong bg-card hover:bg-secondary")} aria-label={`Receipt details for ${editor.personName}`} disabled={busy}>
+                Details
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              aria-label={`Receipt details for ${editor.personName}`}
+              align="end"
+              side="top"
+              sideOffset={5}
+              collisionPadding={12}
+              className="w-[min(26rem,calc(100vw-1.5rem))] max-h-(--radix-popover-content-available-height) overflow-y-auto rounded-lg border border-border p-3"
+              onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }}
+              data-enter-skip
+            >
+              {panel}
+            </PopoverContent>
+          </Popover>
+          {amountError ? (
+            <span role="alert" className="col-span-full text-[11px] leading-tight text-expense">{amountError}</span>
+          ) : (
+            <span role="status" className="col-span-full text-[11px] leading-tight text-muted-foreground">
+              {success ? "Receipt saved" : saving ? "Saving receipt…" : retrying ? "Retry receipt" : "Editing · unsaved"}
+            </span>
+          )}
+        </div>,
+        editor.amount,
+      )}
+      {editor.remaining && projection != null && !success && createPortal(
+        <span className="block text-[11px] leading-tight text-muted-foreground">After receipt {formatCurrencyExact(projection)}</span>,
+        editor.remaining,
+      )}
+    </>
   );
 }

@@ -59,7 +59,7 @@ import { linkedPendingForCard } from "@/lib/engines/linked-funds";
 import { useLinkedPeopleReadiness } from "@/features/people/hooks/use-linked-people-readiness";
 import type { Account } from "@/lib/models/account";
 import type { CardNetwork } from "@/lib/models/credit-card";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatCurrencyExact } from "@/lib/format";
 import { bankById } from "@/lib/data/bank-registry";
 import { autoCardName, defaultSharedLimitName, freshCardSaveIds, suggestedDueDay } from "@/features/credit-cards/lib/shared-limit-save";
 import { CardEditConflictError, type AtomicCardSaveInput, type SaveLimit } from "@/lib/repositories/credit-card-save";
@@ -80,9 +80,9 @@ import { AccountTransactionsManager } from "@/features/accounts/components/accou
 import { CardLimitSection } from "@/features/credit-cards/components/card-limit-section";
 import { CardFormPreview, type PreviewCard } from "@/features/credit-cards/components/card-form-preview";
 import { CreditUsageBar, CreditUsageBreakdownView } from "@/features/credit-cards/components/credit-usage-bar";
-import { ActivityEmpty, CardBillsView, CardSpendingView, CardTransactionsView, DuePill, type ActivityTxnRow } from "@/features/credit-cards/components/card-activity-views";
+import { ActivityEmpty, CardBillParts, CardBillsView, CardSpendingView, CardTransactionsView, DuePill, type ActivityTxnRow } from "@/features/credit-cards/components/card-activity-views";
 import { useCreditUsageBreakdowns } from "@/features/credit-cards/hooks/use-credit-usage-breakdown";
-import { cardDueStatus, type CreditUsageBreakdown } from "@/features/credit-cards/lib/card-usage-breakdown";
+import { cardBillBreakdowns, cardDueStatus, type CardBillBreakdown, type CreditUsageBreakdown } from "@/features/credit-cards/lib/card-usage-breakdown";
 import { compareTransactionsNewestFirst } from "@/lib/models/transaction";
 import { useAuthStore } from "@/store/auth-store";
 import { fetchCardBillState } from "@/lib/repositories/repository-factory";
@@ -246,6 +246,14 @@ export function CreditCardsWorkspace() {
   }
   // The statement normal Pay Now is paying (the dialog snapshots it per payment action).
   const payCurrentStatement = payDestScope?.current ?? null;
+  const payBreakdown = !usage.isLoading && payDestCard && payCurrentStatement
+    ? (freshPayState ? cardBillBreakdowns({
+        bills: freshPayState.bills,
+        cardTransactions: freshPayState.transactions,
+        financed: usage.financed,
+        transferTargets: usage.financedTransferTargets,
+      }) : usage.billBreakdownsByCardId.get(payDestCard.id))?.get(payCurrentStatement.id)
+    : undefined;
   // Card bill: people's shares of charges this card still carries — they must be settled before Pay bill completes.
   const { readiness: payCardPeople, readinessFor: payCardPeopleFor, isLoading: payCardPeopleLoading } = useLinkedPeopleReadiness(
     // This physical card's own bill — a shared facility's pooled total belongs to its sibling cards too.
@@ -1083,7 +1091,7 @@ export function CreditCardsWorkspace() {
   };
 
   return (
-    <div className="flex min-w-0 flex-col gap-4 px-1">
+    <div className="@container/credit-cards flex min-w-0 flex-col gap-4 px-1">
       {/* ── Compact bar: zero-height sticky slot, a sibling of (never inside) the scaled card grid below; figures are the summary's own ── */}
       <CreditCardsCompactBar
         progress={barProgress}
@@ -1100,8 +1108,8 @@ export function CreditCardsWorkspace() {
 
       {/* ── Summary — Credit used and WHY (Loan / EMI vs Purchases), then limit / available / outstanding / this month ── */}
       <section id="cc-summary" aria-label="Summary" className="overflow-hidden rounded-[12px] border border-border-strong/60 bg-card shadow-e1">
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
-          <div className="flex min-w-0 flex-col gap-3 bg-gradient-to-br from-purple/[0.06] via-transparent to-transparent px-5 py-4 dark:from-purple/[0.12]">
+        <div className="grid grid-cols-1 @min-[900px]/credit-cards:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+          <div className="flex min-w-0 flex-col gap-3 bg-gradient-to-br from-purple/[0.06] via-transparent to-transparent px-3 py-4 @min-[480px]/credit-cards:px-5 dark:from-purple/[0.12]">
             <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
               <div className="min-w-0">
                 <span className={cn(CC_LABEL, "inline-flex items-center gap-1.5")}>
@@ -1117,7 +1125,7 @@ export function CreditCardsWorkspace() {
             </div>
             <CreditUsageBreakdownView breakdown={usage.total} layout="row" />
           </div>
-          <div className="grid grid-cols-2 border-t border-border-strong/50 lg:border-t-0 lg:border-l">
+          <div className="grid grid-cols-2 border-t border-border-strong/50 @min-[900px]/credit-cards:border-t-0 @min-[900px]/credit-cards:border-l">
             <SummaryFigure icon={Wallet} tone="bg-purple/12 text-purple" label="Credit limit" value={formatCurrency(totals.creditLimit)} />
             <SummaryFigure icon={ShieldCheck} tone="bg-success/12 text-success" label="Available" value={formatCurrency(totals.available)} />
             <SummaryFigure icon={Receipt} tone="bg-chart-2/12 text-chart-2" label="Outstanding" value={formatCurrency(totals.utilized)} hint="Billed + not billed yet" />
@@ -1128,12 +1136,12 @@ export function CreditCardsWorkspace() {
 
       {/* Stays perfectly still while the activity sheet slides over it — the dim comes from the sheet's own backdrop
           (one cheap fixed layer), never from scaling/fading this grid, which repainted every card on each frame. */}
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
+      <div className="grid grid-cols-1 gap-4 @min-[992px]/credit-cards:grid-cols-[minmax(0,1fr)_clamp(304px,30cqw,352px)] @min-[992px]/credit-cards:items-start">
         {/* ── Card selection ── */}
         {/* scroll-mt-20: "Manage cards" (More menu) scrolls here, and the compact bar covers the top 56px */}
-        <section id="my-credit-cards" aria-label="My credit cards" className="flex min-w-0 scroll-mt-20 flex-col gap-3 xl:col-start-1 xl:row-start-1">
+        <section id="my-credit-cards" aria-label="My credit cards" className="@container/cards flex min-w-0 scroll-mt-20 flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="mr-auto font-heading text-base font-semibold text-foreground">
+            <h2 className="mr-auto font-heading text-base font-semibold text-foreground @max-[384px]/cards:basis-full">
               My credit cards <span className="ml-0.5 text-sm font-semibold text-muted-foreground tabular-nums">{creditCards.length}</span>
             </h2>
             <button type="button" onClick={() => openActivitySheet("bills", true)} className={cn(CC_UTILITY, "h-8 text-xs font-semibold")}>
@@ -1166,10 +1174,8 @@ export function CreditCardsWorkspace() {
           </div>
 
           {viewMode === "grid" ? (
-            // Card-sized tracks, in px not rem (the app's root font is ~13px, so rem widths came out narrow and the
-            // px-sized content made the card near-square). 360–440px wide → landscape tiles, left-aligned,
-            // instead of stretching to fill whatever width the column has. items-start keeps every card its own true shape.
-            <Stagger className="grid grid-cols-1 items-start justify-items-start gap-4 sm:grid-cols-[repeat(auto-fill,minmax(360px,440px))]">
+            // Add a column when the grid can fit another 244px tile and a 12px gap.
+            <Stagger className="grid grid-cols-[minmax(0,300px)] gap-[12px] @min-[500px]/cards:grid-cols-[repeat(2,minmax(0,300px))] @min-[756px]/cards:grid-cols-[repeat(3,minmax(0,300px))] @min-[1012px]/cards:grid-cols-[repeat(4,minmax(0,300px))] @min-[1268px]/cards:grid-cols-[repeat(5,minmax(0,300px))]">
               {creditCards.map((card) => (
                 <CreditCardTile
                   key={card.id}
@@ -1193,15 +1199,15 @@ export function CreditCardsWorkspace() {
             </Stagger>
           ) : (
             <div className="overflow-hidden rounded-[10px] border border-border-strong/70 bg-card shadow-e1">
-              <table className="w-full border-separate border-spacing-0 text-sm">
+              <table className="w-full table-fixed border-separate border-spacing-0 text-sm">
                 <thead>
                   <tr>
                     <th className={CC_TH}>Card</th>
-                    <th className={cn(CC_TH, "w-32 text-right")}>Credit used</th>
-                    <th className={cn(CC_TH, "hidden w-56 lg:table-cell")}>Loan / EMI · Purchases</th>
-                    <th className={cn(CC_TH, "hidden w-32 text-right md:table-cell")}>Limit</th>
-                    <th className={cn(CC_TH, "w-32")}>Utilization</th>
-                    <th className={cn(CC_TH, "hidden w-40 text-right 2xl:table-cell")}>Bill</th>
+                    <th className={cn(CC_TH, "w-[38%] text-right @min-[384px]/cards:w-28")}>Credit used</th>
+                    <th className={cn(CC_TH, "hidden w-56 @min-[740px]/cards:table-cell")}>Loan / EMI · Purchases</th>
+                    <th className={cn(CC_TH, "hidden w-28 text-right @min-[520px]/cards:table-cell")}>Limit</th>
+                    <th className={cn(CC_TH, "hidden w-28 @min-[384px]/cards:table-cell")}>Utilization</th>
+                    <th className={cn(CC_TH, "hidden w-40 text-right @min-[1024px]/cards:table-cell")}>Bill</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1226,22 +1232,23 @@ export function CreditCardsWorkspace() {
                         className={cn("cursor-pointer transition-colors hover:bg-secondary/60 [&:last-child>td]:border-b-0", active && "bg-primary/10 hover:bg-primary/15")}
                       >
                         <td className={cn(CC_TD, "max-w-0")}>
-                          <div className="flex min-w-0 items-center gap-3">
+                          <div className="flex min-w-0 items-center gap-2 @min-[480px]/cards:gap-3">
                             <CardChip card={card} bankId={bankIdOf(card)} />
                             <div className="min-w-0">
                               <CardTitleLine card={card} />
-                              <p className="truncate text-[11px] text-muted-foreground 2xl:hidden">{due.dueDate ? `Bill ${formatCurrency(due.amount)} · ${due.label}` : "No bill due"}</p>
+                              <p className="text-[11px] text-muted-foreground @min-[1024px]/cards:hidden">{due.dueDate ? `Bill ${formatCurrency(due.amount)} · ${due.label}` : "No bill due"}</p>
+                              <p className="text-[11px] text-muted-foreground @min-[384px]/cards:hidden">{util}% used</p>
                             </div>
                           </div>
                         </td>
                         <td className={cn(CC_TD, "text-right")}>
-                          <span className="text-[15px] font-bold text-foreground tabular-nums">{formatCurrency(card.usedCredit)}</span>
+                          <span className="text-[15px] font-bold text-foreground wrap-anywhere tabular-nums">{formatCurrency(card.usedCredit)}</span>
                         </td>
-                        <td className={cn(CC_TD, "hidden lg:table-cell")}>
+                        <td className={cn(CC_TD, "hidden @min-[740px]/cards:table-cell")}>
                           {b && (
                             <div className="flex flex-col gap-1">
                               <CreditUsageBar breakdown={b} height="h-1.5" />
-                              <p className="flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
+                              <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground tabular-nums">
                                 <span className="inline-flex items-center gap-1">
                                   <span className="size-2 rounded-[2px] bg-purple" />
                                   {formatCurrency(b.loanEmi)}
@@ -1255,11 +1262,11 @@ export function CreditCardsWorkspace() {
                             </div>
                           )}
                         </td>
-                        <td className={cn(CC_TD, "hidden text-right text-foreground/85 tabular-nums md:table-cell")}>{formatCurrency(card.creditLimit)}</td>
-                        <td className={CC_TD}>
+                        <td className={cn(CC_TD, "hidden text-right text-foreground/85 wrap-anywhere tabular-nums @min-[520px]/cards:table-cell")}>{formatCurrency(card.creditLimit)}</td>
+                        <td className={cn(CC_TD, "hidden @min-[384px]/cards:table-cell")}>
                           <UtilizationBar percent={util} />
                         </td>
-                        <td className={cn(CC_TD, "hidden text-right 2xl:table-cell")}>
+                        <td className={cn(CC_TD, "hidden text-right @min-[1024px]/cards:table-cell")}>
                           {due.dueDate ? (
                             <div className="flex flex-col items-end gap-0.5">
                               <span className="font-semibold text-foreground tabular-nums">{formatCurrency(due.amount)}</span>
@@ -1278,11 +1285,12 @@ export function CreditCardsWorkspace() {
           )}
         </section>
 
-        <aside style={{ top: stackTop }} className="flex min-w-0 flex-col gap-4 xl:sticky xl:col-start-2 xl:row-start-1">
+        <aside style={{ top: stackTop }} className="flex min-w-0 flex-col gap-4 @min-[992px]/credit-cards:sticky">
           {activeCard && activeUsage && (
             <SelectedCardPanel
               card={activeCard}
               usage={activeUsage}
+              billBreakdown={usage.isLoading ? undefined : usage.billBreakdownsByCardId.get(activeCard.id)?.get(activeCard.statementPayment.current?.id ?? "")}
               bankId={bankIdOf(activeCard)}
               siblingBankId={(id) => {
                 const sibling = creditCards.find((c) => c.id === id);
@@ -1386,6 +1394,7 @@ export function CreditCardsWorkspace() {
               {!activityAllCards && activeCard ? (
                 <CardBillsView
                   card={activeCard}
+                  breakdowns={usage.isLoading ? undefined : usage.billBreakdownsByCardId.get(activeCard.id)}
                   nextClose={statementWindowForDate(activeCard.card, new Date()).periodEnd}
                   onPayStatement={() => payStatement(activeCard)}
                   onPayFull={() => payFull(activeCard)}
@@ -1598,6 +1607,7 @@ export function CreditCardsWorkspace() {
                   content: (
                     <PayBillDialogScope
                       scope={payDestScope ?? payScopeOf(payDestCard)}
+                      breakdown={payBreakdown}
                       ownOutstanding={freshPayState ? freshPayState.scope.cardOutstanding : payDestCard.ownUsage}
                       // The choice made outside belongs to the card it was made on; a switched To card reads as a statement payment.
                       choice={payDestCard.id === payCard?.id ? payChoice : "statement"}
@@ -1651,14 +1661,14 @@ const CC_INPUT = cn(LOAN_EMI_INPUT, "h-9");
 
 function SummaryFigure({ icon: Icon, tone, label, value, hint }: { icon: typeof Wallet; tone: string; label: string; value: string; hint?: string }) {
   return (
-    <div className="flex min-w-0 items-center gap-3 border-border-strong/40 px-4 py-3 [&:nth-child(-n+2)]:border-b [&:nth-child(odd)]:border-r">
-      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-[8px]", tone)}>
+    <div className="flex min-w-0 items-center gap-2 border-border-strong/40 px-2.5 py-3 @min-[480px]/credit-cards:gap-3 @min-[480px]/credit-cards:px-4 [&:nth-child(-n+2)]:border-b [&:nth-child(odd)]:border-r">
+      <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-[8px] @min-[480px]/credit-cards:size-9", tone)}>
         <Icon className="size-4" strokeWidth={1.75} />
       </span>
       <div className="min-w-0">
         <p className={CC_LABEL}>{label}</p>
-        <p className="mt-0.5 truncate text-lg leading-tight font-bold text-foreground tabular-nums">{value}</p>
-        {hint && <span className="block truncate text-[10.5px] text-muted-foreground">{hint}</span>}
+        <p className="mt-0.5 text-base leading-tight font-bold text-foreground wrap-anywhere tabular-nums @min-[480px]/credit-cards:text-lg">{value}</p>
+        {hint && <span className="block text-[10.5px] text-muted-foreground">{hint}</span>}
       </div>
     </div>
   );
@@ -1863,14 +1873,14 @@ function CardChip({ card, bankId }: { card: CreditCardViewItem; bankId?: string 
 function CardTitleLine({ card }: { card: CreditCardViewItem }) {
   const network = NETWORK_NAME[card.card.cardNetwork ?? ""] ?? null;
   return (
-    <p className="flex min-w-0 items-center gap-1.5">
-      <span className="truncate font-semibold text-foreground">{card.name}</span>
+    <p className="flex min-w-0 items-center gap-1.5 @max-[480px]/cards:flex-wrap @max-[480px]/cards:gap-y-0.5">
+      <span className="min-w-0 truncate font-semibold text-foreground @max-[480px]/cards:basis-full">{card.name}</span>
       {network && (
         <span className="shrink-0 rounded-[4px] border border-border-strong/70 px-1 py-px text-[10px] leading-none font-semibold tracking-wide text-muted-foreground">
           {network}
         </span>
       )}
-      <span className="shrink-0 font-mono text-[11px] tracking-wider text-muted-foreground">•••• {card.last4}</span>
+      <span className="shrink-0 font-mono text-[11px] tracking-wider whitespace-nowrap text-muted-foreground">•••• {card.last4}</span>
     </p>
   );
 }
@@ -1895,6 +1905,7 @@ function UtilizationBar({ percent }: { percent: number }) {
 function SelectedCardPanel({
   card,
   usage,
+  billBreakdown,
   bankId,
   siblingBankId,
   nextClose,
@@ -1910,6 +1921,7 @@ function SelectedCardPanel({
 }: {
   card: CreditCardViewItem;
   usage: CreditUsageBreakdown;
+  billBreakdown?: CardBillBreakdown;
   bankId: string | null;
   siblingBankId: (siblingId: string) => string | null;
   nextClose: Date;
@@ -1949,7 +1961,7 @@ function SelectedCardPanel({
         {bankId && <BankLogo bankId={bankId} size={28} className="relative ring-white/40" />}
         <div className="relative min-w-0 flex-1">
           <h3 className="truncate font-heading text-[15px] leading-tight font-semibold">{card.name}</h3>
-          <p className="mt-0.5 flex items-center gap-2 text-[11px] text-white/80">
+          <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-white/80">
             <span className="font-mono tracking-[0.16em]">•••• {card.last4}</span>
             {network && <span className="font-bold tracking-wide italic">{network}</span>}
             {card.isPrimary && <span className="rounded-[4px] bg-white/20 px-1.5 py-px text-[10px] font-semibold">Primary</span>}
@@ -1968,12 +1980,12 @@ function SelectedCardPanel({
 
       {/* Credit used — and what it's used for */}
       <div className="flex flex-col gap-3 px-4 pt-3.5 pb-3">
-        <div className="flex items-end justify-between gap-3">
+        <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-2">
           <div className="min-w-0">
             <p className={CC_LABEL}>{shared ? "Shared credit used" : "Credit used"}</p>
             <p className="mt-0.5 text-[24px] leading-none font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(card.usedCredit)}</p>
           </div>
-          <div className="shrink-0 text-right">
+          <div className="ml-auto min-w-0 text-right">
             <p className={CC_LABEL}>{shared ? "Shared available" : "Available"}</p>
             <p className="mt-0.5 text-[17px] leading-none font-bold text-success tabular-nums">{formatCurrency(card.available)}</p>
           </div>
@@ -2024,12 +2036,12 @@ function SelectedCardPanel({
         </div>
         <div>
           <p className={cn("text-[26px] leading-none font-bold tracking-tight tabular-nums", due.tone === "overdue" ? "text-expense" : "text-foreground")}>
-            {formatCurrency(bill ? scope.statementDue : 0)}
+            {formatCurrencyExact(bill ? scope.statementDue : 0)}
           </p>
           {bill && bill.amountPaid > 0.005 && (
             <p className="mt-1 text-[11px] font-medium text-foreground/80 tabular-nums" data-testid="card-bill-paid-summary">
-              Bill {formatCurrency(bill.totalAmount)} · Paid <span className="font-semibold text-success">{formatCurrency(bill.amountPaid)}</span> · Remaining{" "}
-              <span className="font-semibold text-foreground">{formatCurrency(bill.remaining)}</span>
+              Bill {formatCurrencyExact(bill.totalAmount)} · Paid <span className="font-semibold text-success">{formatCurrencyExact(bill.amountPaid)}</span> · Remaining{" "}
+              <span className="font-semibold text-foreground">{formatCurrencyExact(bill.remaining)}</span>
             </p>
           )}
           {!bill && (
@@ -2038,6 +2050,7 @@ function SelectedCardPanel({
             </p>
           )}
         </div>
+        <CardBillParts split={billBreakdown} />
         <dl className="grid grid-cols-2 divide-x divide-border-strong/40 rounded-[8px] bg-card py-1.5 text-xs ring-1 ring-border-strong/40">
           <div className="min-w-0 px-2.5">
             <dt className="text-[10px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">Payment due</dt>
@@ -2108,13 +2121,13 @@ function SelectedCardPanel({
             <Plus className="size-4 text-foreground/60" />
           </button>
         )}
-        <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-2 py-1.5">
           <button
             type="button"
             onClick={onViewTransactions}
-            className="group flex h-8 min-w-0 items-center gap-1.5 rounded-[6px] px-2 text-[13px] font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
+            className="group flex min-h-8 items-center gap-1.5 rounded-[6px] px-2 text-left text-[13px] font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <span className="truncate">View all card transactions</span>
+            <span>View all card transactions</span>
             <ArrowRight className="size-3.5 shrink-0 text-foreground/60 transition-transform group-hover:translate-x-0.5" />
           </button>
           <button
@@ -2145,7 +2158,7 @@ const CC_PANEL_LINK =
  * (when partly paid) what's left — then, quieter, what stays on the card for later. Full mode says
  * plainly it pays the card's whole current outstanding, itemised.
  */
-function PayBillDialogScope({ scope, ownOutstanding, choice }: { scope: CardStatementPaymentScope; ownOutstanding: number; choice: PayBillChoice }) {
+function PayBillDialogScope({ scope, ownOutstanding, choice, breakdown }: { scope: CardStatementPaymentScope; ownOutstanding: number; choice: PayBillChoice; breakdown?: CardBillBreakdown }) {
   const row = "flex items-baseline justify-between gap-3";
   const label = "text-foreground/75";
   const figure = "font-semibold text-foreground tabular-nums";
@@ -2189,7 +2202,7 @@ function PayBillDialogScope({ scope, ownOutstanding, choice }: { scope: CardStat
           <div className={cn("px-3.5 py-2.5", scope.currentOverdue ? "bg-expense/8" : "bg-primary/10")}>
             <div className={row}>
               <p className={cn(eyebrow, scope.currentOverdue ? "text-expense" : "text-foreground/80")}>{scope.currentOverdue ? "Overdue bill" : "Current bill"}</p>
-              <p className="text-base font-bold text-foreground tabular-nums">{formatCurrency(bill.remaining)}</p>
+              <p className="text-base font-bold text-foreground tabular-nums">{formatCurrencyExact(bill.remaining)}</p>
             </div>
             <dl className="mt-1 space-y-0.5">
               <div className={row}>
@@ -2204,15 +2217,16 @@ function PayBillDialogScope({ scope, ownOutstanding, choice }: { scope: CardStat
                 <>
                   <div className={row}>
                     <dt className={label}>Original bill</dt>
-                    <dd className={figure}>{formatCurrency(bill.totalAmount)}</dd>
+                    <dd className={figure}>{formatCurrencyExact(bill.totalAmount)}</dd>
                   </div>
                   <div className={row}>
                     <dt className={label}>Already paid</dt>
-                    <dd className={figure}>{formatCurrency(bill.amountPaid)}</dd>
+                    <dd className={figure}>{formatCurrencyExact(bill.amountPaid)}</dd>
                   </div>
                 </>
               )}
             </dl>
+            {breakdown && <div className="mt-2"><CardBillParts split={breakdown} /></div>}
           </div>
           {(scope.later.length > 0 || scope.unbilled > 0) && (
             <dl className="space-y-0.5 border-t border-border-strong/70 px-3.5 py-2 text-foreground/80">

@@ -2,15 +2,15 @@
 
 import { AccountSelect } from "@/components/finance/account-label";
 import { PaymentSourceSummary, isUnderfunded } from "@/components/finance/payment-source-summary";
-import { ArrowRight, ChevronDown, History, Wallet } from "lucide-react";
+import { previewFunds } from "@/lib/engines/payment-funding";
+import { ArrowRight, ChevronDown, History, Layers, UserRound, Wallet } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
-import { usePathname } from "next/navigation";
 import { useEmiActions, type EmiRow } from "@/features/emi/hooks/use-emi-data";
 import { emiCardLabel } from "@/features/emi/components/emi-card";
 import { loanDisplayName } from "@/features/loans/components/loan-card";
-import { LE_RADIUS, Money, Reveal, daysUntil, formatDueDate } from "@/features/loans/components/loan-emi-ui";
-import { AmountTile, PAY_INPUT, PAY_LABEL, PayAmountInput, PayCard, PaySegmented, PayField, PayGroup, PayMore, PayStepHead, ReceiptLine } from "@/features/loans/components/pay-ui";
+import { Money, Reveal, daysUntil, formatDueDate } from "@/features/loans/components/loan-emi-ui";
+import { AmountTile, PAY_INPUT, PAY_LABEL, PayAmountInput, PayCard, PaySegmented, PayField, PayGroup, PayMore, ReceiptLine } from "@/features/loans/components/pay-ui";
 import { AddElsewhereLink } from "@/features/loans/components/loans-workspace";
 import { isStaleInstallmentError, STALE_INSTALLMENT_MESSAGE } from "@/lib/engines/stale-installment";
 import { planEmiPaymentAllocation } from "@/features/emi/lib/emi-payment-allocation";
@@ -18,20 +18,20 @@ import { useLoanActions, type LoanRow } from "@/features/loans/hooks/use-loans-d
 import { LinkedFundsPayNotice } from "@/features/people/components/linked-funds";
 import { useLinkedFunds } from "@/features/people/hooks/use-linked-funds";
 import { linkedFundsForInstallment } from "@/lib/engines/linked-funds";
-import { InstallmentPeoplePanel } from "@/features/loans/components/installment-people-panel";
+import { PaymentPeopleTable, type OpenReceipt } from "@/features/loans/components/payment-people-table";
+import { ReceivedHistoryPanel } from "@/features/loans/components/received-history-panel";
+import { DirectPayerTable } from "@/features/loans/components/direct-payer-table";
 import { useInstallmentBreakdown } from "@/features/loans/hooks/use-installment-breakdown";
 import { uncountedAssigneeId } from "@/features/loans/lib/uncounted-assignee";
 import Link from "next/link";
 import { usePeople } from "@/hooks/use-people";
 import type { Person } from "@/lib/models/person";
-import { openShareStatuses } from "@/lib/engines/installment-participants";
-import { usePeoplePaymentDeferrals } from "@/features/people/hooks/use-payment-deferrals";
-import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
 import { peopleNames } from "@/features/loans/components/people-payment-decision";
-import { PeopleShareConfirm, peopleShareAcknowledgement, type PeopleShareAnswer } from "@/features/loans/components/people-share-confirm";
+import { peopleShareAcknowledgement } from "@/features/loans/components/people-share-confirm";
 import { useLinkedPeopleReadiness } from "@/features/people/hooks/use-linked-people-readiness";
 import { peopleGateInstallmentIds, peopleSettlementGate } from "@/lib/engines/linked-people-readiness";
 import { RECORDED_EARLIER_PEOPLE_ACK } from "@/lib/engines/recorded-earlier";
+import { directLenderNote, directSettlementError, type LenderPortion } from "@/lib/engines/direct-lender-settlement";
 import { linkableCandidates, splitCandidates } from "@/lib/engines/link-earlier-payment";
 import { agreementMatchContext } from "@/features/loans/lib/link-match-context";
 import { LinkTransactionField } from "@/features/loans/components/link-transaction-field";
@@ -49,9 +49,9 @@ import {
   loanQuickOptions,
   loanThroughOption,
   paymentCoverage,
-  paymentReturnPath,
   type PaymentCoverage,
   paymentDateFrom,
+  pastDueCount,
   planEmiPayment,
   planLoanPayment,
   type ExtraTreatment,
@@ -59,6 +59,9 @@ import {
   type PayChoice,
   type QuickOption,
 } from "@/features/loans/lib/record-payment";
+import { loanPayingAccounts } from "@/features/loans/lib/loan-paying-accounts";
+import { cardBillPaymentHref, cardPaymentContext } from "@/features/loans/lib/card-payment-context";
+import { cardFundedLoanCardId } from "@/lib/engines/credit-utilization";
 import { createPaymentSubmission, paymentStages, stageBand } from "@/features/loans/lib/payment-submission";
 import { closeAfterRefresh, refreshHandler } from "@/features/loans/lib/payment-refresh-notice";
 import { useOperation } from "@/components/feedback/operation-progress";
@@ -73,10 +76,10 @@ import { generateId } from "@/lib/utils/id-generator";
 import { cn } from "@/lib/utils";
 import { DateInput } from "@/components/forms/date-input";
 import { PaymentSheet } from "@/features/loans/components/payment-sheet";
-import { PaymentIntentSwitch, type PaymentIntent } from "@/features/loans/components/payment-intent-switch";
-import { PaymentAwarenessPublisher } from "@/features/loans/components/payment-awareness";
+import type { PaymentIntent } from "@/features/loans/components/payment-intent-switch";
+import { PaymentAwarenessPublisher, PaymentSuccessFeedback } from "@/features/loans/components/payment-awareness";
+import { MorePaymentActions } from "@/features/loans/components/more-payment-actions";
 import type { AwarenessInput } from "@/features/loans/lib/payment-awareness";
-import { useWideBox } from "@/components/finance/use-wide-box";
 import { BulkHistoricalDialog } from "@/features/loans/components/bulk-historical-dialog";
 import { HistoricalPeopleReconcile, useHistoricalReconcile } from "@/features/loans/components/historical-people-reconcile";
 
@@ -179,12 +182,12 @@ function CardImpact({ plan, cardLabel }: { plan: ReturnType<typeof planCardEmiLe
  * steps (`PanelSection`), each with a one-line recap while folded, in reading order:
  *  1. Summary — what the lender is owed now (the primary figure), with already paid / your share / others
  *     unpaid; the whole loan's outstanding is a muted secondary fact.
- *  2. People — one compact row each; when someone hasn't paid, an explicit choice (nothing preselected):
- *     pay now from my account, or collect from others first (pick the person → People Record payment).
- *  3. Payment — every amount named and visible (this installment, installments up to the one picked on a Loan
- *     row, overdue ones, part payment, installment + extra towards principal, all remaining installments), account,
- *     date (a past date is flagged as a real debit on that date), then "What will happen": lender coverage,
- *     account before → after, People impact — only once there is nothing left to decide.
+ *  2. People ("I pay") — one table: share · received · remaining, with Receive (that person's own People receipt, or a
+ *     held advance applied) and Postpone. Open shares never hold the lender payment back; paying settles nobody.
+ *  3. Payment — "I pay": the scheduled amount stated once, then the account (own money, never a card — see
+ *     `loan-paying-accounts.ts`) and the date; "Change amount" opens one typed amount (part, more than due, several).
+ *     Past payments and repayments I receive keep their named amount choices. Then "What will happen": lender
+ *     coverage, account before → after, People impact — only once there is nothing left to decide.
  *  4. Less common — note/GST/fees, "Record past payments" (paid before FlowFi: no balance change — one installment
  *     is recorded by the single past-payment form here, several by the guided list flow) and "Pay several now".
  * The footer always names what it does ("Pay ₹5,683 to lender", "Apply SANJU's ₹1,000 advance in People", "Save
@@ -200,14 +203,17 @@ export function RecordPaymentDialog({
   initialView = "pay",
   loanDetail = false,
   preselectInstallment = false,
+  ownCardAccountId = null,
 }: {
+  /** A card-financed Loan's own card account, which its installments may be charged to (`chargeableOwnCardAccountId`). */
+  ownCardAccountId?: string | null;
   /** With `initialView="past"`: start with the target's installment already ticked (the People row's "Bank already paid"). */
   preselectInstallment?: boolean;
   target: PaymentTarget | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** "past" opens straight on Record past payments (the details screen's own entry point). */
-  initialView?: "pay" | "past";
+  /** "past" / "payMany" open straight on that list (the details screen's "More" menu). */
+  initialView?: DialogView;
   loanDetail?: boolean;
 }) {
   const loanActions = useLoanActions();
@@ -216,7 +222,7 @@ export function RecordPaymentDialog({
   const { data: allAccounts = [] } = useAccounts();
   const accounts = useMemo(() => allAccounts.filter((a) => a.deletedAt == null), [allAccounts]);
   const { funds: linkedFunds } = useLinkedFunds();
-  const { data: allTransactions = [] } = useTransactions();
+  const { data: allTransactions = [], isLoading: transactionsLoading, isError: transactionsError } = useTransactions();
 
   // A Loan installment picked further down the schedule starts on "pay every unpaid one up to it" — shown, never silent.
   const [choice, setChoice] = useState<PayChoice | "extra">(() =>
@@ -231,8 +237,7 @@ export function RecordPaymentDialog({
   const [gst, setGst] = useState("");
   const [processingFee, setProcessingFee] = useState("");
   const [pickedAccountId, setAccountId] = useState("");
-  // Card-linked EMI only: billed to the card (default) or paid directly from a bank / savings account.
-  const [fundingMode, setFundingMode] = useState<CardFundingMode>("card");
+  const [pickedFundingMode, setFundingMode] = useState<CardFundingMode | null>(null);
   const [idempotencyKey] = useState(generateId);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -240,10 +245,12 @@ export function RecordPaymentDialog({
   const [refreshing, setRefreshing] = useState(false);
   const operation = useOperation();
   const [customTouched, setCustomTouched] = useState(false);
-  // "Other ways to pay" (part payment, extra, all remaining) folds away until opened or one of them is chosen.
+  // "I pay": the scheduled amount is paid unless the user asks to change it.
+  const [changingAmount, setChangingAmount] = useState(false);
+  // Past payments and repayments I receive: "Other ways to pay" folds away until opened or one of them is chosen.
   const [otherWaysOpen, setOtherWaysOpen] = useState(false);
-  // "All remaining installments" pays the whole schedule in one go — it needs an explicit confirmation.
-  const [remainingAck, setRemainingAck] = useState(false);
+  // Paying off everything in one go needs an explicit confirmation, given for that exact amount: changing it asks again.
+  const [fullAckFor, setFullAckFor] = useState<string | null>(null);
   // One per mount — its synchronous guard blocks a double click/double submit (state updates are async).
   const [submission] = useState(createPaymentSubmission);
   const [mode, setMode] = useState<PayMode>("now");
@@ -258,13 +265,15 @@ export function RecordPaymentDialog({
   // Set on the first switch between the flow's pages: every page after it replaces the last in place (no new sheet animating in).
   const [switched, setSwitched] = useState(false);
   // On a wide sheet "What will happen" opens in the right-hand work area, beside the people (not under them).
-  const [gridBox] = useWideBox(856);
   // The people step folds itself once the share question is answered; the user's own toggle wins.
   // One installment chosen in Record past payments, handed to the single past-payment form below — the existing
   // single write path, unchanged (same allocation, identity, edit and reversal behaviour).
   const [pinnedPast, setPinnedPast] = useState<Installment | null>(null);
-  // "Has the person already paid their share?" — nothing until answered; either answer unblocks the lender payment.
-  const [shareAnswer, setShareAnswer] = useState<PeopleShareAnswer | null>(null);
+  // The one person's receipt open in the People table; the lender payment waits until it is saved or closed.
+  const [receiving, setReceiving] = useState<OpenReceipt | null>(null);
+  const receiveSeq = useRef(0);
+  // While that receipt is being written, nothing may close or swap its panel (a second panel could record it again).
+  const [receiptBusy, setReceiptBusy] = useState(false);
   const [dateUnknown, setDateUnknown] = useState(false);
   // "Already paid earlier" + a transaction the user already recorded: that transaction IS the payment (see link-earlier-payment.ts).
   const [linkedTx, setLinkedTx] = useState<Transaction | null>(null);
@@ -275,8 +284,6 @@ export function RecordPaymentDialog({
 
   // The paying account is always the user's own explicit choice — never a silent default (a payment that moves
   // money must say which account it moves).
-  // Paying a card EMI from a bank never offers (or keeps) a credit card as the paying account.
-  const accountId = accounts.some((a) => a.id === pickedAccountId && !(fundingMode === "bank" && a.type === "card")) ? pickedAccountId : "";
   const earlier = mode === "earlier";
   const today = todayInput();
   const anchor = pinnedPast ?? firstUnpaidInstallment(target);
@@ -292,13 +299,39 @@ export function RecordPaymentDialog({
   // Until a past payment has its date, only the on-screen previews stand on the due date (when it has passed) — never
   // shown as the paid date, and saving stays blocked by `earlierDateError`.
   const previewFallback = earlier && anchor && dateToInput(anchor.dueDate) <= today ? anchor.dueDate : new Date();
-  const paymentDate = (earlier ? earlierPaymentDate : paymentDateFrom(date)) ?? previewFallback;
+  const selectedPaymentDate = paymentDateFrom(date);
+  const paymentDateError = !earlier && selectedPaymentDate == null ? "Enter a valid payment date." : null;
+  const paymentDate = (earlier ? earlierPaymentDate : selectedPaymentDate) ?? previewFallback;
   const isLoan = target?.kind === "loan";
   const loanRow = target?.kind === "loan" ? target.row : null;
   const emiRow = target?.kind === "emi" ? target.row : null;
   const cardLinked = emiRow != null && emiRow.emi.linkedCreditCardId != null;
+  const linkedCardAccountId = emiRow?.linkedCard?.accountId ?? null;
+  const lent = loanRow?.direction === "given";
+  // A card EMI (or a Loan financed on a card) is owed to the card issuer, and recording it is not paying the card bill.
+  const card = cardPaymentContext(
+    emiRow ? { kind: "emi", emi: emiRow.emi, cardAccountId: linkedCardAccountId } : loanRow ? { kind: "loan", loan: loanRow.loan } : null,
+    allTransactions as Transaction[],
+  );
+  const cardId = emiRow?.emi.linkedCreditCardId ?? (loanRow ? cardFundedLoanCardId(loanRow.loan) : null);
+  const cardBillHref = cardId ? cardBillPaymentHref(cardId) : null;
+  const fundingMode = pickedFundingMode ?? (card.purchaseOnCard ? "card" : "bank");
   const bankFunded = cardLinked && !earlier && fundingMode === "bank";
-  const selectableAccounts = bankFunded ? accounts.filter((a) => a.type !== "card") : accounts;
+  const cardLoanBillOnly = !earlier && loanRow != null && card.purchaseOnCard;
+  const cardPurchaseId = emiRow?.emi.purchaseTransactionId ?? loanRow?.loan.purchaseTransactionId;
+  const cardCheckPending = !earlier && card.onCard && cardPurchaseId != null && transactionsLoading;
+  const cardCheckUnavailable = !earlier && card.onCard && (
+    (cardPurchaseId != null && transactionsError) || (cardLinked && linkedCardAccountId == null)
+  );
+  // Money I pay out now comes from my own accounts, never a card (see `loan-paying-accounts.ts`). A past record and a
+  // repayment I receive keep every account.
+  const selectableAccounts = bankFunded
+    ? accounts.filter((a) => a.type !== "card")
+    : !earlier && !lent && !cardLinked
+      ? loanPayingAccounts(accounts, ownCardAccountId)
+      : accounts;
+  // Never a silent default, and never an account this payment doesn't offer.
+  const accountId = selectableAccounts.some((a) => a.id === pickedAccountId) ? pickedAccountId : "";
 
   const loanFigures = loanRow ? loanPaymentFigures(loanRow.loan, loanRow.installments, paymentDate) : null;
   const emiInstallment = target?.kind === "emi" ? (pinnedPast ?? target.installment ?? null) : null;
@@ -310,8 +343,17 @@ export function RecordPaymentDialog({
   const options: QuickOption[] = through ? [baseOptions[0], through, ...baseOptions.slice(1)].filter(Boolean) : baseOptions;
   // "Installment + extra towards principal": the existing Loan prepayment (what's due now, then the extra reduces principal).
   const extraAvailable = loanRow != null && !earlier && loanRow.loan.repaymentType !== "oneTime";
-  const effectiveChoice: PayChoice | "extra" =
-    choice === "custom" || (choice === "extra" && extraAvailable) || options.some((o) => o.choice === choice) ? choice : "installment";
+  // "I pay" has one decision: the scheduled amount, or a typed one ("Change amount" — the same custom payment as before:
+  // part, more than due, or several installments). Past payments and repayments I receive keep their choices.
+  const simplePay = !earlier && !lent;
+  const scheduledChoice: PayChoice = through ? "through" : "installment";
+  const effectiveChoice: PayChoice | "extra" = simplePay
+    ? changingAmount
+      ? "custom"
+      : scheduledChoice
+    : choice === "custom" || (choice === "extra" && extraAvailable) || options.some((o) => o.choice === choice)
+      ? choice
+      : "installment";
   const extraValue = Number(extraAmount);
   const extraValid = extraAmount.trim() !== "" && Number.isFinite(extraValue) && extraValue > 0;
 
@@ -340,7 +382,6 @@ export function RecordPaymentDialog({
   const extra = loanPlan?.ok ? loanPlan.extra : 0;
   // The treatment the write uses for any amount above what's due — fixed to principal for the named "extra" choice.
   const effectiveTreatment: ExtraTreatment = effectiveChoice === "extra" ? "reducePrincipal" : treatment;
-  const lent = loanRow?.direction === "given";
   // Shared Loan / EMI: people's shares of every due installment this payment settles (same rule and allocator
   // as the write layer's gate). While some are still open the user decides: collect first (the default — the
   // primary action opens People Record payment), or explicitly pay with their own money, which sends the
@@ -368,37 +409,32 @@ export function RecordPaymentDialog({
   const peopleGated = next != null && !lent;
   const settlement = peopleSettlementGate(peopleGated ? linkedPeople : null);
   // A past payment doesn't wait on People: the lender was already paid (see `RECORDED_EARLIER_PEOPLE_ACK`).
-  // Shares already moved to a later cycle in People (the one postponement system, `paymentDeferrals`) are a
-  // decision already made: the user isn't asked to collect or postpone them again. A target cycle that has
-  // arrived or passed while still unpaid counts as undecided again. The gate acknowledgement stays explicit.
-  // Informational only (see `postponedImpact` below) — never gates the Yes/No question itself.
-  const { deferralsByPerson } = usePeoplePaymentDeferrals(peopleGated ? settlement.attention.map((p) => p.personId) : []);
-  const startDay = useMonthCycleStartDay();
-  const shareStatus = openShareStatuses(settlement.attention, deferralsByPerson, startDay);
+  // Postponed shares are People's own timing (shown in the table); they never change what this payment asks or writes.
   const gateLoading = !earlier && peopleGated && linkedPeopleLoading;
-  const needsConfirm = !earlier && peopleGated && !gateLoading && settlement.blocked;
-  const peopleAck = earlier ? RECORDED_EARLIER_PEOPLE_ACK : peopleShareAcknowledgement(shareAnswer, settlement.attention.map((p) => p.personName));
-  // "Yes, already paid" on a normal payment: the person's money really was received, so it is recorded in People as its own
-  // per-person receipt (the same writer as a past payment) right after the lender payment — never only a note.
-  const yesRecord = !earlier && !lent && peopleGated && shareAnswer === "yes" && (needsConfirm || modeLocked);
-  const recordsPeople = earlier || yesRecord;
-  const pathname = usePathname();
-  // People sends the user back to exactly this payment (same agreement, Record Payment reopened, same installment).
-  const agreementId = loanRow?.loan.id ?? emiRow?.emi.id ?? null;
-  const returnPath = agreementId ? paymentReturnPath(pathname, agreementId, target?.installment?.id ?? null) : pathname;
+  // Shares still open on what this payment settles. They don't hold the lender payment back: the table shows them, and
+  // pressing Pay records the existing "not paid yet — paying the lender anyway" acknowledgement the write gate asks for.
+  // Nobody is settled by it; money from a person is recorded only through Receive (its own People write).
+  const openShares = !earlier && peopleGated && !gateLoading && settlement.blocked;
+  const peopleAck = earlier ? RECORDED_EARLIER_PEOPLE_ACK : openShares ? peopleShareAcknowledgement("no", settlement.attention.map((p) => p.personName)) : null;
+  // A past / direct record also records what people paid, right after the lender record.
+  const recordsPeople = earlier;
   const breakdownSource = loanRow?.loan ?? emiRow?.emi ?? null;
   const breakdownInstallments = loanRow?.installments ?? emiRow?.installments ?? null;
   const breakdownTarget =
     next && !lent && breakdownSource && breakdownInstallments
-      ? { sourceKind: isLoan ? ("loan" as const) : ("emi" as const), source: breakdownSource, installments: breakdownInstallments, installmentId: next.id }
+      ? { sourceKind: isLoan ? ("loan" as const) : ("emi" as const), source: breakdownSource, installments: breakdownInstallments, installmentId: next.id, coveredIds: touched.map((i) => i.id) }
       : null;
-  const { breakdown, isLoading: breakdownLoading } = useInstallmentBreakdown(breakdownTarget);
+  const { breakdown, coverage, isLoading: breakdownLoading } = useInstallmentBreakdown(breakdownTarget);
+  // What the People table shows: every installment this payment covers (display only — the allocation is the payment's own).
+  const tableBreakdown = coverage ?? breakdown;
   const { data: allPeople = [] } = usePeople();
   const uncountedAssigneeKey = uncountedAssigneeId(breakdownSource);
   const uncountedAssignee = uncountedAssigneeKey ? { id: uncountedAssigneeKey, name: (allPeople as Person[]).find((p) => p.id === uncountedAssigneeKey)?.name ?? "The linked person" } : null;
   // Who "paid directly" names: the people sharing this installment, else the person linked to it, else the loan's payer.
   const sharingNames = (breakdown?.participants ?? []).filter((p) => (p.current?.share ?? 0) > 0.005).map((p) => p.personName);
   const payerName = sharingNames.length > 0 ? peopleNames(sharingNames) : (uncountedAssignee?.name ?? loanRow?.payerName ?? "Someone else");
+  // On screen only: with several sharing, no title or button may read as if all of them paid. (The saved note is unchanged.)
+  const payerShown = sharingNames.length > 1 ? "the people you select" : payerName;
   // Past payment: whether the people sharing it had already paid me back — answered per person, written as
   // People settlements AFTER the lender record. The installments are fixed at the first save (afterwards
   // the dialog's "next" installment moves on), and a saved lender record is never written again.
@@ -416,14 +452,14 @@ export function RecordPaymentDialog({
           }
         : null,
     defaultAccountId: accountId,
-    noBalanceChange: earlier && !directPayer,
-    // "<Person> paid directly": their share starts as covered in full with no account change (not "Leave pending").
+    // A single past receipt is filed as already in my account. Direct lender coverage has its own provenance.
+    noBalanceChange: earlier,
+    // "<Person> paid directly": nobody starts as covered — the user names who actually paid, and how much.
     paidDirectly: directPayer && earlier,
     // The people's rows start on the date already given for the lender payment — not asked again from today's calendar.
     defaultDateOf: () => (earlier ? (dateUnknown ? null : earlierDate) : date),
   });
   const reconcileItems = reconcile.plan.ok ? reconcile.plan.items : [];
-  const reconcileTotal = reconcile.plan.ok ? reconcile.plan.summary.total : 0;
 
   // Existing preview engine — only for the "reduce principal" case, to show what the repository will do.
   const prepaymentPreview =
@@ -432,9 +468,36 @@ export function RecordPaymentDialog({
       : null;
   const solved = prepaymentPreview?.outcome?.kind === "solved" ? prepaymentPreview.outcome : null;
 
+  // Display and confirmation only — read off the figures above; no allocation or interest is calculated here.
+  const unpaid = (liveInstallments ?? []).filter((i) => i.deletedAt == null && !i.isSkipped && remainingAmount(i) > 0.005);
+  const scheduledRemaining = unpaid.reduce((t, i) => t + remainingAmount(i), 0);
+  // The amount reaches the whole scheduled total, or its extra clears all the principal still on record.
+  const clearsPrincipal = prepaymentPreview != null && prepaymentPreview.principalAfter <= 0.005;
+  const paysEverything = !earlier && !lent && planAmount != null && unpaid.length > 0 && (planAmount >= scheduledRemaining - 0.005 || clearsPrincipal);
+  // The last unpaid installment on its own is an ordinary payment. (Repayments I receive keep their "all remaining" choice.)
+  const needsFullAck = !earlier && ((paysEverything && unpaid.length > 1) || effectiveChoice === "remaining");
+  const fullAckKey = `${planAmount}|${effectiveTreatment}`;
+  const remainingUnconfirmed = needsFullAck && fullAckFor !== fullAckKey;
+  const interestRate = loanRow?.loan.interest?.ratePercent ?? emiRow?.emi.interest?.ratePercent ?? 0;
+  // More than the ordinary scheduled payment, reaching installments that aren't due yet — or paying everything off.
+  const reachesLater = (changingAmount || through != null) && touched.some((i) => i.id !== next?.id && dateToInput(i.dueDate) > dateToInput(paymentDate));
+  const showClosureWarning = !earlier && !lent && planAmount != null && interestRate > 0 && (reachesLater || (needsFullAck && unpaid.some((i) => dateToInput(i.dueDate) > dateToInput(paymentDate))));
+
   const cardLabel = emiRow ? emiCardLabel(emiRow) : null;
   // Same allocation the write uses — each installment's own principal share, summed.
   const cardRelease = emiRow && cardLabel && emiAllocation ? emiAllocation.portions.reduce((sum, p) => sum + p.principalPaid, 0) : null;
+  const legPlan =
+    emiRow && cardLabel && linkedCardAccountId && !earlier && planAmount != null && emiAllocation
+      ? planCardEmiLegs({
+          emiCase: cardEmiCase(emiRow.emi, linkedCardAccountId, (allTransactions as Transaction[]).find((t) => t.id === emiRow.emi.purchaseTransactionId) ?? null),
+          mode: bankFunded ? "bank" : "card",
+          applied: planAmount,
+          principal: cardRelease ?? 0,
+        })
+      : null;
+  const cardFundingError = legPlan?.emiCase === "A" && legPlan.mode === "bank" && legPlan.principalTransfer === 0
+    ? "This amount would only pay interest or fees. Use the linked card option and pay the card bill."
+    : null;
   const reamortizes = !earlier && loanRow != null && extra > 0 && effectiveTreatment === "reducePrincipal" && loanRow.loan.repaymentType !== "oneTime";
 
   // Pre-save preview, read off the same allocation the write performs. A Loan payment that re-plans the
@@ -458,13 +521,12 @@ export function RecordPaymentDialog({
 
   if (!target) return null;
   const name = loanRow ? loanDisplayName(loanRow) : emiRow!.emi.name;
-  const outstanding = loanRow ? loanRow.outstandingPrincipal : emiRow!.remainingBalance;
   const totalCount = loanRow ? loanRow.totalInstallments : emiRow!.emi.installmentCount;
   const overdue = next != null && daysUntil(next.dueDate) < 0;
   // A loan payment, and an EMI not on a card, move a bank account (WFI-P1-08). A card EMI posts on its card.
   // A past EMI payment posts nothing, so it needs no account. A past Loan payment still names one — its
   // record (excluded from every balance and total) is the payment's anchor — "for your records" only.
-  const needsAccount = (isLoan || (emiRow != null && (emiRow.emi.linkedCreditCardId == null || bankFunded))) && !(earlier && emiRow != null);
+  const needsAccount = !cardLoanBillOnly && (isLoan || (emiRow != null && (!cardLinked || bankFunded))) && !(earlier && emiRow != null);
   const earlierExtraError =
     earlier && loanCore != null && loanCore.overflow > 0 ? "That's more than the installments still owe. A past payment can only cover installments." : null;
   const error = plan && !plan.ok ? plan.error : earlierExtraError;
@@ -472,8 +534,7 @@ export function RecordPaymentDialog({
   const fundsApply = !earlier && !lent && needsAccount;
   const payingAccount = needsAccount ? (accounts.find((a) => a.id === accountId) ?? null) : null;
   const underfunded = fundsApply && isUnderfunded(payingAccount, planAmount);
-  const showError = error != null && ((effectiveChoice !== "custom" && effectiveChoice !== "extra") || customTouched || error === earlierExtraError);
-  const remainingUnconfirmed = effectiveChoice === "remaining" && !earlier && !remainingAck;
+  const showError = !success && error != null && ((effectiveChoice !== "custom" && effectiveChoice !== "extra") || customTouched || error === earlierExtraError);
   // Candidates: the user's own live, unlinked expenses no larger than what the installment still owes (best match first).
   const linkCandidates: Transaction[] =
     earlier && !lent && anchor != null
@@ -492,8 +553,24 @@ export function RecordPaymentDialog({
           : dateToInput(paymentDate) !== dateToInput(linkedTx.dateTime)
             ? "The date must stay the transaction's — unlink it to change it."
             : null;
+  // "<Person> paid directly": what People will be credited must fit what the lender is being recorded as paid, per
+  // installment — checked before the lender write, because it commits first.
+  const directRecord = directPayer && earlier && !lent;
+  const directChecking = directRecord && !lenderDone && reconcile.loading;
+  const directPortions: LenderPortion[] = emiAllocation
+    ? emiAllocation.portions.map((p) => ({ installmentId: p.installment.id, sequenceNumber: p.installment.sequenceNumber, amount: p.amount }))
+    : (loanCore?.payments ?? []).map((p) => ({ installmentId: p.installmentId, sequenceNumber: loanRow?.installments.find((i) => i.id === p.installmentId)?.sequenceNumber ?? 0, amount: p.amount }));
+  const directError =
+    !directRecord || lenderDone || directChecking || directPortions.length === 0
+      ? null
+      : !reconcile.plan.ok
+        ? "Finish each person's amount."
+        : directSettlementError({ lender: directPortions, items: reconcileItems, lines: reconcile.lines, requirePayer: true });
+  // The person left the table (their only open share was settled elsewhere): their panel is gone, so nothing waits on it.
+  if (receiving != null && !breakdownLoading && tableBreakdown != null && !tableBreakdown.participants.some((p) => p.personId === receiving.personId)) setReceiving(null);
+  const receiptOpen = receiving != null && !earlier && !lent;
   const blocked =
-    remainingUnconfirmed || next == null || error != null || earlierDateError != null || (needsAccount && accountId === "") || underfunded || (recordsPeople && !lent && reconcile.blocker != null) || (yesRecord && !lenderDone && reconcileItems.length === 0) || linkMismatch != null;
+    receiptOpen || cardLoanBillOnly || cardCheckPending || cardCheckUnavailable || cardFundingError != null || directChecking || directError != null || remainingUnconfirmed || next == null || error != null || paymentDateError != null || earlierDateError != null || (needsAccount && accountId === "") || underfunded || (recordsPeople && !lent && reconcile.blocker != null) || linkMismatch != null;
   function pickLink(t: Transaction) {
     setLinkedTx(t);
     setChoice("custom");
@@ -504,19 +581,8 @@ export function RecordPaymentDialog({
     setAccountId(t.accountId);
   }
   const accountName = needsAccount ? (accounts.find((a) => a.id === accountId)?.name ?? null) : (cardLabel ?? null);
-  // The same Case A / B rule the write applies (`emi-card-funding.ts`), read from the EMI's linked purchase record.
-  const linkedCardAccountId = emiRow?.linkedCard?.accountId ?? null;
-  const legPlan =
-    emiRow && cardLabel && linkedCardAccountId && !earlier && planAmount != null && emiAllocation
-      ? planCardEmiLegs({
-          emiCase: cardEmiCase(emiRow.emi, linkedCardAccountId, (allTransactions as Transaction[]).find((t) => t.id === emiRow.emi.purchaseTransactionId) ?? null),
-          mode: bankFunded ? "bank" : "card",
-          applied: planAmount,
-          principal: cardRelease ?? 0,
-        })
-      : null;
   // Saved in the payment's own note — the only durable place for it (no separate audit field exists).
-  const paymentNote = [directPayer && earlier ? `Paid directly by ${payerName}` : null, peopleAck && !earlier ? peopleAck.reason : null, note.trim() || null].filter(Boolean).join(" · ") || undefined;
+  const paymentNote = [directRecord ? directLenderNote(reconcileItems, payerName) : null, peopleAck && !earlier ? peopleAck.reason : null, note.trim() || null].filter(Boolean).join(" · ") || undefined;
 
   /**
    * Record past payments → exactly one installment picked: it is recorded through the single past-payment form
@@ -529,6 +595,11 @@ export function RecordPaymentDialog({
     if (loanRow && firstUnpaidInstallment(target)?.id !== installment.id) return false;
     setPinnedPast(emiRow ? installment : null);
     setDateUnknown(false);
+    // A changed "I pay" amount never carries into a past / direct record, or back out of it.
+    setChangingAmount(false);
+    setReceiving(null);
+    setCustomAmount("");
+    setCustomTouched(false);
     setChoice("installment");
     setMode("earlier");
     setView("pay");
@@ -541,6 +612,7 @@ export function RecordPaymentDialog({
     setSaving(true);
     const op = operation.start({ label: "Recording people's payments", successLabel: "People's payments recorded", errorLabel: "Some people's payments weren't saved" });
     const r = await reconcile.run(reconcile.failed);
+    await Promise.all(DERIVED_QUERY_PREFIXES.map((key) => queryClient.invalidateQueries({ queryKey: [key], exact: false })));
     setSaving(false);
     const stillFailed = reconcile.failed.filter((i) => r[i.key]?.status === "failed").length;
     if (stillFailed > 0) op.fail({ detail: `${stillFailed} not saved — nothing was recorded twice. Try again.` });
@@ -555,6 +627,7 @@ export function RecordPaymentDialog({
     // Unknown People state: wait — the acknowledgement must name exactly what stays open.
     if (gateLoading) return;
     if (submission.inFlight || blocked || planAmount == null) return;
+    if (cardLinked && !earlier) setFundingMode(fundingMode);
     setModeLocked(true);
     const recordedEarlier = earlier ? { dateKnown: !dateUnknown } : null;
     // Frozen at submit: what the user saw and answered.
@@ -636,8 +709,7 @@ export function RecordPaymentDialog({
             const r = await reconcile.run(peopleItems);
             peopleFailed = peopleItems.filter((i) => r[i.key]?.status === "failed").length;
             const added = peopleItems.filter((i) => !i.recordedEarlier).reduce((t, i) => t + i.amount, 0);
-            if (yesRecord) description = `People's receipts recorded${added > 0 ? ` — ${formatCurrencyExact(added)} added to your account` : " — no account balance changed"}.`;
-            else description = peopleItems.length === 0 ? "Nothing marked received — the pending amount stays owed in People." : added > 0 ? `People's payments recorded — ${formatCurrencyExact(added)} added to your account.` : "People's payments recorded. No account balance changed.";
+            description = peopleItems.length === 0 ? "Nothing marked received — the pending amount stays owed in People." : added > 0 ? `People's payments recorded — ${formatCurrencyExact(added)} added to your account.` : "People's payments recorded. No account balance changed.";
           }
         },
         refresh: () => Promise.all(DERIVED_QUERY_PREFIXES.map((key) => queryClient.invalidateQueries({ queryKey: [key], exact: false }))),
@@ -653,7 +725,7 @@ export function RecordPaymentDialog({
           if (peopleFailed > 0) {
             // The lender record is saved; stay open so only the failed People payments are retried.
             setSuccess(false);
-            op.succeed({ toast: { title, description: `${peopleFailed} people's payment${peopleFailed === 1 ? "" : "s"} not saved — retry from the dialog.` } });
+            op.fail({ label: "Only partly saved", detail: `The lender payment is saved. ${peopleFailed} People update${peopleFailed === 1 ? " was" : "s were"} not — retry from this screen.` });
             return;
           }
           op.succeed({ toast: { title, description } });
@@ -662,7 +734,10 @@ export function RecordPaymentDialog({
         // Stays open with everything entered and the same idempotency key — a retry can't double-post.
         onError: (e) => {
           const detail = loanRow ? friendlyLoanError(e) : e instanceof Error ? e.message : undefined;
-          if (coreCommitted) op.fail({ label: "Payment recorded — schedule not re-planned", detail: "Check the loan's schedule before paying again." });
+          // Nothing reached the lender: the people's rows follow whatever is chosen next, not this attempt's installments.
+          if (!lenderSaved.current) setReconcileIds(null);
+          if (lenderSaved.current) op.fail({ label: "Only partly saved", detail: "The lender payment is saved; the People update didn't finish. Don't record the lender payment again.", retry: submit });
+          else if (coreCommitted) op.fail({ label: "Payment recorded — schedule not re-planned", detail: "Check the loan's schedule before paying again." });
           // A stale installment can never succeed by repeating the same submit — no retry; the user refreshes and re-selects.
           else if (isStaleInstallmentError(e)) op.fail({ label: "Installment changed", detail: `Nothing was saved. ${STALE_INSTALLMENT_MESSAGE}` });
           else op.fail({ detail: detail ? `Nothing was saved. ${detail}` : "Nothing was saved.", retry: submit });
@@ -672,54 +747,46 @@ export function RecordPaymentDialog({
   }
 
   const amountLabel = planAmount != null ? formatCurrencyExact(planAmount) : null;
-  const participants = breakdown?.participants ?? [];
   // A past payment asks about each person below instead (the same People figures).
-  const showPeople = next != null && !lent && !earlier && (breakdownLoading || participants.length > 0);
-  const othersUnpaidNow = participants.reduce((t, p) => t + (p.current?.remaining ?? 0), 0);
-  const stillOwing = participants.filter((p) => p.outstanding > 0.005);
-  // Details of the payment itself appear once there is nothing left to decide (or the share question is answered).
-  const showPaymentDetails = next != null && (earlier || !needsConfirm || shareAnswer != null);
+  const tableParticipants = tableBreakdown?.participants ?? [];
+  const showPeople = next != null && !lent && !earlier && (receiptOpen || breakdownLoading || tableParticipants.length > 0);
+  const showPaymentDetails = next != null;
 
   // The footer always says what pressing it does — a lender payment never reads as settling a person.
   const confirmLabel = saving
     ? "Recording…"
+    : cardLoanBillOnly
+      ? "Pay card bill"
     : gateLoading
       ? "Checking shared people…"
       : lenderDone && reconcile.failed.length > 0
         ? "Retry people's payments"
       : earlier
-        ? (loanDetail && directPayer
+        ? (directPayer
           ? `Record direct payment${amountLabel ? ` · ${amountLabel}` : ""}`
-          : `${directPayer ? `Save payment made by ${payerName}` : "Save past payment"}${amountLabel ? ` of ${amountLabel}` : ""}${reconcileTotal > 0.005 ? ` · ${formatCurrencyExact(reconcileTotal)} from people` : ""}`)
-        : needsConfirm && shareAnswer == null
-          ? loanDetail ? "Pay lender" : "Has their share been paid?"
-          : lent
-            ? `Record ${amountLabel ?? "repayment"} received`
-            : `Pay ${amountLabel ?? "installment"} to lender${yesRecord && reconcileTotal > 0.005 ? ` · ${formatCurrencyExact(reconcileTotal)} from people` : ""}`;
-  const confirmDisabled = lenderDone ? reconcile.failed.length === 0 || saving : earlier ? blocked : gateLoading || (needsConfirm && shareAnswer == null) || blocked;
+            : `Save past payment${amountLabel ? ` of ${amountLabel}` : ""}`)
+        : lent
+          ? `Record ${amountLabel ?? "repayment"} received`
+          : cardLinked
+            ? bankFunded
+              ? `Pay ${amountLabel ?? ""} card EMI from bank`.replace("  ", " ")
+              : `Record ${amountLabel ?? ""} card EMI`.replace("  ", " ")
+            : `Pay ${amountLabel ?? ""}`.trim();
+  const confirmDisabled = lenderDone ? reconcile.failed.length === 0 || saving : earlier ? blocked : gateLoading || blocked;
 
-  // Where the money goes — the account (or card) only. What people owe is its own line (`peopleImpact`).
+  // Where the money goes — the account (or card) only. What people owe is the People table's own summary.
   const moneyMove = (() => {
     if (earlier || planAmount == null) return null;
     const amount = formatCurrencyExact(planAmount);
-    if (legPlan && cardLabel) return cardEmiSource(legPlan, { cardLabel, bankName: needsAccount ? accountName : null });
+    if (legPlan && cardLabel) return cardEmiSource(legPlan, amount, { cardLabel, bankName: needsAccount ? accountName : null });
     if (needsAccount) return accountName ? `${amount} will be ${lent ? "added to" : "taken from"} ${accountName}.` : null;
-    return cardLabel ? `${amount} will be charged to ${cardLabel}.` : null;
+    return cardLabel ? `Record ${amount} for the EMI on ${cardLabel}.` : null;
   })();
   const sourceLine = moneyMove ? (
-    <p className="text-xs text-foreground/80 [overflow-wrap:anywhere]" data-testid="account-movement">
+    <span className="text-xs text-foreground/85 [overflow-wrap:anywhere]" data-testid="account-movement">
       {moneyMove}
-    </p>
+    </span>
   ) : null;
-  const previewShown = !(reamortizes && prepaymentPreview && loanFigures) && (loanPreview != null || emiAllocation != null);
-  // People: the lender payment never settles anyone — say who still owes, and that postponements stay as they are.
-  const peopleImpact =
-    earlier || lent || yesRecord || participants.length === 0
-      ? null
-      : stillOwing.length > 0
-        ? `${peopleNames(stillOwing.map((p) => p.personName))} still ${stillOwing.length === 1 ? "owes" : "owe"} you ${formatCurrencyExact(stillOwing.reduce((t, p) => t + p.outstanding, 0))} — paying the lender doesn't mark anyone as paid.`
-        : "Everyone's share is already received — nothing changes in People.";
-  const postponedImpact = !earlier && !lent && shareStatus.postponed.length > 0 ? "Postponed collections keep their cycle — this payment doesn't move anything in People." : null;
   // A "pay now" dated in the past is still a real account movement on that date — say so, and point to the
   // past-payment flow for money that left before FlowFi (already in the balance).
   const backdated = !earlier && planAmount != null && date !== "" && date < today && (needsAccount || cardLabel != null);
@@ -733,33 +800,31 @@ export function RecordPaymentDialog({
   const showPastPeople = earlierSplit && (!loanDetail || reconcile.loading || reconcile.lines.length > 0);
   // What still blocks the primary action, in plain words (the footer's "Still needed").
   const pending: string[] = [];
-  if (!lenderDone && !gateLoading && !saving) {
-    if (!earlier && needsConfirm && shareAnswer == null) pending.push(loanDetail ? "Reimbursement status" : "Received or not");
+  if (!lenderDone && !gateLoading && !saving && !success) {
+    if (receiptOpen) pending.push("Save or close the receipt");
     if (showPaymentDetails) {
       if (needsAccount && accountId === "") pending.push(directLoanRecord ? "Account for this record" : lent ? "Account" : "Paying account");
       if (error != null) pending.push("Amount");
       if (remainingUnconfirmed) pending.push("Confirm all remaining");
       if (underfunded) pending.push("Enough balance");
-      if (earlierDateError != null) pending.push("Date");
+      if (earlierDateError != null || paymentDateError != null) pending.push("Payment date");
+      if (cardCheckPending) pending.push("Checking linked card");
+      if (cardFundingError != null) pending.push("Payment method");
+      if (directError != null) pending.push("Who paid, and how much");
       if (recordsPeople && !lent && reconcile.blocker != null) pending.push("People answers");
-      else if (yesRecord && reconcileItems.length === 0) pending.push("What they paid (or answer No)");
     }
   }
-  // Collapsible steps: numbered in the order shown, each with a one-line recap for when it is folded.
-  const peopleStepShown = next != null && (showPeople || needsConfirm || yesRecord);
-  const dateSummary =
-    earlier && dateUnknown ? "Date not known" : earlier && earlierDateError ? "Date needed" : paymentDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-  const sourceSummary = needsAccount ? (accountName ?? "Choose account") : earlier ? null : cardLabel;
+  const peopleStepShown = next != null && (showPeople || openShares);
   // The pay-this-installment choices come first; part / extra / all-remaining open on request (or when chosen).
   const otherWaysShown = otherWaysOpen || effectiveChoice === "custom" || effectiveChoice === "extra" || effectiveChoice === "remaining";
 
-  // The flow's pages — Pay now / Past payment / Pay several — are tabs of one sheet: this switch is pinned on every page.
-  const intentValue: PaymentIntent = view === "payMany" ? "many" : view === "past" || (earlier && !directPayer) ? "past" : "now";
   const switchIntent = (v: PaymentIntent) => {
-    if (modeLocked || saving) return;
+    if (modeLocked || saving || receiptBusy) return;
     if (v === "now") {
       if (view === "pay" && !earlier) return;
       setMode("now");
+      setPinnedPast(null);
+      setLinkedTx(null);
       setDirectPayer(false);
       setView("pay");
     } else if (v === "past") {
@@ -771,44 +836,43 @@ export function RecordPaymentDialog({
       setDirectPayer(false);
       setView("payMany");
     }
+    setReceiving(null);
     setSwitched(true);
   };
-  // "Who is paying the lender?" — me (a normal payment from an account) or the assigned person, who paid the lender directly.
-  const choosePayer = (who: "me" | "other") => {
-    if (modeLocked || saving || next == null) return;
-    if (who === "me") {
-      setMode("now");
-      setPinnedPast(null);
-      setLinkedTx(null);
-      setDirectPayer(false);
-      return;
-    }
+  const openDirectPayment = () => {
+    if (modeLocked || saving || receiptBusy || next == null) return;
     const first = firstUnpaidInstallment(target);
     if (first && recordOnePast(first)) setDirectPayer(true);
   };
+  // The option names one person only when exactly one could be meant. With several sharing, nobody is implied: the payer
+  // is picked in the People rows.
+  const payerOptionName = sharingNames.length === 1 ? sharingNames[0] : sharingNames.length === 0 && payerName !== "Someone else" ? payerName : null;
   const payerChoice =
-    !lent && next != null && !modeLocked && (directPayer || !earlier) ? (
-      <PayGroup label={loanDetail ? "Who makes the lender payment?" : "Who is paying the lender?"}>
-        <PaySegmented<"me" | "other">
-          ariaLabel="Who is paying the lender"
-          wrapLabels={loanDetail}
-          options={[
-            { value: "me", label: "I'm paying" },
-            { value: "other", label: `${payerName} paid directly` },
-          ]}
-          value={directPayer ? "other" : "me"}
-          onChange={choosePayer}
-        />
-        <p className="text-[11px] text-muted-foreground" data-testid="payer-hint">
-          {loanDetail ? (directPayer ? "Lender account debit ₹0" : "Paid from the account you choose.") : (directPayer ? "Recorded as paid. No money leaves your accounts." : "Takes the amount out of the account you choose.")}
-        </p>
-      </PayGroup>
+    !lent && next != null && !modeLocked && card.purchaseOnCard && !directPayer && !earlier ? (
+      <p role="note" className="text-[11px] leading-snug text-muted-foreground" data-testid="issuer-unsupported">
+        The purchase is already in your card balance. Record a card bill payment in Credit Cards or a receipt from a person in People.
+      </p>
     ) : null;
-  const intentToolbar = target && (view !== "pay" || next != null) ? <PaymentIntentSwitch value={intentValue} onChange={switchIntent} lent={lent} isLoan={isLoan} singlePaymentLabel={loanDetail && !lent} disabled={modeLocked || saving || success} /> : undefined;
+  const backToPayment = () => switchIntent("now");
+  const otherFlows =
+    view === "pay" && !earlier && next != null ? (
+      <div data-testid="other-payment-flows">
+        <MorePaymentActions autoFocus={switched} className="h-8 px-2 text-xs" items={[
+          ...(!lent && !earlier && !card.purchaseOnCard && !modeLocked && !cardCheckPending && !cardCheckUnavailable ? [{
+            label: `${payerOptionName ?? "Person"} pays ${card.payee}`,
+            icon: UserRound,
+            disabled: saving || success || receiptBusy,
+            onSelect: openDirectPayment,
+          }] : []),
+          { label: lent ? "Past repayment" : "Past payment", icon: History, disabled: modeLocked || saving || success || receiptBusy, onSelect: () => switchIntent("past") },
+          ...(!cardLoanBillOnly ? [{ label: lent ? "Receive several" : "Pay several", icon: Layers, disabled: modeLocked || saving || success || receiptBusy, onSelect: () => switchIntent("many") }] : []),
+        ]} />
+      </div>
+    ) : null;
 
   // Header awareness (display only): the very values above, read — nothing is computed or written for it. See payment-awareness.tsx.
   const awarenessInput: AwarenessInput | null =
-    open && view !== "payMany"
+    open && view !== "payMany" && !cardLoanBillOnly
       ? {
           earlier: earlier || view === "past",
           directPayer: directPayer && earlier,
@@ -818,7 +882,7 @@ export function RecordPaymentDialog({
           cardLabel: !needsAccount ? cardLabel : null,
           account: payingAccount,
           amount: view === "pay" ? planAmount : null,
-          payerName,
+          payerName: payerShown,
           agreement: isLoan ? "Loan" : "EMI",
           success,
         }
@@ -834,120 +898,51 @@ export function RecordPaymentDialog({
           open={open}
           onOpenChange={onOpenChange}
           mode={view}
-          toolbar={intentToolbar}
+          onBack={backToPayment}
           instant={switched}
           workspace={loanDetail}
           onRecordOne={view === "past" ? recordOnePast : undefined}
+          ownCardAccountId={ownCardAccountId}
           preselectId={view === "past" && (initialView !== "past" || preselectInstallment) ? (preselectInstallment ? (target.installment?.id ?? anchor?.id ?? null) : (anchor?.id ?? null)) : null}
         />
       </>
     );
   }
 
-  // ---- The popup's interior ------------------------------------------------------------------------------------------------
-  // Presentation only: every value, condition and handler below is the one the dialog already had. The structure is a "payment
-  // ticket": a statement strip (what the LENDER is owed), the People card (what PEOPLE owe you — a separate thing), then the
-  // form on the left and a plain receipt on the right.
-  const amountTitle = earlier ? "How much was paid" : lent ? "How much are you receiving?" : "How much are you paying?";
+  const amountTitle = earlier ? "Amount paid" : lent ? "Amount received" : "Amount to pay";
 
-  const summaryStrip = next ? (
-    <section aria-label="Payment summary" className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 rounded-[10px] border border-border bg-gradient-to-b from-card to-secondary/50 px-4 py-2.5 shadow-e1">
-      <div className="flex flex-col gap-1">
-        <span className={PAY_LABEL}>{lent ? "To receive" : loanDetail ? "Lender installment balance" : "To pay lender"}</span>
-        <span className="font-heading text-[26px] leading-none font-bold tracking-tight whitespace-nowrap text-foreground tabular-nums">{formatCurrencyExact(remainingAmount(next))}</span>
-      </div>
-      <dl className="flex flex-wrap items-center divide-x divide-border">
-        {next.amountPaid > 0 && <StripFact label="Already paid" value={formatCurrencyExact(Math.min(next.amountPaid, next.amountDue))} />}
-        {breakdown && participants.length > 0 && <StripFact label="Your share" value={formatCurrencyExact(breakdown.yourShare)} />}
-        {breakdown && participants.length > 0 && <StripFact label="Owed to you by others" value={formatCurrencyExact(othersUnpaidNow)} tone={othersUnpaidNow > 0.005 ? "owed" : "done"} />}
-        <StripFact label={lent ? "Total still to receive" : isLoan ? "Loan outstanding" : "EMI outstanding"} value={formatCurrencyExact(outstanding)} muted />
-      </dl>
-    </section>
-  ) : null;
-
-  const shareQuestion = needsConfirm ? (
-    <PeopleShareConfirm dense compactCopy={loanDetail} names={settlement.attention.map((p) => p.personName)} amount={settlement.outstanding} answer={shareAnswer} onAnswer={(a) => !modeLocked && setShareAnswer(a)} />
-  ) : null;
-
-  // What PEOPLE owe you: their own tinted card, apart from the payment to the bank.
+  // What PEOPLE owe you: their own tinted card, apart from the payment to the bank. Its totals are the table's one summary.
   const peopleCard = peopleStepShown ? (
-    <PayCard
-      tone="people"
-      testId="people-card"
-      title={loanDetail ? (shareQuestion ? "Reimbursement status" : "People shares") : "From people"}
-      aside={participants.length > 0 && !(loanDetail && shareQuestion) ? othersUnpaidNow > 0.005 ? <>Owed to you <Money exact amount={othersUnpaidNow} className="ml-1 text-xs text-foreground" /></> : "All received" : undefined}
-    >
-      {loanDetail && shareQuestion}
-      {showPeople && (loanDetail && shareQuestion ? (
-        <PayMore title="Share details" summary={breakdown ? `Your share ${formatCurrencyExact(breakdown.yourShare)}` : undefined}>
-          <InstallmentPeoplePanel className="col-span-full" dense breakdown={breakdown} loading={breakdownLoading} returnTo={returnPath} />
-        </PayMore>
-      ) : <InstallmentPeoplePanel dense breakdown={breakdown} loading={breakdownLoading} returnTo={returnPath} />)}
-      {!loanDetail && shareQuestion}
-      {yesRecord && <HistoricalPeopleReconcile compact={loanDetail} state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} />}
+    <PayCard compact tone="people" testId="people-card" title="People">
+      {breakdownTarget && (
+        <PaymentPeopleTable
+          {...breakdownTarget}
+          breakdown={tableBreakdown}
+          loading={breakdownLoading}
+          agreementName={name}
+          cardEmi={card.onCard}
+          receiving={receiving}
+          receiptBusy={receiptBusy}
+          onReceiptBusy={setReceiptBusy}
+          onReceiving={(target) => {
+            // Only OPENING waits. Closing must always work: a saved receipt closes its own panel while still "busy".
+            if (target != null && (saving || receiptBusy)) return;
+            setReceiving(target == null ? null : { ...target, n: ++receiveSeq.current });
+          }}
+        />
+      )}
+      {openShares && tableParticipants.length === 0 && !breakdownLoading && (
+        <p className="text-xs text-foreground/85">
+          {peopleNames(settlement.attention.map((p) => p.personName))} still owe{settlement.attention.length === 1 ? "s" : ""} you {formatCurrencyExact(settlement.outstanding)} — {card.onCard ? "recording this EMI" : "paying the lender"} doesn&apos;t mark anyone as paid.
+        </p>
+      )}
     </PayCard>
   ) : null;
 
-  const amountBody = (
-    <>
-      <div role="radiogroup" aria-label={amountTitle} className="flex flex-wrap gap-1.5">
-        {leadingOptions.map((o) => {
-          const label = loanDetail && earlier ? (o.choice === "installment" ? "Remaining installment balance" : o.choice === "allDue" ? "Overdue installments" : o.label) : o.label;
-          return <AmountTile key={o.choice} active={effectiveChoice === o.choice} label={label} hint={o.hint} amount={o.amount} onSelect={() => setChoice(o.choice)} />;
-        })}
-        {otherWaysShown && (
-          <>
-            <AmountTile
-              active={effectiveChoice === "custom"}
-              label={earlier ? "A different amount" : "Part payment"}
-              hint={
-                earlier
-                  ? "Part of an installment, or several in order"
-                  : isLoan && loanRow?.loan.repaymentType !== "oneTime"
-                    ? "Pay only some of it, or a different amount. What's left stays due"
-                    : "Pay only some of the amount. What's left stays due"
-              }
-              onSelect={() => setChoice("custom")}
-            />
-            {extraAvailable && loanFigures && (
-              <AmountTile
-                active={effectiveChoice === "extra"}
-                label={lent ? "Repayment + extra payment" : "Installment + extra payment"}
-                hint={`${formatCurrencyExact(loanFigures.dueAmount)} due now is paid first · your extra lowers the loan balance (principal)`}
-                onSelect={() => setChoice("extra")}
-              />
-            )}
-            {remainingOption && (
-              <AmountTile
-                active={effectiveChoice === "remaining"}
-                label={`${remainingOption.label} · advanced`}
-                hint={remainingOption.hint}
-                amount={remainingOption.amount}
-                onSelect={() => {
-                  setRemainingAck(false);
-                  setChoice("remaining");
-                }}
-              />
-            )}
-          </>
-        )}
-      {!otherWaysShown && (
-        <div className="basis-full">
-          <button
-            type="button"
-            aria-expanded={false}
-            onClick={() => setOtherWaysOpen(true)}
-            className="flex items-center gap-1 rounded-[6px] px-1 py-0.5 text-xs font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            data-testid="other-ways-toggle"
-          >
-            <ChevronDown className="size-3.5" aria-hidden />
-            {earlier ? "A different amount" : "Part payment, extra payment or pay everything"}
-          </button>
-        </div>
-      )}
-      {otherWaysShown && effectiveChoice === "custom" && (
+  // The typed amount (and, on a Loan, where anything above what's due goes).
+  const customFields = (
         <Reveal className="flex basis-full flex-col gap-2">
-          <PayField label="Amount">
+          <PayField label={simplePay ? "Amount to pay" : "Amount"}>
             <PayAmountInput
               value={customAmount}
               autoFocus
@@ -979,7 +974,64 @@ export function RecordPaymentDialog({
             </div>
           )}
         </Reveal>
+  );
+
+  const choicesBody = (
+    <>
+      <div role="radiogroup" aria-label={amountTitle} className="flex flex-wrap gap-1.5">
+        {leadingOptions.map((o) => {
+          const label = earlier && o.choice === "installment" ? "Remaining installment balance" : earlier && o.choice === "allDue" ? "Overdue installments" : o.label;
+          return <AmountTile key={o.choice} active={effectiveChoice === o.choice} label={label} hint={earlier && o.choice === "installment" ? undefined : o.hint} amount={o.amount} onSelect={() => setChoice(o.choice)} />;
+        })}
+        {otherWaysShown && (
+          <>
+            <AmountTile
+              active={effectiveChoice === "custom"}
+              label={earlier ? "A different amount" : "Part payment"}
+              hint={
+                earlier
+                  ? "Part of an installment, or several in order"
+                  : isLoan && loanRow?.loan.repaymentType !== "oneTime"
+                    ? "Pay only some of it, or a different amount. What's left stays due"
+                    : "Pay only some of the amount. What's left stays due"
+              }
+              onSelect={() => setChoice("custom")}
+            />
+            {extraAvailable && loanFigures && (
+              <AmountTile
+                active={effectiveChoice === "extra"}
+                label={lent ? "Repayment + extra payment" : "Installment + extra payment"}
+                hint={`${formatCurrencyExact(loanFigures.dueAmount)} due now is paid first · your extra lowers the loan balance (principal)`}
+                onSelect={() => setChoice("extra")}
+              />
+            )}
+            {remainingOption && (
+              <AmountTile
+                active={effectiveChoice === "remaining"}
+                label={`${remainingOption.label} · advanced`}
+                hint={remainingOption.hint}
+                amount={remainingOption.amount}
+                onSelect={() => setChoice("remaining")}
+              />
+            )}
+          </>
+        )}
+      </div>
+      {!otherWaysShown && (
+        <div className="basis-full">
+          <button
+            type="button"
+            aria-expanded={false}
+            onClick={() => setOtherWaysOpen(true)}
+            className="flex items-center gap-1 rounded-[6px] px-1 py-0.5 text-xs font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            data-testid="other-ways-toggle"
+          >
+            <ChevronDown className="size-3.5" aria-hidden />
+            {earlier ? "A different amount" : "Part payment, extra payment or pay everything"}
+          </button>
+        </div>
       )}
+      {otherWaysShown && effectiveChoice === "custom" && customFields}
       {otherWaysShown && effectiveChoice === "extra" && loanFigures && (
         <Reveal className="flex basis-full flex-col gap-1.5">
           <PayField label="Extra amount" hint="Goes straight to reducing what you owe, on top of this installment.">
@@ -1000,18 +1052,6 @@ export function RecordPaymentDialog({
           )}
         </Reveal>
       )}
-      {otherWaysShown && effectiveChoice === "remaining" && remainingOption && !earlier && (
-        <Reveal className="basis-full">
-          <label className="flex items-start gap-2 rounded-[6px] border border-warning/50 bg-warning/10 px-3 py-2 text-xs leading-snug text-foreground" data-testid="remaining-warning">
-            <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-foreground" checked={remainingAck} onChange={(e) => setRemainingAck(e.target.checked)} />
-            <span>
-              <span className="block font-semibold">This pays every remaining installment in one go.</span>
-              <span className="block text-muted-foreground">It takes {formatCurrencyExact(remainingOption.amount)} out of your account at once. I understand and want to continue.</span>
-            </span>
-          </label>
-        </Reveal>
-      )}
-      </div>
       {showError && (
         <p role="alert" className="text-xs font-semibold text-expense">
           {error}
@@ -1020,30 +1060,101 @@ export function RecordPaymentDialog({
     </>
   );
 
+  // The two safeguards for large payments, under whichever amount control is on screen.
+  const agreementWord = isLoan ? "loan" : "EMI";
+  const largePaymentGuards = (needsFullAck || showClosureWarning) && planAmount != null && (
+    <div className="flex flex-col gap-1.5">
+      {showClosureWarning && (
+        <p role="note" className="rounded-[6px] border border-border bg-secondary px-3 py-2 text-xs leading-snug text-foreground" data-testid="closure-warning">
+          <span className="font-semibold">Not your lender&apos;s closure amount.</span>{" "}
+          {clearsPrincipal && planAmount < scheduledRemaining - 0.005 ? "This clears the principal recorded in FlowFi." : "This follows the schedule, including interest for later installments."} A foreclosure or closure quote may be different, and recording this payment doesn&apos;t close the {agreementWord} with your lender.
+        </p>
+      )}
+      {needsFullAck && (
+        <label className="flex items-start gap-2 rounded-[6px] border border-warning/50 bg-warning/10 px-3 py-2 text-xs leading-snug text-foreground" data-testid="remaining-warning">
+          <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-foreground" checked={fullAckFor === fullAckKey} onChange={(e) => setFullAckFor(e.target.checked ? fullAckKey : null)} />
+          <span>
+            <span className="block font-semibold">{clearsPrincipal && planAmount < scheduledRemaining - 0.005 ? `This pays off the whole ${agreementWord} balance.` : "This pays every remaining installment in one go."}</span>
+            <span className="block text-muted-foreground">
+              {formatCurrencyExact(planAmount)} {lent ? "is recorded as received" : cardLinked && !bankFunded ? "is recorded for this card EMI" : "leaves your account"} at once. I understand and want to continue.
+            </span>
+          </span>
+        </label>
+      )}
+    </div>
+  );
+
+  const coveredCount = through?.count ?? 1;
+  const dueNowCount = pastDueCount(loanRow?.installments ?? emiRow?.installments ?? []);
+  const overdueTotal = options.find((o) => o.choice === "allDue")?.amount ?? null;
+  const installmentLabel = next && (through ? `Installments #${through.first}–#${through.last}` : `Installment #${next.sequenceNumber} of ${totalCount}`);
+  const dueDescription = next && (
+    <>
+      <span>{installmentLabel}</span>
+      {through && <span> · {through.count} installments, paid in order</span>}
+      {!through && next.amountPaid > 0 && <span> · {formatCurrencyExact(Math.min(next.amountPaid, next.amountDue))} of {formatCurrencyExact(next.amountDue)} already paid</span>}
+      {dueNowCount > coveredCount && <span className="font-semibold text-expense"> · {dueNowCount} installments due{overdueTotal != null ? ` · ${formatCurrencyExact(overdueTotal)} total` : ""}</span>}
+    </>
+  );
+  const toggleAmount = () => {
+    // The box starts empty: on a Loan a typed amount above what's due means extra principal by default, so a pre-filled
+    // figure could quietly change what the payment does.
+    setCustomAmount("");
+    setCustomTouched(false);
+    setTreatment("reducePrincipal");
+    setChangingAmount((v) => !v);
+  };
+  const paymentAmount = next && (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+      {planAmount != null ? <Money exact amount={planAmount} className="font-heading text-lg text-current" /> : <span className="text-sm">—</span>}
+      {simplePay && !cardLoanBillOnly && (
+        <button
+          type="button"
+          aria-expanded={changingAmount}
+          disabled={saving || success}
+          onClick={toggleAmount}
+          className="inline-flex min-h-7 items-center rounded text-xs font-medium text-current underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          data-testid="change-amount"
+        >
+          {changingAmount ? "Use scheduled amount" : "Change amount"}
+        </button>
+      )}
+    </div>
+  );
+  const showAmountBody = !simplePay || changingAmount || showError || Boolean(largePaymentGuards);
+  const amountBody = simplePay ? (
+    <>
+      {changingAmount && customFields}
+      {showError && (
+        <p role="alert" className="text-xs font-semibold text-expense">
+          {error}
+        </p>
+      )}
+      {largePaymentGuards}
+    </>
+  ) : (
+    <>
+      {choicesBody}
+      {largePaymentGuards}
+    </>
+  );
+
   const whenBody = (
     <>
-      {cardLinked && !earlier && !modeLocked && cardLabel && (
-        <PayGroup label="How will you pay this EMI?">
-          <PaySegmented
-            ariaLabel="EMI funding"
-            options={[
-              { value: "card", label: `Charge to ${cardLabel}` },
-              { value: "bank", label: "Pay from a bank account" },
-            ]}
-            value={fundingMode}
-            onChange={setFundingMode}
-          />
-        </PayGroup>
-      )}
-
-      <div className={cn("grid grid-cols-1 gap-2.5", needsAccount && (loanDetail ? "@sm:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]" : "@lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]"))}>
+      <div className="grid min-w-0 grid-cols-1 items-end gap-2 @md:flex @md:flex-wrap @md:gap-x-3">
+        {!earlier && cardLinked && !bankFunded && (
+          <PayGroup label="Linked card" className="@md:flex-1">
+            <span className="flex min-h-9 items-center text-xs font-semibold text-foreground">{cardLabel}</span>
+          </PayGroup>
+        )}
         {needsAccount && (
           <PayField
-            label={directLoanRecord ? "Account for this record" : earlier ? (directPayer ? "Record under account · no balance change" : `${lent ? "Received into" : "Paid from"} · for your records`) : lent ? "Received into" : "Paid from"}
+            className="@md:flex-[1_1_11rem]"
+            label={directLoanRecord ? "Account for this record" : earlier ? (directPayer ? "Record under account · no balance change" : `${lent ? "Received into" : "Paid from"} · for your records`) : lent ? "Received into" : "Paying account"}
           >
-            {accounts.length === 0 ? (
+            {selectableAccounts.length === 0 ? (
               <span className="flex h-9 items-center justify-between gap-2 rounded-[6px] border border-dashed border-border bg-secondary px-3 text-xs text-muted-foreground">
-                Add an account first
+                {accounts.length === 0 ? "Add an account first" : "Add a bank, cash or wallet account"}
                 <AddElsewhereLink href="/accounts" label="Go to Accounts" />
               </span>
             ) : (
@@ -1059,38 +1170,61 @@ export function RecordPaymentDialog({
             )}
           </PayField>
         )}
-        <PayField label={lent ? (earlier ? "Received on" : "Payment date") : "Paid on"}>
+        <PayField className="@md:flex-[0_1_10rem]" label={lent && earlier ? "Received on" : "Payment date"}>
           <span className="relative">
             {earlier ? (
               <DateInput className={PAY_INPUT} aria-label={lent ? "Date received" : "Date paid"} value={dateUnknown ? "" : earlierDate} max={today} disabled={dateUnknown} calendar={{ dueDate: next?.dueDate }} onChange={(e) => setEarlierDate(e.target.value)} />
             ) : (
-              <DateInput className={PAY_INPUT} aria-label="Payment date" value={date} calendar={{ dueDate: next?.dueDate }} onChange={(e) => setDate(e.target.value)} />
+            <DateInput className={PAY_INPUT} aria-label="Payment date" aria-invalid={paymentDateError ? true : undefined} value={date} calendar={{ dueDate: next?.dueDate }} onChange={(e) => setDate(e.target.value)} />
             )}
           </span>
-          {next && (
-            <span className="text-[11px] font-medium text-muted-foreground" data-testid="payment-due-context">
-              Due: {next.dueDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-            </span>
-          )}
         </PayField>
-        {earlier && !loanDetail && (
-          <PayField label="Note" className="@lg:col-span-2">
-            <input className={PAY_INPUT} aria-label="Note" placeholder="Note or reference (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
-          </PayField>
-        )}
       </div>
+      {paymentDateError && <p role="alert" className="text-xs font-semibold text-expense">{paymentDateError}</p>}
+      {cardFundingError && <p role="alert" className="text-xs font-semibold text-expense">{cardFundingError}</p>}
+
+      {!earlier && !lent && cardLinked && (
+        <p role="note" className={cn("text-[11px] leading-snug", bankFunded ? "rounded-md border border-warning/50 bg-warning/10 px-2.5 py-1.5 text-foreground" : "text-muted-foreground")} data-testid="card-bill-note">
+          {bankFunded
+            ? card.purchaseOnCard
+              ? "Use this for a separate issuer payment. The principal goes to the card and any interest or fees come from the paying account. If the payment is part of your card bill, pay the bill instead."
+              : "This pays the installment separately from your card bill."
+            : "Recording the installment does not pay your card bill."}
+          {cardBillHref && !receiptOpen && <> <Link href={cardBillHref} className="font-semibold underline underline-offset-2">Pay card bill</Link></>}
+        </p>
+      )}
+      {!earlier && cardLinked && !modeLocked && !cardCheckPending && !cardCheckUnavailable && (
+        <PayMore compact title="EMI payment options" summary={bankFunded ? "From my account" : "Record on linked card"}>
+          <PaySegmented
+            className="col-span-full [&>button]:min-h-8"
+            ariaLabel="EMI funding"
+            options={[
+              { value: "bank", label: "Pay from a bank account" },
+              { value: "card", label: "Record on linked card" },
+            ]}
+            value={fundingMode}
+            onChange={setFundingMode}
+          />
+        </PayMore>
+      )}
 
       {backdated && (
         <div role="note" className="flex flex-col gap-1 rounded-[6px] border border-warning/50 bg-warning/10 px-3 py-2 text-xs leading-snug text-foreground" data-testid="backdate-hint">
           <p className="text-[10.5px] font-semibold tracking-[0.06em] text-warning-foreground uppercase dark:text-warning">Back-dated payment</p>
           <p className="[overflow-wrap:anywhere]">
-            This records a real {lent ? "credit to" : needsAccount ? "payment from" : "charge on"} <span className="font-semibold">{backdatedSource}</span> dated{" "}
-            <span className="font-semibold whitespace-nowrap">{paymentDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>; its balance changes from that date.
+            {needsAccount
+              ? `This records a real ${lent ? "credit to" : "payment from"}`
+              : legPlan && legPlan.cardCharge > 0
+                ? `This records ${formatCurrencyExact(legPlan.cardCharge)} in new charges on`
+                : "This records the EMI on"}{" "}
+            <span className="font-semibold">{backdatedSource}</span> dated{" "}
+            <span className="font-semibold whitespace-nowrap">{paymentDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>
+            {needsAccount || (legPlan?.cardCharge ?? 0) > 0 ? ". Its balance changes from that date." : "."}
           </p>
           {!modeLocked && (
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-warning/30 pt-1.5">
               <span className="text-muted-foreground">{lent ? "Received" : "Paid"} before FlowFi, already in your balance?</span>
-              <button type="button" onClick={() => setView("past")} className="font-semibold underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <button type="button" onClick={() => switchIntent("past")} disabled={saving || receiptBusy} className="font-semibold underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">
                 {lent ? "Record past repayments instead" : "Record past payments instead"}
               </button>
             </div>
@@ -1124,43 +1258,41 @@ export function RecordPaymentDialog({
               onClear={() => setLinkedTx(null)}
             />
           )}
-          {!lent && !earlierSplit && <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} viaLender={directPayer} noBalanceChange={!directPayer} />}
-          {!earlierSplit && (
-            <p className="text-xs font-medium text-foreground/80" data-testid="past-payment-effect">
-              No account balance changes for the {lent ? "repayment" : "lender payment"}.
-            </p>
-          )}
+          {!lent && !earlierSplit && <HistoricalPeopleReconcile state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} viaLender={directPayer} directPaymentLabels={directPayer} noBalanceChange />}
         </>
       )}
     </>
   );
 
-  // The lender side in ONE card: 1 · amount, 2 · where it comes from and when.
   const payCard = (
-    <PayCard title={directLoanRecord ? "Lender payment details" : earlier ? "Past payment" : lent ? "Receive the repayment" : "Pay the lender"} aside={amountLabel} testId="pay-card">
-      <div className="flex flex-col gap-2.5" data-testid="amount-card">
-        <PayStepHead n={1} label={amountTitle} />
-        {amountBody}
+    <PayCard compact testId="pay-card">
+      {cardCheckPending || cardCheckUnavailable ? (
+        <p role={cardCheckPending ? "status" : "alert"} className="text-xs text-muted-foreground">
+          {cardCheckPending ? "Checking the linked card and purchase…" : "The linked card or purchase is unavailable. Open Credit Cards to check it."}
+          {cardCheckUnavailable && cardBillHref && !receiptOpen && <> <Link href={cardBillHref} className="font-semibold underline underline-offset-2">Open Credit Cards</Link></>}
+        </p>
+      ) : cardLoanBillOnly ? (
+        <p role="note" className="text-xs text-foreground" data-testid="card-bill-note">
+          The purchase is already in the card balance. Use Pay card bill to reduce the issuer balance, then use Past payment if you need to record an installment already paid.
+        </p>
+      ) : <>
+      <div className={cn("grid min-w-0 items-start gap-2", !simplePay && "@2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]")}>
+        {showAmountBody && <div className={cn("flex min-w-0 flex-col gap-2", simplePay && "border-b border-border pb-2")} data-testid="amount-card">
+          {!simplePay && <h4 className={PAY_LABEL}>{amountTitle}</h4>}
+          {amountBody}
+        </div>}
+        <div className="@container flex min-w-0 flex-col gap-1.5" data-testid="when-card">
+          {earlier && !directPayer && !lent && <p className="text-xs text-muted-foreground">Paid by <span className="font-semibold text-foreground">you</span></p>}
+          {whenBody}
+        </div>
       </div>
-      <div className="flex flex-col gap-2.5 border-t border-border pt-3" data-testid="when-card">
-        <PayStepHead n={2} label={directLoanRecord ? "Account and date" : earlier ? "When" : needsAccount ? (lent ? "Received into · date" : "Paid from · date") : "Paid with · date"} value={[sourceSummary, dateSummary].filter(Boolean).join(" · ")} />
-        {whenBody}
-      </div>
+      {payerChoice}
+      </>}
     </PayCard>
   );
 
-  // Until the People question is answered the lender card waits — shown, so the layout never jumps.
-  const lockedCard =
-    next != null && !earlier && peopleStepShown && !showPaymentDetails ? (
-      <PayCard title="Pay the lender" testId="pay-card-locked">
-        <div className="flex min-h-[9rem] flex-col items-center justify-center gap-1 rounded-[8px] border border-dashed border-border-strong bg-secondary/40 px-4 py-6 text-center">
-          <p className="text-[13px] font-semibold text-foreground">Answer the question about people first</p>
-          <p className="text-xs text-muted-foreground">Then choose the amount, the account and the date.</p>
-        </div>
-      </PayCard>
-    ) : null;
-
-  const accountPreview = fundsApply && payingAccount ? <PaymentSourceSummary account={payingAccount} amount={planAmount} credit={yesRecord && reconcile.plan.ok && reconcile.accountId === payingAccount.id ? reconcile.plan.summary.balanceChange : 0} paymentLabel={isLoan ? "Loan payment" : "EMI payment"} /> : null;
+  const accountPreview = fundsApply && payingAccount ? <PaymentSourceSummary account={payingAccount} amount={planAmount} credit={0} paymentLabel={isLoan ? "Loan payment" : "EMI payment"} /> : null;
+  const showAccountWarning = underfunded || (payingAccount != null && planAmount != null && previewFunds(payingAccount, planAmount).belowMinimum);
   // Read off the same allocation the write performs.
   const receiptDetails =
     showPaymentDetails && !earlier && planAmount != null ? (
@@ -1175,14 +1307,9 @@ export function RecordPaymentDialog({
               </ReceiptLine>
               <PreviewLine label="Remaining principal" before={<Money exact amount={prepaymentPreview.principalBefore} />} after={<Money exact amount={prepaymentPreview.principalAfter} />} />
               {solved && <PreviewLine label="Installments left" before={prepaymentPreview.installmentCountBefore} after={solved.remainingInstallmentCount} />}
-              {prepaymentPreview.outcome?.kind === "unsolvable" && (
-                <p className="text-[11px] text-warning-foreground dark:text-warning">The schedule can&apos;t be re-planned automatically; the payment is still recorded.</p>
-              )}
             </div>
           ) : loanPreview ? (
             <PaymentPreview
-              bare
-              source={loanDetail ? null : sourceLine}
               coverage={loanPreview.coverage}
               extraPrincipal={loanPreview.extraPrincipal}
               outstandingBefore={loanRow!.outstandingPrincipal}
@@ -1191,8 +1318,6 @@ export function RecordPaymentDialog({
             />
           ) : emiAllocation ? (
             <PaymentPreview
-              bare
-              source={sourceLine}
               coverage={paymentCoverage(emiAllocation.portions.map((p) => ({ sequenceNumber: p.installment.sequenceNumber, amount: p.amount, remainingAfter: p.remainingAfter })))}
               outstandingBefore={emiAllocation.remainingBefore}
               outstandingAfter={emiAllocation.remainingAfter}
@@ -1208,36 +1333,44 @@ export function RecordPaymentDialog({
               }
             />
           ) : null}
-          {!loanDetail && accountPreview}
+          {!showAccountWarning && accountPreview}
           {lentAccount && <PreviewLine label={lentAccount.name} before={<Money exact amount={lentAccount.currentBalance} />} after={<Money exact amount={lentAccount.currentBalance + planAmount} />} />}
-          {!loanDetail && !previewShown && sourceLine}
           {emiRow && cardLabel && legPlan != null && <CardImpact plan={legPlan} cardLabel={cardLabel} />}
-          {peopleImpact && (
-            <p className="border-t border-border pt-2 text-xs text-foreground/85" data-testid="people-impact">
-              <span className="font-semibold text-foreground">People: </span>
-              {peopleImpact}
-            </p>
-          )}
-          {postponedImpact && <p className="text-xs text-foreground/80">{postponedImpact}</p>}
         </section>
     ) : null;
 
-  const receiptCard = receiptDetails && (loanDetail ? (
-    <>
-      {accountPreview}
-      <PayMore title="Payment breakdown" summary={amountLabel}>{receiptDetails}</PayMore>
-    </>
-  ) : <PayCard title="What will happen" aside={amountLabel}>{receiptDetails}</PayCard>);
+  const reviewLine = sourceLine ?? (
+    <span className="text-xs text-foreground/85">
+      {needsAccount && !payingAccount ? `Choose ${lent ? "a receiving" : "a paying"} account to preview the balance change.` : "Saving updates the installment balance."}
+    </span>
+  );
+  const receiptCard = (
+    <section aria-label="Payment review" className="flex min-w-0 flex-col gap-1">
+      {earlier ? (
+        <p className="px-1 text-xs font-medium text-foreground/85" data-testid={directPayer ? "payer-hint" : "past-payment-effect"}>
+          {directPayer
+            ? `${amountLabel ? `${amountLabel} paid` : "Payment made"} directly to the ${card.payee}. No account debit, no card charge.`
+            : `No account balance changes for the ${lent ? "repayment" : "lender payment"}.`}
+        </p>
+      ) : receiptDetails ? (
+        <PayMore compact title={reviewLine} summary="Details">{receiptDetails}</PayMore>
+      ) : <p className="px-1">{reviewLine}</p>}
+      {showAccountWarning && accountPreview}
+      {reamortizes && prepaymentPreview?.outcome?.kind === "unsolvable" && (
+        <p role="note" className="px-1 text-xs text-warning-foreground dark:text-warning">Saving records the payment. Update the schedule manually because it can&apos;t be re-planned automatically.</p>
+      )}
+    </section>
+  );
 
-  const linkedFundsNotice = showPaymentDetails && !lent && next && (
+  const linkedFundsNotice = showPaymentDetails && !earlier && !lent && next && (
     <LinkedFundsPayNotice funds={linkedFundsForInstallment(linkedFunds, next.id)} accountName={(id) => accounts.find((a) => a.id === id)?.name} onUseAccount={needsAccount ? setAccountId : undefined} />
   );
-  const moreOptions = showPaymentDetails && (!earlier || loanDetail) && (
-    <PayMore title={loanDetail ? "Add a note" : "More options"} summary={note.trim() || (!loanDetail && (emiRow ? "Note, GST, fees" : "Note")) || undefined}>
-      <PayField label="Note" className={loanDetail ? "col-span-full" : undefined}>
+  const moreOptions = showPaymentDetails && (
+    <PayMore compact title={emiRow && (!earlier || loanDetail) ? "Note, GST and fees" : "Add a note"} summary={note.trim() || undefined}>
+      <PayField label="Note" className="col-span-full">
         <input className={PAY_INPUT} aria-label="Note" placeholder="Optional" value={note} onChange={(e) => setNote(e.target.value)} />
       </PayField>
-      {emiRow && (
+      {emiRow && (!earlier || loanDetail) && (
         <>
           <PayField label="GST" hint="For your records only.">
             <input type="number" inputMode="decimal" className={PAY_INPUT} value={gst} onChange={(e) => setGst(e.target.value)} />
@@ -1250,88 +1383,76 @@ export function RecordPaymentDialog({
     </PayMore>
   );
 
-  const pastHeader = earlier && !directLoanRecord && (
-    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-[10px] border border-border bg-secondary/60 px-3 py-2" data-testid="past-payment-header">
-      <span className="text-[13px] font-semibold text-foreground">
-        {directPayer ? (
-          <>Paid directly by {payerName} <span className="font-normal text-muted-foreground">· no account balance changes</span></>
-        ) : (
-          loanDetail ? "Recorded for reference" : <>Past payment <span className="font-normal text-muted-foreground">· {lent ? "received" : "paid"} before FlowFi — no account balance changes</span></>
-        )}
-      </span>
-      {!modeLocked && !directPayer && (
-        <span className="flex flex-wrap gap-x-3 text-xs">
+  const pastLinks = earlier && !modeLocked && !directPayer && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
           <button type="button" onClick={() => setView("past")} className="font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
             Choose other installments
           </button>
-          <button type="button" onClick={() => setMode("now")} className="font-semibold text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            {lent ? "Receive it now instead" : "Pay it now instead"}
-          </button>
-        </span>
-      )}
-    </div>
+        </div>
   );
+  // "Person pays lender": the same table as "I pay", over the same per-person answers and the same save.
+  const severalInstallments = (reconcileIds ?? touched).length > 1;
+  const peopleLocked = lenderDone && reconcile.failed.length === 0;
   const pastPeopleCard = showPastPeople && (
-    <PayCard tone="people" title={loanDetail ? "People shares" : "From people"}>
-      {!loanDetail && <p className="text-xs font-medium text-foreground/85" data-testid="past-payment-effect">The lender payment doesn&apos;t change your accounts.</p>}
-      <HistoricalPeopleReconcile compact={loanDetail} state={reconcile} accounts={accounts} showInstallment={(reconcileIds ?? touched).length > 1} locked={lenderDone && reconcile.failed.length === 0} viaLender={directPayer} directPaymentLabels={directLoanRecord} noBalanceChange={earlier && !directPayer} />
+    <PayCard compact tone="people" title={directPayer ? "Whose share was covered?" : "People contributions"}>
+      {directPayer ? (
+        <DirectPayerTable cardEmi={card.onCard} state={reconcile} accounts={accounts} myShare={!severalInstallments && breakdown ? breakdown.yourShare : null} showInstallment={severalInstallments} lenderAmount={planAmount} locked={peopleLocked} />
+      ) : (
+        <HistoricalPeopleReconcile compact state={reconcile} accounts={accounts} showInstallment={severalInstallments} locked={peopleLocked} noBalanceChange={earlier} />
+      )}
+      {directError != null && (
+        <p role="alert" className="text-xs font-semibold text-expense" data-testid="direct-settlement-blocker">
+          {directError}
+        </p>
+      )}
     </PayCard>
   );
-  const reviewColumn = earlier ? pastPeopleCard : (peopleCard || receiptCard || linkedFundsNotice) && (
-    <>
-      {peopleCard}
-      {linkedFundsNotice}
-      {receiptCard}
-    </>
-  );
-
   return (
     <>
     <PaymentAwarenessPublisher input={awarenessInput} />
     <PaymentSheet
       open={open}
       onOpenChange={onOpenChange}
-      toolbar={intentToolbar}
+      onBack={earlier ? backToPayment : undefined}
+      backDisabled={modeLocked}
+      actions={otherFlows}
       instant={switched}
       workspace={loanDetail}
-      eyebrow={earlier ? (directPayer ? "Paid directly" : "Past payment") : lent ? "Repayment" : isLoan ? "Loan payment" : "EMI payment"}
+      compactHeader
+      headerTestId={next && simplePay ? "due-summary" : undefined}
+      eyebrow={earlier ? name : undefined}
       icon={earlier ? History : Wallet}
-      title={earlier ? (directPayer ? `Paid by ${payerName}` : lent ? "Record past repayment" : "Record past payment") : lent ? "Record repayment" : isLoan ? "Pay installment" : "Pay EMI"}
-      description={next ? `${name} · Installment #${next.sequenceNumber} of ${totalCount}` : name}
-      chip={next ? { label: overdue ? `Overdue · ${formatDueDate(next.dueDate)}` : `Due ${formatDueDate(next.dueDate)}`, tone: overdue ? "danger" : "neutral" } : null}
-      heroLabel={loanDetail && next ? (lent ? "Installment to receive" : "Installment balance") : undefined}
-      hero={loanDetail && next ? <Money exact amount={remainingAmount(next)} className="font-heading text-xl text-foreground" /> : undefined}
+      title={earlier ? (directPayer ? "Record direct payment" : lent ? "Record past repayment" : "Record past payment") : name}
+      titlePrefix={earlier ? undefined : lent ? "Record repayment" : isLoan ? "Pay installment" : "Pay EMI"}
+      description={dueDescription}
+      chip={next ? { label: `${overdue ? "Overdue ·" : "Due"} ${formatDueDate(next.dueDate)}`, tone: overdue ? "danger" : "neutral" } : null}
+      hero={paymentAmount}
       onConfirm={submit}
       confirmLabel={confirmLabel}
+      confirmHref={cardLoanBillOnly && !receiptOpen ? cardBillHref ?? undefined : undefined}
       confirmDisabled={confirmDisabled}
+      closeDisabled={receiptBusy}
       pending={pending}
-      summary={
-        planAmount != null && amountLabel ? (
-          <>
-            {earlier ? (directPayer ? `Paid by ${payerName}` : "Past payment") : lent ? "Receive" : "Pay"} <span className="tabular-nums">{amountLabel}</span>
-            <span className="font-medium text-foreground/65">
-              {" · "}
-              {[earlier ? "no balance change" : sourceSummary ? `${needsAccount ? (lent ? "into" : "from") : "on"} ${sourceSummary}` : null, dateSummary].filter(Boolean).join(" · ")}
-            </span>
-          </>
-        ) : undefined
-      }
       loading={saving}
       success={success}
+      successFeedback={awarenessInput && <PaymentSuccessFeedback input={awarenessInput} />}
       refreshing={refreshing}
       operation={operation.snapshot}
     >
-      <div ref={gridBox} className="flex flex-col gap-3">
-        {!next && <p className="rounded-[10px] border border-border bg-card p-3.5 text-sm font-semibold text-success shadow-e1">Fully paid — nothing is due.</p>}
+      <div className="mx-auto flex min-w-0 max-w-[80rem] flex-col gap-2">
+        {!next && <p className="rounded-lg border border-border bg-card p-3 text-sm font-semibold text-success">Fully paid — nothing is due.</p>}
         {through && (
           <p role="note" className="rounded-[10px] border border-border bg-card px-3 py-2 text-xs text-foreground shadow-e1" data-testid="through-note">
             You picked installment #{through.last}. Loan installments are paid in order, so{" "}
-            {through.count === 2 ? `#${through.first} (still unpaid) is` : `#${through.first}–#${through.last - 1} (still unpaid) are`} paid first. Choose below what to pay.
+            {through.count === 2 ? `#${through.first} (still unpaid) is` : `#${through.first}–#${through.last - 1} (still unpaid) are`} paid first. {simplePay ? "To pay a different amount, use Change amount." : "Choose below what to pay."}
           </p>
         )}
-        {!loanDetail && summaryStrip}
-        {!loanDetail && payerChoice}
-
+        {lenderDone && reconcile.failed.length > 0 && !saving && (
+          <p role="alert" className="rounded-[10px] border border-expense/40 bg-card px-3 py-2 text-xs font-semibold text-expense shadow-e1" data-testid="people-partly-saved">
+            Only partly saved: the lender payment is recorded, but {reconcile.failed.length} People update{reconcile.failed.length === 1 ? "" : "s"} failed. Retry below — the lender payment won&apos;t be recorded again.{" "}
+            {directRecord ? "If you close this, open the installment on the schedule to finish the People record." : "If you close this, add the missing amounts in People."}
+          </p>
+        )}
         {/* Linked to a person but not set to repay: nothing is added to their People Ledger — say so, never change it here. */}
         {uncountedAssignee != null && next != null && !lent && (
           <p role="note" className="rounded-[10px] border border-border bg-card px-3 py-2 text-xs text-foreground shadow-e1" data-testid="uncounted-assignee-note">
@@ -1343,50 +1464,22 @@ export function RecordPaymentDialog({
           </p>
         )}
 
-        {next != null && (loanDetail ? (
-          <div className={cn("grid items-start gap-3", (payerChoice || reviewColumn) && "@2xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]")}>
-            {(payerChoice || reviewColumn) && <div className={showPaymentDetails ? "@container flex min-w-0 flex-col gap-2.5 @2xl:col-start-2 @2xl:row-start-1" : "contents"}>
-              {payerChoice && <PayCard>{payerChoice}</PayCard>}
-              {reviewColumn && <aside aria-label="Reimbursements and payment review" className="flex min-w-0 flex-col gap-2.5">{reviewColumn}</aside>}
-            </div>}
-            {showPaymentDetails && <div className="@container flex min-w-0 flex-col gap-2.5 @2xl:col-start-1 @2xl:row-start-1">
-              {pastHeader}
+        {next != null && (
+          <div className={cn("grid min-w-0 items-start gap-2", tableParticipants.length > 0 && "lg:@min-[55rem]:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]")}>
+            <div className="flex min-w-0 flex-col gap-2">
               {payCard}
-              {moreOptions}
-            </div>}
-          </div>
-        ) : earlier ? showPaymentDetails && (
-          <div className={cn("grid gap-3", showPastPeople && "@2xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] @2xl:items-start")}>
-            <div className="flex min-w-0 flex-col gap-3">
-              {pastHeader}
-              {payCard}
+              {!cardLoanBillOnly && linkedFundsNotice}
+              {!cardLoanBillOnly && !cardCheckPending && !cardCheckUnavailable && receiptCard}
+              {earlier ? pastPeopleCard : peopleCard}
+              {!cardLoanBillOnly && moreOptions}
+              {pastLinks}
             </div>
-            {pastPeopleCard}
+            {breakdownTarget && tableParticipants.length > 0 && <ReceivedHistoryPanel participants={tableParticipants} installments={breakdownTarget.installments} sourceKind={breakdownTarget.sourceKind} />}
           </div>
-        ) : (peopleStepShown || showPaymentDetails) && (
-          <div className="grid gap-3 @2xl:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] @2xl:items-start">
-            <div className="flex min-w-0 flex-col gap-3">{showPaymentDetails ? payCard : lockedCard}</div>
-            <div className="flex min-w-0 flex-col gap-3">
-              {peopleCard}
-              {receiptCard}
-              {linkedFundsNotice}
-              {moreOptions}
-            </div>
-          </div>
-        ))}
+        )}
       </div>
     </PaymentSheet>
     </>
-  );
-}
-
-/** One figure of the statement strip: caption over value (a `dt` then its `dd`). `owed` = still to come in; `done` = nothing left. */
-function StripFact({ label, value, muted, tone }: { label: string; value: string; muted?: boolean; tone?: "owed" | "done" }) {
-  return (
-    <div className="flex flex-col gap-0.5 px-3.5 first:pl-0 last:pr-0">
-      <dt className="text-[10.5px] font-medium text-muted-foreground">{label}</dt>
-      <dd className={cn("text-[13px] font-semibold tabular-nums", muted ? "text-muted-foreground" : tone === "owed" ? "text-settle-receivable-text" : tone === "done" ? "text-success" : "text-foreground")}>{value}</dd>
-    </div>
   );
 }
 
@@ -1428,13 +1521,7 @@ function PaymentPreview({
   outstandingBefore,
   outstandingAfter,
   nextDue,
-  bare = false,
-  source = null,
 }: {
-  /** Where the money comes from / goes to — sits directly under the amount paid. */
-  source?: React.ReactNode;
-  /** Inside another box (the "What will happen" block): no border / fill of its own. */
-  bare?: boolean;
   coverage: PaymentCoverage;
   extraPrincipal?: number;
   outstandingBefore: number;
@@ -1443,7 +1530,7 @@ function PaymentPreview({
 }) {
   const { settled, partial } = coverage;
   return (
-    <div className={cn("flex flex-col gap-2.5", !bare && cn(LE_RADIUS.control, "border border-border bg-secondary px-3 py-2.5"))} aria-label={bare ? undefined : "Payment preview"}>
+    <div className="flex flex-col gap-2.5">
       <div className="flex flex-col gap-1">
         {settled && (
           <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
@@ -1468,7 +1555,6 @@ function PaymentPreview({
             <Money exact amount={extraPrincipal} className="ml-auto text-sm text-foreground" />
           </div>
         )}
-        {source}
       </div>
       <div className="flex flex-col gap-1.5 border-t border-border pt-2">
         <PreviewLine label="Outstanding" before={<Money exact amount={outstandingBefore} className="text-muted-foreground" />} after={<Money exact amount={outstandingAfter} />} />
@@ -1489,9 +1575,11 @@ function PaymentPreview({
 }
 
 /** Where a card-linked EMI payment's money comes from — one short line; the card effect itself is the "Credit card impact" group. */
-function cardEmiSource(plan: ReturnType<typeof planCardEmiLegs>, who: { cardLabel: string; bankName: string | null }): string {
+function cardEmiSource(plan: ReturnType<typeof planCardEmiLegs>, recorded: string, who: { cardLabel: string; bankName: string | null }): string {
   const f = formatCurrencyExact;
-  if (plan.mode === "bank") return `${f(plan.bankDebit)} will be taken from ${who.bankName ?? "the account you choose"}.`;
+  if (plan.mode === "bank") {
+    return `${f(plan.bankDebit)} will be taken from ${who.bankName ?? "the account you choose"}.${plan.principalTransfer > 0 ? ` ${f(plan.principalTransfer)} pays down ${who.cardLabel}.` : ""}`;
+  }
   if (plan.emiCase === "B") return `${f(plan.cardCharge)} will be charged to ${who.cardLabel}.`;
-  return plan.cardCharge > 0 ? `${f(plan.cardCharge)} interest & fees will be charged to ${who.cardLabel}.` : `Nothing new is charged to ${who.cardLabel}.`;
+  return `Record ${recorded} for ${who.cardLabel} · ${plan.cardCharge > 0 ? `${f(plan.cardCharge)} in new interest and fees` : "no new card charge"}.`;
 }

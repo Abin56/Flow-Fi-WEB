@@ -29,7 +29,10 @@ scenario("ptabs-layout", "People: the person page opens on a compact header + Ov
   chk("Secondary figures stay out of the default view", !(await page.getByTestId("person-overview-cycle").isVisible()) && !(await page.getByTestId("linked-emi-snapshot").isVisible()));
   const open = page.getByTestId("open-items");
   const otext = (await open.count()) ? await f.flat(open) : "";
-  chk("Open items lists the unpaid EMI share with a Record receipt action", /QA Shared EMI|EMI/i.test(otext) && (await open.getByRole("button", { name: /^Record receipt/ }).count()) >= 1, otext.slice(0, 200));
+  chk("Open items lists the unpaid EMI with Paid and Pending columns and a Record receipt action", /QA Shared EMI|EMI/i.test(otext)
+    && await open.getByRole("columnheader", { name: "Paid", exact: true }).isVisible()
+    && await open.getByRole("columnheader", { name: "Pending", exact: true }).isVisible()
+    && (await open.getByRole("button", { name: /^Record receipt/ }).count()) >= 1, otext.slice(0, 200));
   chk("no transaction table on the Overview tab", (await page.locator("tr[data-obligation-key]:visible").count()) === 0);
   chk("header shows the cycle ring", (await header.getByRole("progressbar", { name: /of this cycle settled/ }).count()) === 1);
   const main = await page.evaluate(() => { const m = document.querySelector("main"); return m ? { sh: m.scrollHeight, ch: m.clientHeight } : null; });
@@ -48,7 +51,7 @@ scenario("ptabs-layout", "People: the person page opens on a compact header + Ov
   const linked = page.getByTestId("linked-emi-snapshot");
   chk("Linked EMI disclosure opens the preview", await linked.isVisible());
   const btext = await f.flat(linked);
-  chk("EMI preview shows what is owed, due later, and paid to the lender", /Owed\W+₹1,000.*Later\W+₹2,000.*0\/3 shares repaid.*Paid to lender\s+0\/3/i.test(btext), btext.slice(0, 240));
+  chk("EMI preview shows the remaining balance, what is due now and later, and lender progress", /Remaining balance[\s|]+−₹3,000.*Due now[\s|]+₹1,000.*Due later[\s|]+₹2,000.*Paid to lender\s+0\/3/i.test(btext), btext.slice(0, 240));
   await emiDetails.locator("summary").click();
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -83,14 +86,20 @@ scenario("ptabs-switch", "People: tabs switch content (Linked EMIs cards + sched
   const height = Math.round((await card.boundingBox()).height);
   chk("the collapsed desktop EMI card fits within 170px", height <= 170, `${height}px`);
   const ctext = await f.flat(card);
-  chk("EMI card shows the unpaid, repaid and future shares separately from lender payments", /Unpaid to date/i.test(ctext) && /Repaid to you/i.test(ctext) && /Due later/i.test(ctext) && /Paid to lender/i.test(ctext) && (await card.getByRole("progressbar").count()) === 1, ctext.slice(0, 240));
+  chk("EMI card shows the share balance and timing separately from lender payments", /Share total/i.test(ctext) && /Paid toward share/i.test(ctext) && /Remaining balance/i.test(ctext) && /Due now/i.test(ctext) && /Paid to lender/i.test(ctext) && (await card.getByRole("progressbar").count()) === 1, ctext.slice(0, 240));
   chk("EMI card: settlement status line", /(owes|Up to date|Fully settled|postponed)/i.test(ctext), ctext.slice(0, 240));
   await h.shot(page, "ptabs-emis-compact");
   await card.getByRole("button", { name: "Schedule" }).click();
   await page.waitForTimeout(400);
-  chk("Schedule opens the monthly list", (await card.getByRole("list", { name: /monthly schedule/ }).count()) === 1);
+  const schedule = card.getByRole("table", { name: /monthly schedule/ });
+  chk("Schedule opens a table with dates, amounts and status", await schedule.isVisible()
+    && (await schedule.getByRole("columnheader").allTextContents()).join("|") === "Due date|EMI share|Paid|Pending|Status");
   const statuses = card.getByTestId("linked-emi-schedule-status");
-  chk("schedule identifies the share and lender status on each installment", await statuses.count() > 0 && (await statuses.allTextContents()).every((status) => /Share.+Lender/.test(status)));
+  chk("schedule identifies the person's repayment status", await statuses.count() > 0 && (await statuses.allTextContents()).every((status) => /Paid|Partially paid|Overdue|Pending|Upcoming|Postponed/.test(status)));
+  await page.setViewportSize({ width: 390, height: 844 });
+  chk("schedule tiles and amounts fit a phone screen", await schedule.locator("tbody tr").first().evaluate((row) =>
+    getComputedStyle(row).display === "grid" && row.scrollWidth <= row.clientWidth));
+  await page.setViewportSize({ width: 1280, height: 900 });
   await h.shot(page, "ptabs-emis");
 
   await tab(page, "Transactions").click();
@@ -171,7 +180,7 @@ scenario("ptabs-many-agreements", "People desktop: bounded overview, searchable 
   await search.fill("QA Shared EMI");
   await card.getByRole("heading", { name: "QA Shared EMI", exact: true }).waitFor();
   await card.getByRole("button", { name: "Schedule" }).click();
-  chk("the selected agreement still opens its schedule", await card.getByRole("list", { name: /monthly schedule/ }).isVisible());
+  chk("the selected agreement still opens its schedule", await card.getByRole("table", { name: /monthly schedule/ }).isVisible());
   await h.shot(page, "ptabs-many-agreements");
 }, { viewport: { width: 1440, height: 900 } });
 

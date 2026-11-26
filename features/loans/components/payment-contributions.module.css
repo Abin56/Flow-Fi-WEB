@@ -1,0 +1,91 @@
+.container {
+  container: contributions / inline-size;
+  min-width: 0;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow-wrap: anywhere;
+}
+
+@container contributions (width >= 36rem) {
+  .table {
+    table-layout: fixed;
+  }
+
+  .share {
+    width: 11%;
+  }
+
+  .received {
+    width: 14%;
+  }
+
+  .remaining {
+    width: 16%;
+  }
+
+  .paid {
+    width: 5.5rem;
+  }
+
+  .action {
+    width: clamp(11rem, 24%, 14rem);
+  }
+}
+
+@container contributions (width < 36rem) {
+  .table {
+    display: block;
+  }
+
+  .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .table tbody {
+    display: block;
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: start;
+    gap: 0.5rem 0.625rem;
+    padding: 0.625rem;
+  }
+
+  .row > :is(th, td) {
+    min-width: 0;
+    padding: 0;
+    text-align: left;
+  }
+
+  .row > th,
+  .row > td:nth-last-child(-n + 2) {
+    grid-column: 1 / -1;
+  }
+
+  .row > td:nth-last-child(-n + 2):empty {
+    display: none;
+  }
+
+  .row > td[data-label]::before {
+    display: block;
+    margin-bottom: 0.125rem;
+    color: var(--color-muted-foreground);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    content: attr(data-label);
+  }
+
+  .row td :global(.justify-end) {
+    justify-content: flex-start;
+  }
+}

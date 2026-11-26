@@ -6,7 +6,7 @@
  * and the PEOPLE side (`people`: Received / Partially received / Pending / Postponed — only for a shared agreement, and
  * only recorded reimbursements count as received).
  */
-import { summarizePeopleLines, type AgreementPeopleLine, type PersonShareStatus } from "@/features/loans/lib/agreement-people";
+import { schedulePeopleRepayment, summarizePeopleLines, type AgreementPeopleLine, type PersonShareStatus } from "@/features/loans/lib/agreement-people";
 import { editEligibility, installmentRowAction, type RecordedPaymentAction } from "@/features/loans/lib/recorded-payments";
 import { installmentStatus, remainingAmount, type Installment, type InstallmentStatus } from "@/lib/models/payment-schedule";
 
@@ -46,6 +46,7 @@ export interface InstallmentTableRow {
   editable: boolean;
   canPay: boolean;
   people: PersonShareStatus | null;
+  peopleRepayment: ReturnType<typeof schedulePeopleRepayment> | null;
 }
 
 export function installmentTableRows(params: {
@@ -55,6 +56,8 @@ export function installmentTableRows(params: {
   peopleLines?: ReadonlyMap<string, readonly AgreementPeopleLine[]>;
   now?: Date;
 }): InstallmentTableRow[] {
+  const today = params.now ?? new Date();
+  const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
   return params.installments
     .filter((i) => i.deletedAt == null)
     .map((i) => {
@@ -62,6 +65,8 @@ export function installmentTableRows(params: {
       const recorded = action?.kind === "view" ? action.action : null;
       const left = i.isSkipped ? 0 : remainingAmount(i);
       const earlier = recorded?.recordedEarlier ?? null;
+      const peopleLines = params.peopleLines?.get(i.id) ?? [];
+      const people = summarizePeopleLines(peopleLines);
       return {
         installment: i,
         id: i.id,
@@ -76,7 +81,8 @@ export function installmentTableRows(params: {
         earlier: earlier ? { dateKnown: earlier.dateKnown } : null,
         editable: recorded != null && editEligibility(recorded, params.actions, { closed: params.closed }).ok,
         canPay: !params.closed && !i.isSkipped && left > 0,
-        people: params.peopleLines ? summarizePeopleLines(params.peopleLines.get(i.id) ?? []) : null,
+        people,
+        peopleRepayment: people ? schedulePeopleRepayment(peopleLines, people, i.dueDate >= tomorrow) : null,
       };
     })
     .sort((a, b) => a.sequenceNumber - b.sequenceNumber);

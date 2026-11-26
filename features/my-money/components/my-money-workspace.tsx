@@ -838,12 +838,17 @@ function CollectPanel({ data }: { data: MyMoneyData }) {
                   <span className="min-w-0 flex-1">
                     <span className="block text-sm font-semibold wrap-anywhere text-foreground md:leading-tight">{p.name}</span>
                     {p.reasons.length > 0 && <span className="block text-xs text-foreground/70 md:leading-tight">{p.reasons.slice(0, 2).join(" · ")}</span>}
-                    {(expected || p.partlyReceived > 0 || p.alsoOwe > 0) && (
+                    {(expected || p.partlyReceived > 0 || p.alsoOwe > 0 || p.postponed > 0) && (
                       <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
                         {expected && (
                           <span className={cn("inline-flex items-center gap-1", expected.className)}>
                             <CalendarDays aria-hidden className="size-3 shrink-0" strokeWidth={2} />
                             {expected.text}
+                          </span>
+                        )}
+                        {p.postponed > 0 && (
+                          <span className="font-medium text-foreground" data-testid="collect-due-split">
+                            Due now {formatCurrency(Math.max(0, p.amount - p.postponed))} · {formatCurrency(p.postponed)} postponed
                           </span>
                         )}
                         {p.partlyReceived > 0 && <span className="text-foreground/75">{formatCurrency(p.partlyReceived)} received</span>}

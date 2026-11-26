@@ -44,7 +44,7 @@ export function EmiWorkspace({ openRequest = null, pageAgreementId = null }: Emi
   const [paySeq, setPaySeq] = useState(0);
   const [payTarget, setPayTarget] = useState<Installment | null>(null);
   // "past": the dialog opens on "Record past payments" instead of paying now.
-  const [payView, setPayView] = useState<"pay" | "past">("pay");
+  const [payView, setPayView] = useState<"pay" | "past" | "payMany">("pay");
   const [statusBusy, setStatusBusy] = useState(false);
   const [editTermsOpen, setEditTermsOpen] = useState(false);
 
@@ -61,7 +61,7 @@ export function EmiWorkspace({ openRequest = null, pageAgreementId = null }: Emi
     if (target) setActiveRow(target);
   }
 
-  function openPay(installment: Installment, view: "pay" | "past" = "pay") {
+  function openPay(installment: Installment, view: "pay" | "past" | "payMany" = "pay") {
     setPaySeq((n) => n + 1);
     setPayView(view);
     setPayTarget(installment);
@@ -160,6 +160,9 @@ export function EmiWorkspace({ openRequest = null, pageAgreementId = null }: Emi
         onRecordPastPayments={(row) => {
           const first = [...row.installments].filter((i) => i.deletedAt == null && !i.isSkipped && remainingAmount(i) > 0.005).sort((a, b) => a.sequenceNumber - b.sequenceNumber)[0];
           if (first) openPay(first, "past");
+        }}
+        onPaySeveral={(row) => {
+          if (row.nextInstallment) openPay(row.nextInstallment, "payMany");
         }}
         onToggleClose={handleToggleClose}
         onEditTerms={() => setEditTermsOpen(true)}

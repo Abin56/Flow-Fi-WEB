@@ -711,6 +711,8 @@ export function createPersonPaymentRepository(uid: string, personId: string, cas
       return [...emis, ...loans].filter((a) => a.deletedAt == null && a.scheduleId).map((a) => a.scheduleId);
     },
     scheduleDocRef: (scheduleId) => createPaymentScheduleRepository(uid).docRef(scheduleId),
+    // The write-time limit on settling a Loan / EMI share (see `people-share-cap.ts`).
+    shareLimit: { firestore: db, uid },
   });
 }
 

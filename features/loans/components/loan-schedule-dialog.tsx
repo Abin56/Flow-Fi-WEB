@@ -1,13 +1,12 @@
 "use client";
 
-import { ArrowUpRight, Building2, CheckCircle2, HandCoins, History, Lock, LockOpen, Pencil, Trash2, UserRound, Wallet } from "lucide-react";
+import { ArrowUpRight, Building2, CheckCircle2, HandCoins, History, Layers, Lock, LockOpen, Pencil, Trash2, UserRound, Wallet } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { TheyPaidDialog } from "@/features/loans/components/they-paid-dialog";
 import { AgreementPeopleTab } from "@/features/loans/components/agreement-people-tab";
 import { AgreementScheduleTab } from "@/features/loans/components/agreement-schedule-tab";
-import { formatCurrency } from "@/lib/format";
 import { useAgreementPeople } from "@/features/loans/hooks/use-agreement-people";
 import { ClayButton } from "@/components/clay/clay-button";
 import { cn } from "@/lib/utils";
@@ -16,13 +15,15 @@ import { remainingAmount, type Installment } from "@/lib/models/payment-schedule
 import { installmentProgress } from "@/lib/engines/installment-progress";
 import type { LoanRow } from "@/features/loans/hooks/use-loans-data";
 import { loanBadges, loanDisplayName } from "@/features/loans/components/loan-card";
-import { DetailSectionTitle, FactGrid, LinkedList, LinkedRow, Money, daysUntil } from "@/features/loans/components/loan-emi-ui";
+import { agreementOwnerLabel, DetailSectionTitle, FactGrid, LinkedList, LinkedRow, Money, daysUntil } from "@/features/loans/components/loan-emi-ui";
+import { useLoanPersons } from "@/hooks/use-loans";
 import { LoanFinancialHistory } from "@/features/loans/components/loan-financial-history";
 import { InstallmentList } from "@/features/loans/components/payment-rows";
 import type { LoanPaymentHistory } from "@/features/loans/hooks/use-payment-history";
 import type { RecordedPaymentAction } from "@/features/loans/lib/recorded-payments";
 import { additionalAmountCopy } from "@/features/loans/lib/loan-labels";
-import { hasPastDue } from "@/features/loans/lib/record-payment";
+import { hasPastDue, pastDueCount } from "@/features/loans/lib/record-payment";
+import { MorePaymentActions } from "@/features/loans/components/more-payment-actions";
 import { useInstallmentPeopleStatus } from "@/features/loans/hooks/use-installment-people-status";
 import { LenderPayoffBreakdown } from "@/features/loans/components/lender-payoff-breakdown";
 
@@ -52,6 +53,8 @@ interface LoanScheduleDialogProps {
   onRecordPayment: (row: LoanRow, installment?: Installment) => void;
   /** Opens "Record past payments" — installments paid before FlowFi, recorded without moving any account. */
   onRecordPastPayments?: (row: LoanRow) => void;
+  /** Opens "Pay several" — several installments recorded in one go. */
+  onPaySeveral?: (row: LoanRow) => void;
   onAdditionalDisbursement: (row: LoanRow) => void;
   onToggleClose: (row: LoanRow) => void;
   /** True while a Close/Reopen write is in flight — blocks a double click. */
@@ -79,14 +82,14 @@ function GoTo({ href, label }: { href: string; label: string }) {
 }
 
 /** Loan details: the outstanding balance first, then the key facts, what it's linked to, the installment
- *  schedule and history. One primary money action (Record Payment); the less common ones sit under "More
- *  payment options"; loan management (Edit/Close/Delete) stays visually quieter. `row` is resolved live by
+ *  schedule and history. One primary money action (Pay Now); the less common ones sit in the "More" menu; loan management (Edit/Close/Delete) stays visually quieter. `row` is resolved live by
  *  the parent from Firestore-backed rows, so every persisted change re-renders it in place. */
-export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, deleteLabel = "Delete Loan", linkedAccountName, onRecordPayment, onRecordPastPayments, onAdditionalDisbursement, onToggleClose, statusBusy = false, history, historyLoading, paymentActions, onViewPayment, page }: LoanScheduleDialogProps) {
+export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, deleteLabel = "Delete Loan", linkedAccountName, onRecordPayment, onRecordPastPayments, onPaySeveral, onAdditionalDisbursement, onToggleClose, statusBusy = false, history, historyLoading, paymentActions, onViewPayment, page }: LoanScheduleDialogProps) {
   // Shared loan: each installment's People side on its row (a loan I gave has no People shares).
   const peopleStatus = useInstallmentPeopleStatus(row && row.direction !== "given" ? { sourceKind: "loan", source: row.loan, installments: row.installments } : null);
   const pathname = usePathname();
-  const { people } = useAgreementPeople(page && row && row.direction !== "given" ? { sourceKind: "loan", source: row.loan, installments: row.installments } : null);
+  const { data: persons } = useLoanPersons();
+  const { people, cycleBalance } = useAgreementPeople(page && row && row.direction !== "given" ? { sourceKind: "loan", source: row.loan, installments: row.installments } : null);
   // "They paid": the installment whose share the person already paid — the dialog mounts fresh per open (one batch id per save).
   const [theyPaid, setTheyPaid] = useState<{ id: string; n: number } | null>(null);
   const askTheyPaid = (installmentId: string) => setTheyPaid((prev) => ({ id: installmentId, n: (prev?.n ?? 0) + 1 }));
@@ -160,13 +163,8 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
         page
           ? {
               facts: `${row.lenderName}${interest ? ` · ${+interest.ratePercent.toFixed(2)}% ${interest.period === "monthly" ? "p.m." : "p.a."} ${interest.type === "flat" ? "flat" : "reducing"}` : " · No interest"}`,
-              stats: [
-                { label: "Original", value: formatCurrency(row.loan.loanAmount) },
-                { label: "Installment", value: formatCurrency(row.emiAmount) },
-                { label: lent ? "Received" : "Paid so far", value: formatCurrency(totalReceived) },
-                { label: "Total left", value: formatCurrency(totalRemaining) },
-                { label: "Next due", value: row.nextDueDate ? formatDateLong(row.nextDueDate) : "—", tone: nextOverdue ? "expense" : undefined },
-              ],
+              remaining: totalRemaining,
+              ownerLabel: lent ? null : agreementOwnerLabel(row.loan, (id) => persons?.find((person) => person.id === id)?.name),
               schedule: (
                 <AgreementScheduleTab
                   installments={row.installments}
@@ -175,6 +173,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
                   total={row.totalInstallments}
                   lent={lent}
                   people={people}
+                  cycleBalance={cycleBalance}
                   onPay={(i) => onRecordPayment(row, i)}
                   onViewPayment={onViewPayment}
                   onTheyPaid={lent ? undefined : (i) => askTheyPaid(i.id)}
@@ -219,6 +218,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
           <FactGrid
             facts={[
               { label: "Original amount", value: <Money amount={row.loan.loanAmount} /> },
+              page ? { label: "Outstanding principal", value: <Money amount={row.outstandingPrincipal} /> } : null,
               { label: "Installment", value: <Money amount={row.emiAmount} />, strong: true },
               { label: lent ? "Received so far" : "Paid so far", value: <Money amount={totalReceived} /> },
               { label: "Left incl. interest", value: <Money amount={totalRemaining} /> },
@@ -245,21 +245,16 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
           note={isClosed ? "This loan is closed. Reopen it to record payments or add money." : undefined}
           money={
             <>
-              {onRecordPastPayments && !isClosed && hasPastDue(row.installments) && (
-                <ClayButton
-                  variant="secondary"
-                  className={cn(moneyBtn, "border-border-strong font-medium text-foreground hover:bg-card")}
-                  onClick={() => onRecordPastPayments(row)}
-                  title="Installments paid before you used FlowFi — recorded without changing any account balance"
-                >
-                  <History className="size-3.5" />
-                  {lent ? "Record past repayments" : "Record past payments"}
-                </ClayButton>
-              )}
-              <ClayButton variant="secondary" className={cn(moneyBtn, "border-border-strong font-medium text-foreground hover:bg-card")} disabled={isClosed} onClick={() => onAdditionalDisbursement(row)}>
-                <HandCoins className="size-3.5" />
-                {additionalCopy.label}
-              </ClayButton>
+              <MorePaymentActions
+                className={moneyBtn}
+                items={[
+                  ...(onRecordPastPayments && !isClosed && hasPastDue(row.installments)
+                    ? [{ label: lent ? "Record past repayments" : "Record past payments", icon: History, title: "Installments paid before you used FlowFi — recorded without changing any account balance", onSelect: () => onRecordPastPayments(row) }]
+                    : []),
+                  ...(onPaySeveral && !isClosed && pastDueCount(row.installments) > 1 ? [{ label: lent ? "Receive several" : "Pay several", icon: Layers, onSelect: () => onPaySeveral(row) }] : []),
+                  { label: additionalCopy.label, icon: HandCoins, disabled: isClosed, onSelect: () => onAdditionalDisbursement(row) },
+                ]}
+              />
               {nextPayable == null && !isClosed ? (
                 <span className="inline-flex h-9 items-center gap-1.5 rounded-[6px] border border-success px-3 text-[13px] font-semibold text-success">
                   <CheckCircle2 className="size-4" />
@@ -268,7 +263,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
               ) : (
                 <ClayButton variant="primary" className={cn(moneyBtn, "border-primary-accent-text font-semibold")} disabled={isClosed || nextPayable == null} onClick={() => onRecordPayment(row)}>
                   <Wallet className="size-4" />
-                  {lent ? "Record Repayment" : "Record Payment"}
+                  {lent ? "Record Repayment" : "Pay Now"}
                 </ClayButton>
               )}
             </>

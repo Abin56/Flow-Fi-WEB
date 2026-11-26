@@ -2082,3 +2082,58 @@ describe("25 — postpone → lender paid from my account → reimbursements →
     expect(await modules(w)).toEqual(E({ accountCash: 36_000, bOwes: 0, peopleReceivable: 1_000 }));
   }, 120_000);
 });
+
+describe("A person paid the lender directly — per-person settlement, failed People write, retry", () => {
+  const TODAY = new Date(2026, 9, 13);
+  const lenderDirect = async (w: World, seq: number, key: string) =>
+    w.lender.record({
+      loan: await loanNow(w), scheduleInstallments: await liveInstallments(w), accountId: w.accountId, amount: 3_000, date: TODAY,
+      idempotencyKey: key, includeUpcomingInstallments: true, peopleGateAcknowledgement: RECORDED_EARLIER_PEOPLE_ACK,
+      recordedEarlier: { dateKnown: true }, onlyInstallmentId: (await liveInstallments(w)).find((i) => i.sequenceNumber === seq)!.id,
+    });
+  const personWrite = async (w: World, personId: string, seq: number, amount: number, key: string, accountId = w.accountId) => {
+    const ref = `loan-inst:${(await liveInstallments(w)).find((i) => i.sequenceNumber === seq)!.id}`;
+    return w.personPayments(personId).recordPayment((await w.people.getByKey(personId))!, {
+      direction: "theyPaid", amount, date: TODAY, accountId, note: "Paid directly to lender", extra: null, recordedEarlier: true, idempotencyKey: key,
+      lines: [{ key: ref, amount, route: { kind: "derived", obligationRef: ref, sourceKind: "loanInstallment" } }],
+    });
+  };
+  const nets = async (w: World) => [(await position(w, w.aId, TODAY)).net, (await position(w, w.bId, TODAY)).net];
+  const settled = async (w: World, id: string) => (await ledgerEntries(w, id)).filter((e) => e.deletedAt == null);
+
+  it("one of two sharers pays, then two portions; no account moves; the other's share is untouched", async () => {
+    const w = await world();
+    const money = await cash(w);
+    const [a0, b0] = await nets(w);
+    await lenderDirect(w, 1, "d-1");
+    expect(await nets(w)).toEqual([a0, b0]); // the lender record alone settles nobody
+    await personWrite(w, w.aId, 1, 1_000, "h-a-1");
+    expect(await nets(w)).toEqual([a0 - 1_000, b0]);
+    expect(await settled(w, w.bId)).toHaveLength(0);
+    await lenderDirect(w, 2, "d-2");
+    await personWrite(w, w.aId, 2, 1_000, "h-a-2");
+    await personWrite(w, w.bId, 2, 400, "h-b-2");
+    expect(await nets(w)).toEqual([a0 - 2_000, b0 - 400]);
+    expect(await cash(w)).toBe(money);
+    expect(await loanCashOut(w)).toBe(0);
+  }, 60_000);
+
+  it("an empty account is refused with nothing written; the lender record stays; retry is exactly-once", async () => {
+    const w = await world();
+    const money = await cash(w);
+    const before = await nets(w);
+    await lenderDirect(w, 1, "d-1");
+    await expect(personWrite(w, w.aId, 1, 1_000, "h-a-1", "")).rejects.toThrow("Choose the account it was received into.");
+    expect(await settled(w, w.aId)).toHaveLength(0);
+    expect(await nets(w)).toEqual(before);
+    expect(await seqPaid(w, 1)).toBe(3_000); // partial success: the lender side is not rolled back
+    expect((await lenderDirect(w, 1, "d-1")).alreadyRecorded).toBe(true);
+    await personWrite(w, w.aId, 1, 1_000, "h-a-1");
+    await personWrite(w, w.aId, 1, 1_000, "h-a-1");
+    expect(await settled(w, w.aId)).toHaveLength(1);
+    expect(await nets(w)).toEqual([before[0] - 1_000, before[1]]);
+    expect(await cash(w)).toBe(money);
+    // A new attempt on the already-paid installment (dialog reopened: new keys) is refused.
+    await expect(lenderDirect(w, 1, "other-batch")).rejects.toBeInstanceOf(RecordedEarlierError);
+  }, 60_000);
+});

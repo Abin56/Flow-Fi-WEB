@@ -1,13 +1,14 @@
 "use client";
 
-import { ArrowLeft, Search } from "lucide-react";
+import { ArrowLeft, Search, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useEmiRows } from "@/features/emi/hooks/use-emi-data";
 import { loanDisplayName } from "@/features/loans/components/loan-card";
-import { Money } from "@/features/loans/components/loan-emi-ui";
+import { agreementOwnerLabel, Money } from "@/features/loans/components/loan-emi-ui";
 import { useLoanRows } from "@/features/loans/hooks/use-loans-data";
 import { recordKindForEmi, recordKindForLoan } from "@/features/loans/lib/loan-emi-add";
+import { useLoanPersons } from "@/hooks/use-loans";
 import { cn } from "@/lib/utils";
 
 type NavStatus = "active" | "overdue" | "closed";
@@ -16,6 +17,7 @@ interface NavEntry {
   key: string;
   id: string;
   name: string;
+  ownerLabel: string | null;
   tag: string;
   /** The regular installment. */
   installment: number;
@@ -36,19 +38,23 @@ const STATUS_DOT: Record<NavStatus, string> = { active: "bg-success", overdue: "
  * left, and its status. Picking a row swaps the right panel in place (the route follows, nothing else opens). Read from the
  * same rows the list page uses; ↑/↓ move through the list.
  */
-export function AgreementNavList({ selectedId, onSelect }: { selectedId: string | null; onSelect: (id: string) => void }) {
+export function AgreementNavList({ selectedId }: { selectedId: string | null }) {
   const { rows: loanRows } = useLoanRows();
   const { rows: emiRows } = useEmiRows();
+  const { data: persons } = useLoanPersons();
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<"active" | "all">("active");
   const listRef = useRef<HTMLUListElement>(null);
 
   const entries = useMemo<NavEntry[]>(() => {
+    const names = new Map(persons?.map((person) => [person.id, person.name]));
+    const nameOf = (id: string) => names.get(id);
     const all: NavEntry[] = [
       ...loanRows.map((r) => ({
         key: `loan:${r.loan.id}`,
         id: r.loan.id,
         name: loanDisplayName(r),
+        ownerLabel: r.direction === "given" ? null : agreementOwnerLabel(r.loan, nameOf),
         tag: recordKindForLoan(r.loan).label,
         installment: r.emiAmount,
         outstanding: r.outstandingPrincipal,
@@ -62,6 +68,7 @@ export function AgreementNavList({ selectedId, onSelect }: { selectedId: string 
         key: `emi:${r.emi.id}`,
         id: r.emi.id,
         name: r.emi.name,
+        ownerLabel: agreementOwnerLabel(r.emi, nameOf),
         tag: recordKindForEmi(r.emi).label,
         installment: r.nextInstallment ? r.nextInstallment.amountDue : (r.installments[0]?.amountDue ?? 0),
         outstanding: r.remainingBalance,
@@ -79,21 +86,21 @@ export function AgreementNavList({ selectedId, onSelect }: { selectedId: string 
       const bt = b.nextDate?.getTime() ?? Number.POSITIVE_INFINITY;
       return at !== bt ? at - bt : a.name.localeCompare(b.name);
     });
-  }, [loanRows, emiRows]);
+  }, [loanRows, emiRows, persons]);
 
   const activeCount = entries.filter((e) => e.status !== "closed").length;
   const q = query.trim().toLowerCase();
   // The open record always stays listed, even when a filter would hide it.
-  const shown = entries.filter((e) => e.id === selectedId || ((scope === "all" || e.status !== "closed") && (q === "" || e.name.toLowerCase().includes(q) || e.tag.toLowerCase().includes(q))));
+  const shown = entries.filter((e) => e.id === selectedId || ((scope === "all" || e.status !== "closed") && (q === "" || [e.name, e.tag, e.ownerLabel].some((label) => label?.toLowerCase().includes(q)))));
 
   function onKeyDown(e: KeyboardEvent<HTMLUListElement>) {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     e.preventDefault();
     const i = shown.findIndex((x) => x.id === selectedId);
-    const next = shown[Math.min(shown.length - 1, Math.max(0, i + (e.key === "ArrowDown" ? 1 : -1)))];
-    if (!next) return;
-    onSelect(next.id);
-    requestAnimationFrame(() => listRef.current?.querySelector<HTMLElement>(`[data-nav="${next.id}"]`)?.focus());
+    const nextIndex = Math.min(shown.length - 1, Math.max(0, i + (e.key === "ArrowDown" ? 1 : -1)));
+    const next = listRef.current?.querySelectorAll<HTMLAnchorElement>("a[data-nav]")[nextIndex];
+    next?.focus();
+    next?.click();
   }
 
   return (
@@ -137,13 +144,16 @@ export function AgreementNavList({ selectedId, onSelect }: { selectedId: string 
           const pct = e.total > 0 ? Math.min(100, Math.round((e.paid / e.total) * 100)) : 0;
           return (
             <li key={e.key}>
-              <button
-                type="button"
+              <Link
+                href={`/loans/${encodeURIComponent(e.id)}/`}
+                replace
+                scroll={false}
+                prefetch={false}
                 data-nav={e.id}
                 data-testid={`nav-${e.id}`}
-                aria-current={on ? "true" : undefined}
+                aria-current={on ? "page" : undefined}
                 tabIndex={on || (selectedId == null && e === shown[0]) ? 0 : -1}
-                onClick={() => onSelect(e.id)}
+                onNavigate={(event) => { if (on) event.preventDefault(); }}
                 className={cn(
                   "group relative flex w-full flex-col gap-0.5 border-b border-border/70 px-3 py-2 text-left outline-none transition-colors duration-100 focus-visible:bg-secondary/70",
                   on ? "bg-primary/20 shadow-[inset_3px_0_0_var(--color-primary-accent-text)]" : "hover:bg-secondary/70",
@@ -151,12 +161,18 @@ export function AgreementNavList({ selectedId, onSelect }: { selectedId: string 
                 )}
               >
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-foreground">{e.name}</span>
+                  <span title={e.name} className="min-w-0 flex-1 truncate text-[13px] font-semibold text-foreground">{e.name}</span>
                   <span className={cn("inline-flex shrink-0 items-center gap-1 text-[10.5px] font-semibold", e.status === "overdue" ? "text-expense" : "text-muted-foreground")}>
                     <span aria-hidden className={cn("size-1.5 rounded-full", STATUS_DOT[e.status])} />
                     {STATUS_TEXT[e.status]}
                   </span>
                 </span>
+                {e.ownerLabel && (
+                  <span className="flex min-w-0 items-start gap-1 text-[11.5px] font-medium text-foreground/85">
+                    <UserRound aria-hidden className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
+                    <span className="wrap-anywhere">{e.ownerLabel}</span>
+                  </span>
+                )}
                 <span className="flex min-w-0 items-baseline justify-between gap-2 text-[11.5px] text-muted-foreground">
                   <span className="truncate">{e.tag}</span>
                   <span className="shrink-0 tabular-nums">
@@ -172,7 +188,7 @@ export function AgreementNavList({ selectedId, onSelect }: { selectedId: string 
                     <Money amount={e.outstanding} className="text-[11.5px] font-semibold text-foreground" /> {e.lent ? "to receive" : "left"}
                   </span>
                 </span>
-              </button>
+              </Link>
             </li>
           );
         })}

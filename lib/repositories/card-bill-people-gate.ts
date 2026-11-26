@@ -24,7 +24,7 @@
  */
 
 import type { Transaction as FirestoreTransaction } from "firebase/firestore";
-import { cardBillsForCard, cardStatementPaymentScope, payBillChargeScope, type CardStatementPaymentScope } from "@/lib/engines/card-cycle-bills";
+import { cardBillsForCard, cardStatementPaymentScope, payBillChargeScope, type CardBill, type CardStatementPaymentScope } from "@/lib/engines/card-cycle-bills";
 import { linkedPeopleForCard, peopleSettlementGate, PeopleSettlementPendingError, type LinkedPeopleReadiness, type PeopleSettlementGate } from "@/lib/engines/linked-people-readiness";
 import { buildPersonCycleStatement, type PersonCycleStatement } from "@/lib/engines/person-cycle-statement";
 import type { Account } from "@/lib/models/account";
@@ -63,6 +63,8 @@ export interface CardBillGateReader {
 export interface CardBillState {
   card: CreditCardProfile;
   scope: CardStatementPaymentScope;
+  bills: readonly CardBill[];
+  transactions: readonly Transaction[];
   /** People readiness for a payment of `amount` against this scope (what Pay bill shows). */
   readinessFor(amount: number): LinkedPeopleReadiness;
   /** The SAME People check the payment write runs: `peopleSettlementGate(readinessFor(amount))`. */
@@ -88,7 +90,8 @@ export async function loadCardBillState(params: { reader: CardBillGateReader; ca
   const transactions = rawTransactions.filter((t) => t.deletedAt == null && t.accountId === cardAccount.id);
   if (tx) await reader.lockCard(tx, card.id, statements.map((s) => s.id));
   const chargeIds = new Set(transactions.map((t) => t.id));
-  const scope = cardStatementPaymentScope(cardBillsForCard(card, transactions, statements, now), now);
+  const bills = cardBillsForCard(card, transactions, statements, now);
+  const scope = cardStatementPaymentScope(bills, now);
 
   // Only people with a share of one of this card's charges can gate it.
   const linked: { person: Person; entries: LedgerEntry[] }[] = [];
@@ -127,7 +130,7 @@ export async function loadCardBillState(params: { reader: CardBillGateReader; ca
       paymentAmount: amount,
       chargeScope: payBillChargeScope(scope, amount),
     });
-  return { card, scope, readinessFor, peopleGateFor: (amount) => peopleSettlementGate(readinessFor(amount)) };
+  return { card, scope, bills, transactions, readinessFor, peopleGateFor: (amount) => peopleSettlementGate(readinessFor(amount)) };
 }
 
 /**

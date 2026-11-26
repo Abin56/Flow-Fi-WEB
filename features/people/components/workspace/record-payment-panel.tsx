@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDownLeft, ArrowUpRight, Bell, CalendarClock, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Info, Loader2, RotateCcw } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Banknote, Bell, CalendarClock, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Info, Landmark, ListChecks, Loader2, RotateCcw, type LucideIcon } from "lucide-react";
 import { useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 import { EmiBadge } from "@/features/people/components/cycle-statement/statement-parts";
 import type { LedgerRow } from "@/features/people/lib/person-ledger-rows";
@@ -149,6 +149,7 @@ export function RecordPaymentPanel({
 }) {
   const first = personName.split(" ")[0];
   const account = useAccountChoice(initial?.accountId);
+  const [accountPickerOpen, setAccountPickerOpen] = useState(false);
   const { data: categories = [] } = useCategories();
   const incomeCategories = useMemo(() => categories.filter((c) => c.deletedAt == null && c.type !== "expense"), [categories]);
 
@@ -593,6 +594,7 @@ export function RecordPaymentPanel({
   const [stepDir, setStepDir] = useState<"forward" | "back">("forward");
   // A wide sheet has room for everything at once (Money and Apply side by side), so it needs no pages; a narrow one pages.
   const [bodyBox, wideSheet] = useWideBox(880);
+  const desktop = sheet && wideSheet;
   const paged = sheet && !wideSheet;
   // Remaining money drawer (sheet only): an internal layer of this sheet; closing it only hides it, so no value is lost.
   const [remainingOpenRaw, setRemainingOpen] = useState(false);
@@ -680,14 +682,15 @@ export function RecordPaymentPanel({
   const intentSection = (
       <>
         {/* ── What happened: one top-level choice — money received, money paid, or "not paid yet" (postpone) ── */}
-        <section aria-label="What happened" className="space-y-3">
+        <section aria-label="What happened" className={cn("space-y-3", desktop && (postponing ? "col-span-2" : "col-start-1 row-start-1"))}>
           {sheet ? (
-            <div className="space-y-1.5 @4xl:grid @4xl:grid-cols-[minmax(0,1fr)_17rem] @4xl:items-center @4xl:gap-x-5 @4xl:space-y-0">
+            <div className={cn("space-y-1.5", desktop && postponing && "grid grid-cols-[minmax(0,1fr)_minmax(17rem,31.5%)] items-center gap-x-3.5 space-y-0")}>
               <IntentPicker
                 label={postponeOffered ? "What happened" : "Direction"}
                 value={postponing ? "postpone" : direction}
                 onChange={selectIntent}
                 locked={!!initial}
+                compact={desktop}
                 options={[
                   { value: "theyPaid", tone: "in", title: "Received", sub: `${first} paid me`, label: intentOptions[0].label, meta: theyOweTotal > PAYMENT_EPSILON ? `${money(theyOweTotal)} due` : "Nothing due" },
                   { value: "iPaid", tone: "out", title: "Paid", sub: `I paid ${first}`, label: intentOptions[1].label, meta: iOweTotal > PAYMENT_EPSILON ? `${money(iOweTotal)} you owe` : "You owe nothing" },
@@ -697,7 +700,7 @@ export function RecordPaymentPanel({
                 ]}
               />
               {/* What the choice means, in one line — the toolbar's labels are short. */}
-              <p key={postponing ? "postpone" : direction} className={cn("flex items-start gap-1.5 px-1 text-[11.5px] leading-snug text-foreground/70 duration-200 animate-in fade-in")} data-testid="rp-intent-help">
+              <p key={postponing ? "postpone" : direction} className={cn("flex items-start gap-1.5 px-1 text-[11.5px] leading-snug text-foreground/70 duration-200 animate-in fade-in", desktop && !initial && !postponing && (theyPaid || iOweTotal > PAYMENT_EPSILON) && "sr-only")} data-testid="rp-intent-help">
                 <Info className="mt-px size-3.5 shrink-0 text-foreground/45" aria-hidden />
                 <span>
                   {initial
@@ -708,7 +711,9 @@ export function RecordPaymentPanel({
                         ? `Money ${first} gave you. It lowers what ${first} owes you.`
                         : iOweTotal > PAYMENT_EPSILON
                           ? `Money you gave ${first}. It lowers what you owe ${first}.`
-                          : `Money you gave ${first}. You owe ${first} nothing right now, so you'll choose what it is for on the Finish step.`}
+                          : wideSheet
+                            ? `Money you gave ${first} before it's due. You can review it under Remaining money.`
+                            : `Money you gave ${first}. You owe ${first} nothing right now, so you'll choose what it is for on the Finish step.`}
                 </span>
               </p>
             </div>
@@ -905,10 +910,10 @@ export function RecordPaymentPanel({
           <>
             {/* ── Step 1. Money details: amount, account, funding mode, date, what's outstanding ── */}
             <section aria-labelledby="rp-money-heading" className={RP_CARD}>
-              <StepHeading id="rp-money-heading" n={1} title="Money details" done={step1Done} />
-              <div className="grid gap-3 @md:grid-cols-[minmax(0,1fr)_minmax(0,12rem)]">
-                <div className="min-w-0 rounded-xl bg-secondary/60 p-3">
-                  <HeroAmount label={theyPaid ? "Amount received" : "Amount paid"} value={amountText} onChange={setAmountText} />
+              <StepHeading id="rp-money-heading" n={1} title="Money details" done={step1Done} icon={desktop ? Banknote : undefined} />
+              <div className={cn("grid gap-3 @md:grid-cols-[minmax(0,1fr)_minmax(0,12rem)]", desktop && "items-start @md:grid-cols-[minmax(0,1fr)_minmax(0,36%)]")}>
+                <div className={cn("min-w-0 rounded-xl bg-secondary/60 p-3", desktop && "border border-border bg-linear-to-br px-3 py-2.5 to-card to-85%", desktop && (theyPaid ? "from-settle-receivable-tint/80" : "from-settle-payable-tint/80"))}>
+                  <HeroAmount label={theyPaid ? "Amount received" : "Amount paid"} value={amountText} onChange={setAmountText} compact={desktop} />
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-foreground/75">
                     {/* With the summary strip above, the total is shown there once; otherwise (nothing itemised) it stays here. */}
                     {(general || options.length === 0) && (
@@ -924,7 +929,7 @@ export function RecordPaymentPanel({
                       <button
                         type="button"
                         onClick={() => setAmountText(String(shownDue))}
-                        className="h-6 rounded-full bg-primary/25 px-2.5 font-semibold text-foreground ring-1 ring-primary-accent-text/40 outline-none transition-[box-shadow,background-color] duration-150 hover:bg-primary/40 focus-visible:ring-2 focus-visible:ring-ring"
+                        className={cn("h-6 rounded-full bg-primary/25 px-2.5 font-semibold text-foreground ring-1 ring-primary-accent-text/40 outline-none transition-[box-shadow,background-color] duration-150 hover:bg-primary/40 focus-visible:ring-2 focus-visible:ring-ring", desktop && "rounded-md bg-card text-primary-accent-text ring-border hover:bg-primary/20")}
                       >
                         Use {money(shownDue)}
                       </button>
@@ -971,7 +976,7 @@ export function RecordPaymentPanel({
                     )}
                   </div>
                 </div>
-                <div className="flex min-w-0 flex-col gap-1.5 @md:pt-3">
+                <div className={cn("flex min-w-0 flex-col gap-1.5 @md:pt-3", desktop && "gap-2 @md:pt-0")}>
                   <WsField label={earlier ? "Date received" : "Date"}>
                     <DateInput
                       className={WS_FIELD}
@@ -1005,16 +1010,19 @@ export function RecordPaymentPanel({
                 </div>
               </div>
               {/* Where the money went — the account and, beside it, the funding mode (through FlowFi, or already in the balance). */}
-              <div className="mt-3 grid items-end gap-3 border-t border-border pt-3 @md:grid-cols-2">
+              <div className={cn("mt-3 grid items-end gap-3 border-t border-border pt-3 @md:grid-cols-2", desktop && "pt-2.5")}>
                 <AccountField
                   choice={account}
                   label={earlier ? "Received into · for your records" : theyPaid ? "Receive into account" : "Pay from account"} outflow={theyPaid ? undefined : amount > 0 ? amount : null}
                   refund={initial && !theyPaid ? { accountId: initial.accountId, amount: initial.amount } : undefined}
+                  open={accountPickerOpen}
+                  onOpenChange={setAccountPickerOpen}
                 />
                 {theyPaid && !initial && (
                   <label
                     className={cn(
                       "flex cursor-pointer items-center gap-3 rounded-[12px] border px-3 py-2.5 transition-[background-color,border-color] duration-150 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
+                      desktop && "gap-2.5 rounded-xl bg-secondary/45 py-2",
                       inBalance ? "border-settle-split-edge bg-settle-split-tint/40" : "border-border-strong hover:bg-secondary/50",
                     )}
                     data-testid="rp-in-balance"
@@ -1022,7 +1030,7 @@ export function RecordPaymentPanel({
                     <input type="checkbox" className="peer sr-only" checked={inBalance} onChange={(e) => setInBalance(e.target.checked)} />
                     <span
                       aria-hidden
-                      className="relative h-5 w-9 shrink-0 rounded-full bg-border-strong transition-colors duration-200 peer-checked:bg-primary-accent-text after:absolute after:top-0.5 after:left-0.5 after:size-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform after:duration-200 peer-checked:after:translate-x-4"
+                      className="relative h-5 w-9 shrink-0 rounded-full bg-border-strong transition-colors duration-200 peer-checked:bg-primary-accent-text after:absolute after:top-0.5 after:left-0.5 after:size-4 after:rounded-full after:bg-white after:shadow-sm after:transition-[translate] after:duration-200 peer-checked:after:translate-x-4 motion-reduce:after:transition-none"
                     />
                     <span className="min-w-0 text-xs text-foreground">
                       <span className="block text-[13px] font-semibold">Already in my account balance</span>
@@ -1043,6 +1051,7 @@ export function RecordPaymentPanel({
                 id="rp-settle-heading"
                 n={2}
                 done={step2Done}
+                icon={desktop ? ListChecks : undefined}
                 title={general && owesSomething ? "Apply to balance" : "Apply to bills"}
                 hint={
                   wideSheet || (general && owesSomething)
@@ -1056,7 +1065,9 @@ export function RecordPaymentPanel({
                       : "Your amounts — the received amount no longer re-fills them."
                 }
                 right={
-                  !general && options.length > 0 && (
+                  desktop && general && allocation.allocated > PAYMENT_EPSILON ? (
+                    <span className="rounded-md bg-success/10 px-2 py-1 text-xs font-bold text-success tabular-nums">{money(allocation.allocated)}</span>
+                  ) : !general && options.length > 0 && (
                     <div className="flex flex-wrap items-center gap-1">
                       <span
                         aria-live="polite"
@@ -1088,8 +1099,8 @@ export function RecordPaymentPanel({
               {/* Only shown while editing a payment recorded the old, per-item way — a new payment is always general. */}
               {owesSomething && !!initial && mode === "items" && <ApplyModeSwitch mode={mode} onChange={switchMode} locked itemCount={options.length} />}
               {general && owesSomething ? (
-                <p className="flex items-start gap-1.5 rounded-[8px] bg-secondary/40 px-3 py-2 text-[11.5px] leading-snug text-foreground/80" data-testid="rp-general-note">
-                  <Info className="mt-px size-3.5 shrink-0 text-foreground/55" aria-hidden />
+                <p className={cn("flex items-start gap-1.5 rounded-[8px] bg-secondary/40 px-3 py-2 text-[11.5px] leading-snug text-foreground/80", desktop && "bg-transparent px-0 py-0.5 text-xs")} data-testid="rp-general-note">
+                  {!desktop && <Info className="mt-px size-3.5 shrink-0 text-foreground/55" aria-hidden />}
                   <span>
                     Not tied to any item — no transaction is marked paid or part paid.
                     {theyPaid && options.some((o) => o.isEmi) && " For one EMI share, choose specific items."}
@@ -1266,8 +1277,6 @@ export function RecordPaymentPanel({
 
           </>
   );
-  // Step 3 on its own — split out so a wide sheet can give it the full-width main column (room for destination
-  // cards) instead of squeezing it into the narrow outcome rail next to the receipt.
   const remainingMoneyCard = (
           <>
             {hasExtra && !earlier && sheet ? (
@@ -1279,6 +1288,7 @@ export function RecordPaymentPanel({
                 drafts={effectiveDrafts}
                 linkOptions={linkOptions}
                 needsAttention={!!extraPlan.error}
+                wide={wideSheet}
                 open={remainingOpen}
                 onOpen={() => setRemainingOpen(true)}
                 drawerId={remainingDrawerId}
@@ -1479,33 +1489,50 @@ export function RecordPaymentPanel({
   );
   // Wide sheet: the outcome of what is entered, always in view — what is received, where it goes, what it settles, what is left.
   const dateText = earlier && dateUnknown ? "date not known" : formatStatementDate(fromInputDate(date), true);
+  const receiptNeeds = needs.filter((field) => field !== "Account");
+  const ReceiptIcon = theyPaid ? ArrowDownLeft : ArrowUpRight;
   const receiptCard = (
-    <aside aria-label="Receipt" data-testid="rp-receipt" className="overflow-hidden rounded-2xl border border-border-strong bg-card shadow-e2">
-      <div className={cn("px-4 py-3.5", theyPaid ? "bg-primary/20" : "bg-settle-payable-tint")}>
+    <aside aria-label="Receipt" data-testid="rp-receipt" className="overflow-hidden rounded-2xl border border-border bg-card shadow-e1">
+      <div className={cn("border-b border-border bg-linear-to-br px-3.5 pt-3 pb-3.5 to-card to-90%", theyPaid ? "from-settle-receivable-tint" : "from-settle-payable-tint")}>
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] font-bold tracking-[0.1em] text-foreground/65 uppercase">{theyPaid ? "You receive" : "You pay"}</span>
-          <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-bold", ready ? "bg-success/15 text-[oklch(0.44_0.13_149)] dark:text-success" : "bg-warning/20 text-foreground/80")}>
-            {ready ? "Ready" : "Not ready yet"}
+          <span className={cn("flex items-center gap-1.5 text-[11px] font-bold tracking-[0.1em] uppercase", theyPaid ? "text-settle-receivable-text" : "text-settle-payable-text")}>
+            <ReceiptIcon className="size-3.5 shrink-0" strokeWidth={2.5} aria-hidden />
+            {theyPaid ? "You receive" : "You pay"}
+          </span>
+          <span className={cn("inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-bold", ready ? "bg-success/15 text-[oklch(0.44_0.13_149)] dark:text-success" : "bg-card/80 text-foreground/65 ring-1 ring-border")}>
+            {ready && <Check className="size-3" aria-hidden />}
+            {ready ? "Ready" : "Preview"}
           </span>
         </div>
-        <p className={cn("mt-1 font-heading text-[34px] leading-none font-bold tracking-tight tabular-nums", amount > PAYMENT_EPSILON ? "text-foreground" : "text-foreground/35")}>{money(amount)}</p>
+        <p className={cn("mt-2 font-heading text-[34px] leading-none font-bold tracking-tight tabular-nums [overflow-wrap:anywhere]", amount > PAYMENT_EPSILON ? "text-foreground" : "text-foreground/45")}>{money(amount)}</p>
         <p className="mt-1.5 text-xs text-foreground/70">
           {theyPaid ? "from" : "to"} <span className="font-semibold text-foreground">{first}</span> · {dateText}
         </p>
       </div>
-      {!ready && needs.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-warning/10 px-4 py-2 text-xs" data-testid="rp-receipt-needs">
+      {!ready && receiptNeeds.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-settle-emi-tint/55 px-3.5 py-1.5 text-xs" data-testid="rp-receipt-needs">
           <span className="font-semibold text-foreground/80">Still needed</span>
-          {needs.map((c) => (
-            <span key={c} className="inline-flex h-6 items-center rounded-full border border-dashed border-border-strong bg-card px-2 text-[11.5px] font-semibold text-foreground/85">
+          {receiptNeeds.map((c) => (
+            <span key={c} className="inline-flex min-h-5 items-center rounded-md border border-border bg-card px-1.5 text-[11.5px] font-semibold text-foreground/85">
               {c}
             </span>
           ))}
         </div>
       )}
-      <dl className="divide-y divide-dashed divide-border-strong px-4 text-[13px]">
-        <ReceiptRow label={earlier ? "Account" : theyPaid ? "Into account" : "From account"}>
-          {earlier ? "Already in your balance" : account.selected ? accountName : <span className="font-semibold text-warning">Choose an account</span>}
+      <dl className="divide-y divide-border px-3.5 py-0.5 text-[13px]">
+        <ReceiptRow label={earlier ? "Account" : theyPaid ? "Into account" : "From account"} icon={Landmark}>
+          {earlier ? "Already in your balance" : account.selected ? accountName : (
+            <button
+              type="button"
+              onClick={() => setAccountPickerOpen(true)}
+              className="inline-flex min-h-7 items-center justify-end gap-1 rounded-md bg-settle-emi-tint px-1.5 text-[11.5px] font-bold text-settle-emi-text transition-colors hover:bg-settle-emi-badge"
+              aria-haspopup="listbox"
+              aria-expanded={accountPickerOpen}
+            >
+              Choose account
+              <ChevronRight className="size-3.5 shrink-0" aria-hidden />
+            </button>
+          )}
         </ReceiptRow>
         <ReceiptRow label={general ? "Lowers balance" : "Settles"}>
           <span className="font-semibold tabular-nums">{money(allocation.allocated)}</span>
@@ -1534,13 +1561,13 @@ export function RecordPaymentPanel({
         )}
       </dl>
       {(general ? generalDue > PAYMENT_EPSILON : options.length > 0) && (
-        <div className="border-t border-border bg-secondary/50 px-4 py-3">
+        <div className="border-t border-border bg-secondary/45 px-3.5 py-2.5">
           <div className="flex items-baseline justify-between gap-3">
             <span className="text-[13px] font-medium text-foreground/80">{theyPaid ? `${first} still owes` : `You still owe ${first}`}</span>
-            <span className={cn("font-heading text-[19px] font-bold tabular-nums", stillOwed > PAYMENT_EPSILON ? "text-warning" : "text-success")}>{money(stillOwed)}</span>
+            <span className={cn("font-heading text-[20px] font-bold tabular-nums", stillOwed > PAYMENT_EPSILON ? "text-settle-emi-text" : "text-success")}>{money(stillOwed)}</span>
           </div>
-          <div aria-hidden className="mt-2 h-1.5 overflow-hidden rounded-full bg-border">
-            <div className={cn("h-full rounded-full transition-[width,background-color] duration-300 ease-out motion-reduce:transition-none", coverage >= 1 ? "bg-success" : "bg-primary")} style={{ width: `${coverage * 100}%` }} />
+          <div aria-hidden className="mt-1.5 h-1 overflow-hidden rounded-full bg-border">
+            <div className={cn("h-full rounded-full transition-[width,background-color] duration-300 ease-out motion-reduce:transition-none", coverage >= 1 ? "bg-success" : theyPaid ? "bg-settle-receivable-edge" : "bg-settle-payable-edge")} style={{ width: `${coverage * 100}%` }} />
           </div>
           {reminder && reminderOffered && <p className="mt-1 text-xs text-foreground/70">Reminder {formatStatementDate(reminder.remindOn)}</p>}
         </div>
@@ -1549,7 +1576,13 @@ export function RecordPaymentPanel({
   );
 
   const body = (
-      <div ref={bodyBox} className={cn("@container flex-1", sheet ? "space-y-2.5 px-3 pt-3 pb-4 sm:space-y-3 sm:px-5 sm:pt-4 sm:pb-5" : "space-y-3 px-4 pt-4 pb-5 sm:px-5")}>
+      <div
+        ref={bodyBox}
+        data-testid={desktop && !postponing ? "rp-workspace" : undefined}
+        className={cn("@container flex-1", sheet ? "space-y-2.5 px-3 pt-3 pb-4 sm:space-y-3 sm:px-5 sm:pt-4 sm:pb-5" : "space-y-3 px-4 pt-4 pb-5 sm:px-5",
+          desktop && "grid auto-rows-min grid-cols-[minmax(0,1fr)_minmax(17rem,31.5%)] items-start gap-x-3.5 gap-y-2.5 space-y-0 sm:space-y-0 sm:pt-3 sm:pb-4",
+        )}
+      >
         {intentSection}
         {!postponing &&
           (paged ? (
@@ -1592,19 +1625,18 @@ export function RecordPaymentPanel({
               </div>
             </>
           ) : sheet ? (
-            // Wide sheet: no pages. Money (and what is left over) on the left; the summary and how it is applied on the right.
-            <div className="grid items-start gap-4 @4xl:grid-cols-[minmax(0,1fr)_19.5rem]" data-testid="rp-workspace">
-              <div className="@container flex min-w-0 flex-col gap-3">
+            <>
+              <div className="@container col-start-1 row-start-2 flex min-w-0 flex-col gap-2.5">
                 {moneyStep}
                 {applyStep}
               </div>
               {/* The outcome stays in view beside the form; what is left over and the follow-ups sit right under it. */}
-              <div className="@container flex min-w-0 flex-col gap-3 @4xl:sticky @4xl:top-0">
+              <div className="@container sticky top-0 col-start-2 row-span-2 row-start-1 flex min-w-0 flex-col gap-2.5">
                 {receiptCard}
                 {remainingMoneyCard}
                 {followUpSection}
               </div>
-            </div>
+            </>
           ) : (
             <>
               {summaryStrip}
@@ -1732,7 +1764,7 @@ export function RecordPaymentPanel({
               </p>
             )}
             {/* Still needed (what is missing, or "Ready") beside the actions — one row on a wide popup. */}
-            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+            <div className={cn("mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3", sheet && wideSheet && "mt-0")}>
             {sheet && wideSheet && (
               <div className="min-w-0 flex-1 text-[12.5px]">
                 {error || (blocker && amount > 0) ? (
@@ -1769,7 +1801,7 @@ export function RecordPaymentPanel({
                 </>
               )}
             </div>
-            <div className={cn("flex min-w-0 items-center gap-2", sheet && wideSheet ? "sm:ml-auto sm:w-[28rem]" : "sm:max-w-[65%] sm:shrink-0")}>
+            <div className={cn("flex min-w-0 items-center gap-2", desktop ? "sm:ml-auto sm:w-[23rem]" : "sm:max-w-[65%] sm:shrink-0")}>
               {paged && step > 1 ? (
                 <button type="button" onClick={() => goToStep((step - 1) as PaymentStep)} disabled={saving} className={cn(SHEET_BUTTON.ghost, "shrink-0")}>
                   <ChevronLeft className="size-4" aria-hidden />
@@ -1797,9 +1829,10 @@ export function RecordPaymentPanel({
               <button
                 type="submit" form={formId}
                 disabled={!ready || saving}
-                className={cn(ready || saving ? SHEET_BUTTON.primary : SHEET_BUTTON.primaryIdle, "min-w-0 flex-1 truncate whitespace-nowrap transition-[opacity,transform,background-color] duration-150 active:scale-[0.985] sm:px-5")}
+                className={cn(ready || saving ? SHEET_BUTTON.primary : SHEET_BUTTON.primaryIdle, "min-w-0 flex-1 truncate whitespace-nowrap transition-[opacity,transform,background-color] duration-150 active:scale-[0.985] sm:px-5", desktop && "rounded-lg disabled:opacity-100")}
               >
                 {saving && <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />}
+                {desktop && ready && !saving && <Check className="size-4 shrink-0" aria-hidden />}
                 <span className="truncate">
                   {saving
                     ? "Saving…"
@@ -1837,6 +1870,7 @@ export function RecordPaymentPanel({
             amount={wideSheet && !postponing && showSummary ? money(summaryTotal) : heroAmount}
             amountLabel={wideSheet && !postponing && showSummary ? (theyPaid ? `${first} owes you` : `You owe ${first}`) : undefined}
             context={heroContext}
+            wide={desktop}
           />
         }
         footer={footer}
@@ -1858,6 +1892,7 @@ export function RecordPaymentPanel({
                     linkOptions={linkOptions}
                     incomeCategories={incomeCategories}
                     needsAttention={!!extraPlan.error}
+                    wide={wideSheet}
                   />
                 ),
               }
@@ -1888,6 +1923,7 @@ function SheetHero({
   amount,
   amountLabel,
   context,
+  wide,
 }: {
   title: string;
   personName: string;
@@ -1896,6 +1932,7 @@ function SheetHero({
   amount?: string;
   amountLabel?: string;
   context?: React.ReactNode;
+  wide: boolean;
 }) {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2">
@@ -1905,12 +1942,12 @@ function SheetHero({
         </SheetAvatar>
         <div className="min-w-0 flex-1">
           <p className="hidden text-[10.5px] font-bold tracking-[0.1em] text-hero-foreground/65 uppercase sm:block">People · {personName}</p>
-          <DialogTitle className="flex min-w-0 items-center gap-2 text-base leading-tight font-semibold tracking-tight text-hero-foreground">
+          <DialogTitle className={cn("flex min-w-0 items-center gap-2 text-base leading-tight font-semibold tracking-tight text-hero-foreground", wide && "text-[19px]")}>
             <span className="truncate">
               {title}
               <span className="sr-only"> · {personName}</span>
             </span>
-            {status && <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-hero-foreground ring-1 ring-white/12">{status}</span>}
+            {status && <span className={cn("shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-hero-foreground ring-1 ring-white/12", wide && "rounded-md")}>{status}</span>}
           </DialogTitle>
           <DialogDescription className="sr-only">{title}</DialogDescription>
           {context && (
@@ -1922,15 +1959,11 @@ function SheetHero({
         </div>
       </div>
       {amount && (
-        <div className="flex min-w-0 flex-col items-start gap-1 sm:items-end">
-          {amount && (
-            <div className="flex flex-col sm:items-end">
-              {amountLabel && <span className="text-[10.5px] font-bold tracking-[0.1em] whitespace-nowrap text-hero-foreground/65 uppercase">{amountLabel}</span>}
-              <span className={cn("font-heading text-[26px] leading-none font-bold tracking-tight tabular-nums sm:text-[32px]", tone === "in" ? SHEET_AMOUNT_TONE.credit : tone === "out" ? SHEET_AMOUNT_TONE.debit : SHEET_AMOUNT_TONE.unknown)}>
-                {amount}
-              </span>
-            </div>
-          )}
+        <div className={cn("flex min-w-0 flex-col sm:items-end", wide && "border-l border-white/15 pl-4")}>
+          {amountLabel && <span className="text-[10.5px] font-bold tracking-[0.1em] whitespace-nowrap text-hero-foreground/65 uppercase">{amountLabel}</span>}
+          <span className={cn("font-heading text-[26px] leading-none font-bold tracking-tight tabular-nums sm:text-[32px]", tone === "in" ? SHEET_AMOUNT_TONE.credit : tone === "out" ? SHEET_AMOUNT_TONE.debit : SHEET_AMOUNT_TONE.unknown)}>
+            {amount}
+          </span>
         </div>
       )}
     </div>
@@ -1938,10 +1971,13 @@ function SheetHero({
 }
 
 /** One line of the receipt: a quiet label, the value right-aligned. */
-function ReceiptRow({ label, children }: { label: string; children: React.ReactNode }) {
+function ReceiptRow({ label, children, icon: Icon }: { label: string; children: React.ReactNode; icon?: LucideIcon }) {
   return (
-    <div className="grid grid-cols-[6.75rem_minmax(0,1fr)] items-baseline gap-x-3 py-2.5">
-      <dt className="text-xs font-medium text-foreground/70">{label}</dt>
+    <div className="grid grid-cols-[6.75rem_minmax(0,1fr)] items-baseline gap-x-3 py-1.5">
+      <dt className="flex items-center gap-1.5 text-xs font-medium text-foreground/75">
+        {Icon && <Icon className="size-3.5 shrink-0" aria-hidden />}
+        {label}
+      </dt>
       <dd className="min-w-0 text-right font-medium text-foreground [overflow-wrap:anywhere]">{children}</dd>
     </div>
   );
@@ -2170,9 +2206,9 @@ function StepNav({
 }
 
 const INTENT_TONE = {
-  in: { icon: ArrowDownLeft, solid: "bg-settle-receivable-text text-white", text: "text-settle-receivable-text", ring: "ring-settle-receivable-text/40", tint: "bg-settle-receivable-tint" },
-  out: { icon: ArrowUpRight, solid: "bg-settle-payable-text text-white", text: "text-settle-payable-text", ring: "ring-settle-payable-text/40", tint: "bg-settle-payable-tint" },
-  wait: { icon: CalendarClock, solid: "bg-foreground text-card", text: "text-foreground", ring: "ring-foreground/30", tint: "bg-secondary" },
+  in: { icon: ArrowDownLeft, solid: "bg-settle-receivable-text text-white", badge: "bg-settle-receivable-badge", text: "text-settle-receivable-text", ring: "ring-settle-receivable-text/40", tint: "bg-settle-receivable-tint" },
+  out: { icon: ArrowUpRight, solid: "bg-settle-payable-text text-white", badge: "bg-settle-payable-badge", text: "text-settle-payable-text", ring: "ring-settle-payable-text/40", tint: "bg-settle-payable-tint" },
+  wait: { icon: CalendarClock, solid: "bg-foreground text-card", badge: "bg-card", text: "text-foreground", ring: "ring-foreground/30", tint: "bg-secondary" },
 } as const;
 
 /**
@@ -2186,12 +2222,14 @@ function IntentPicker({
   options,
   label,
   locked,
+  compact,
 }: {
   value: IntentChoice;
   onChange: (v: IntentChoice) => void;
   options: { value: IntentChoice; tone: keyof typeof INTENT_TONE; title: string; sub: string; label: string; meta: string }[];
   label: string;
   locked: boolean;
+  compact: boolean;
 }) {
   const index = Math.max(0, options.findIndex((o) => o.value === value));
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -2200,7 +2238,7 @@ function IntentPicker({
       role="radiogroup"
       aria-label={label}
       style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
-      className="relative grid rounded-[18px] border border-border-strong bg-card p-1 shadow-e1"
+      className={cn("relative grid rounded-[18px] border border-border-strong bg-card p-1 shadow-e1", compact && "rounded-xl border-border")}
       data-testid="rp-intent"
     >
       <span
@@ -2209,6 +2247,7 @@ function IntentPicker({
           "absolute inset-y-1 left-1 rounded-[14px] shadow-[0_1px_2px_rgb(0_0_0/0.06),0_8px_18px_-10px_rgb(0_0_0/0.3)] ring-1 transition-[transform,box-shadow,background-color] duration-300 ease-[var(--ease-spring)] motion-reduce:transition-none",
           INTENT_TONE[options[index]?.tone ?? "in"].ring,
           INTENT_TONE[options[index]?.tone ?? "in"].tint,
+          compact && "rounded-lg shadow-none",
         )}
         style={{ width: `calc((100% - 8px) / ${options.length})`, transform: `translateX(${index * 100}%)` }}
       />
@@ -2241,6 +2280,7 @@ function IntentPicker({
             className={cn(
               "relative z-10 flex min-w-0 flex-col items-center gap-1 rounded-[12px] px-1.5 py-2 text-center outline-none transition-[opacity,transform] duration-150 focus-visible:ring-2 focus-visible:ring-ring @lg:flex-row @lg:items-center @lg:gap-2.5 @lg:px-2.5 @lg:text-left",
               disabled ? "cursor-not-allowed opacity-45" : "active:scale-[0.97]",
+              compact && "rounded-lg py-1.5",
             )}
           >
             <span
@@ -2248,6 +2288,7 @@ function IntentPicker({
               className={cn(
                 "grid size-8 shrink-0 place-items-center rounded-full transition-[background-color,color,box-shadow] duration-300",
                 active ? cn(tone.solid, "shadow-[0_3px_8px_-3px_rgb(0_0_0/0.35)]") : "bg-card text-foreground/70 shadow-[0_1px_2px_rgb(0_0_0/0.08)]",
+                compact && cn("rounded-md shadow-none", active ? cn(tone.badge, tone.text) : "bg-secondary/70"),
               )}
             >
               <Icon className="size-4" strokeWidth={2.5} />
@@ -2287,12 +2328,16 @@ function ReviewRow({ label, children, onEdit, editLabel }: { label: string; chil
 }
 
 /** A step's heading: its badge, the title, and a quiet hint. */
-function StepHeading({ id, n, title, hint, right, done }: { id: string; n: number; title: string; hint?: string; right?: React.ReactNode; done?: boolean }) {
+function StepHeading({ id, n, title, hint, right, done, icon: Icon }: { id: string; n: number; title: string; hint?: string; right?: React.ReactNode; done?: boolean; icon?: LucideIcon }) {
   return (
-    <div className="-mx-3.5 -mt-3.5 mb-3 flex flex-wrap items-start justify-between gap-x-3 gap-y-1 rounded-t-[15px] border-b border-border bg-secondary/60 px-3.5 py-2">
+    <div className={cn("-mx-3.5 -mt-3.5 mb-3 flex flex-wrap items-start justify-between gap-x-3 gap-y-1 rounded-t-[15px] border-b border-border bg-secondary/60 px-3.5 py-2", Icon && "mx-0 mt-0 items-center rounded-none bg-transparent px-0 pt-0 pb-2.5")}>
       <div className="min-w-0">
         <h4 id={id} className="flex items-center gap-2 text-sm font-bold text-foreground">
-          <StepBadge n={n} done={done} />
+          {Icon ? (
+            <span aria-hidden className={cn("grid size-7 shrink-0 place-items-center rounded-lg", done ? "bg-success/10 text-success" : "bg-secondary text-foreground/75")}>
+              {done ? <Check className="size-4" strokeWidth={2.5} /> : <Icon className="size-4" />}
+            </span>
+          ) : <StepBadge n={n} done={done} />}
           {title}
         </h4>
         {hint && <p className="mt-0.5 pl-7 text-xs text-foreground/70">{hint}</p>}

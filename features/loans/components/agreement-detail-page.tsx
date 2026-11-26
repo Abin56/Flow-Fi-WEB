@@ -2,7 +2,7 @@
 
 import { ArrowLeft, SearchX } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { InlineHostProvider, StackProvider } from "@/components/finance/stack-layer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,7 +29,7 @@ export function agreementIdFromPath(pathname: string | null): string | null {
 }
 
 /** The workspace fits one desktop screen: the viewport below the top bar and the page padding, never shorter than this. */
-const WORKSPACE_HEIGHT = "h-[calc(100dvh-7.5rem)] min-h-[34rem]";
+const WORKSPACE_HEIGHT = "h-[calc(100dvh-7.5rem)] min-h-[29rem]";
 
 /**
  * The Loan & EMI workspace (`/loans/<id>/`): every record in a narrow list on the left, the selected one on the right.
@@ -41,7 +41,6 @@ const WORKSPACE_HEIGHT = "h-[calc(100dvh-7.5rem)] min-h-[34rem]";
  */
 export function AgreementDetailPage() {
   const id = agreementIdFromPath(usePathname());
-  const router = useRouter();
   const { rows: loanRows, isLoading: loansLoading } = useLoanRows();
   const { rows: emiRows, isLoading: emisLoading } = useEmiRows();
   const [latched, setLatched] = useState<{ id: string; kind: "loan" | "emi" } | null>(null);
@@ -49,16 +48,17 @@ export function AgreementDetailPage() {
   if (id != null && found && (latched?.id !== id || latched.kind !== found)) setLatched({ id, kind: found });
   const kind = id != null && latched?.id === id ? latched.kind : null;
 
-  const select = (next: string) => {
-    if (next !== id) router.replace(`/loans/${encodeURIComponent(next)}/`);
-  };
-
   if (id != null && kind != null) {
     return (
       <InlineHostProvider>
-        <div className={cn("flex min-w-0 gap-3 px-1", WORKSPACE_HEIGHT)} data-testid="loan-emi-workspace">
-          <AgreementNavList selectedId={id} onSelect={select} />
-          <div key={id} className="min-h-0 min-w-0 flex-1 duration-200 animate-in fade-in-0 slide-in-from-right-2 motion-reduce:animate-none">
+        <div className={cn("flex min-w-0 flex-col gap-2 xl:flex-row xl:gap-3 xl:px-1", WORKSPACE_HEIGHT)} data-testid="loan-emi-workspace">
+          <Link href="/loans/" className="inline-flex min-h-7 w-fit shrink-0 items-center gap-1.5 text-xs font-semibold text-foreground hover:underline xl:hidden">
+            <ArrowLeft className="size-4" aria-hidden /> Loan &amp; EMI
+          </Link>
+          <div className="hidden shrink-0 xl:block">
+            <AgreementNavList selectedId={id} />
+          </div>
+          <div key={id} className="min-h-0 min-w-0 flex-1">
             <PaymentAwarenessProvider>
               <StackProvider>{kind === "loan" ? <LoansWorkspace pageAgreementId={id} /> : <EmiWorkspace pageAgreementId={id} />}</StackProvider>
             </PaymentAwarenessProvider>
@@ -70,7 +70,7 @@ export function AgreementDetailPage() {
   if (id != null && (loansLoading || emisLoading)) {
     return (
       <div className={cn("flex min-w-0 gap-3 px-1", WORKSPACE_HEIGHT)} aria-busy="true">
-        <Skeleton className={cn(LE_RADIUS.panel, "h-full w-[17.5rem] shrink-0")} />
+        <Skeleton className={cn(LE_RADIUS.panel, "hidden h-full w-[17.5rem] shrink-0 xl:block")} />
         <Skeleton className={cn(LE_RADIUS.panel, "h-full flex-1")} />
       </div>
     );

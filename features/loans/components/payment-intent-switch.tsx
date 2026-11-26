@@ -44,12 +44,12 @@ export function PaymentIntentSwitch({
             onClick={() => onChange(v)}
             title={hint}
             className={cn(
-              "flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-[6px] px-2 text-center outline-none transition-[background-color,box-shadow,color] duration-150 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
-              on ? "bg-primary text-primary-foreground shadow-e1 ring-1 ring-primary-accent-text" : "text-muted-foreground hover:bg-card hover:text-foreground",
+              "flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-md px-1.5 py-1 text-center outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 sm:px-2",
+              on ? "bg-primary text-primary-foreground ring-1 ring-inset ring-primary-accent-text" : "text-muted-foreground hover:bg-card hover:text-foreground",
             )}
           >
-            <Icon className="size-3.5 shrink-0" strokeWidth={on ? 2.25 : 1.75} aria-hidden />
-            <span className="truncate text-[12.5px] font-semibold">{label}</span>
+            <Icon className="hidden size-3.5 shrink-0 sm:block" strokeWidth={on ? 2.25 : 1.75} aria-hidden />
+            <span className="text-xs leading-tight font-semibold [overflow-wrap:anywhere]">{label}</span>
           </button>
         );
       })}

@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarClock, Check, ChevronDown, ChevronRight, Landmark, Loader2, ShoppingBag, Users, X, type LucideIcon } from "lucide-react";
+import { CalendarClock, Check, ChevronDown, Landmark, Loader2, ShoppingBag, Users, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { OperationProgressView } from "@/components/feedback/operation-progress";
@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/format";
 import { hasOwnershipShares, resolveOwnership, type OwnershipSource } from "@/lib/engines/debt-ownership";
 import { handleEnterKey } from "@/components/ui/enter-key";
-import { OWNERSHIP_LABEL, type OwnershipKind } from "@/features/loans/lib/my-commitments";
+import { classifyOwnership, OWNERSHIP_LABEL, type ClassifiableOwnership, type OwnershipKind } from "@/features/loans/lib/my-commitments";
 
 /**
  * Shared presentation for the Loan & EMI section — one card, one detail hero, one fact grid and one
@@ -210,6 +210,18 @@ export interface DebtCardProps {
 }
 
 const OWNERSHIP_TONE: Record<OwnershipKind, DebtCardBadge["tone"]> = { mine: "success", shared: "primary", others: "neutral", review: "warning" };
+const OWNER_NAMES = new Intl.ListFormat("en-IN");
+
+/** The people attached to an agreement, including a legacy assignee who has no repayment arrangement. */
+export function agreementOwnerLabel(source: ClassifiableOwnership, nameOf: (id: string) => string | undefined): string | null {
+  const ownership = classifyOwnership(source);
+  if (ownership.kind === "mine") return "For you";
+  const partIds = ownership.weights?.flatMap((share) => share.personId != null && share.amount > 0 ? [share.personId] : []);
+  const personIds = partIds ?? (source.beneficiaryPersonId ? [source.beneficiaryPersonId] : []);
+  if (personIds.length === 0) return null;
+  const names = [...new Set(personIds)].map((id) => nameOf(id)?.trim() || "Someone else");
+  return `${ownership.kind === "shared" ? "Shared with" : "For"} ${OWNER_NAMES.format(names)}`;
+}
 
 /**
  * Who the principal belongs to, as card chips: "SANJU ₹1,52,790". Empty when it is all mine, so a plain loan
@@ -261,9 +273,8 @@ function MetricLabel({ children, className }: { children: React.ReactNode; class
 }
 
 /**
- * The Loan/EMI list card. Header (icon, name, type · source · rate, status, chevron) → two metrics side by
- * side (Outstanding with the original amount under it; Next EMI with its actual due date) → installment
- * progress → who it's assigned to in the People Ledger. Flat white surface, no tinted metric boxes; hover
+ * The Loan/EMI list card. The record and its People Ledger assignments sit above the outstanding balance,
+ * next payment and installment progress. Flat white surface, no tinted metric boxes; hover
  * lifts the border and shadow slightly. Every figure is passed in already derived — nothing computed here.
  */
 export function DebtCard({
@@ -317,13 +328,13 @@ export function DebtCard({
         }}
         className={cn(
           LE_RADIUS.card,
-          "group @container flex cursor-pointer flex-col gap-2.5 border border-border bg-card p-3.5 shadow-e1 outline-none",
+          "@container flex cursor-pointer flex-col gap-2.5 border border-border bg-card p-3.5 shadow-e1 outline-none",
           "transition-[border-color,box-shadow] duration-150 ease-out hover:border-border-strong hover:shadow-e2",
           "focus-visible:border-primary-accent-text focus-visible:ring-2 focus-visible:ring-ring",
           muted && "bg-secondary",
         )}
       >
-        {/* Header — name, status and chevron on one line; type · owner · source · rate on a single quiet line beneath. */}
+        {/* Header — name and status, with the record type and source beneath. */}
         <div className="flex items-start gap-2.5">
           <span className={cn(LE_RADIUS.control, "flex size-8 shrink-0 items-center justify-center border border-border bg-secondary text-foreground")}>
             <Icon className="size-4" strokeWidth={1.75} />
@@ -341,10 +352,6 @@ export function DebtCard({
                   {b.label}
                 </ClayBadge>
               ))}
-              <ChevronRight
-                aria-hidden
-                className="size-4 shrink-0 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-foreground"
-              />
             </div>
             <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
               {tag && (
@@ -382,6 +389,52 @@ export function DebtCard({
             </p>
           </div>
         </div>
+
+        {/* People Ledger assignments and linked records, next to the agreement name. */}
+        {links.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 border-b border-border pb-2">
+            {people.length > 0 && (
+              <span className="mr-0.5 text-xs font-medium text-muted-foreground">
+                {people.length > 1 ? "Split between" : people[0].person!.role}
+              </span>
+            )}
+            {people.map(({ label, person }) => {
+              const isYou = person!.name === "You";
+              return (
+                <span
+                  key={label}
+                  title={label}
+                  className={cn(
+                    "inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border py-0.5 pr-2 pl-0.5 text-xs",
+                    isYou ? "border-border bg-secondary text-muted-foreground" : "border-success/40 bg-success/10 text-foreground",
+                  )}
+                >
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "flex size-[18px] shrink-0 items-center justify-center rounded-full text-[10px] font-bold uppercase",
+                      isYou ? "bg-border text-foreground" : "bg-success text-white",
+                    )}
+                  >
+                    {person!.name.trim().charAt(0) || "?"}
+                  </span>
+                  <span className="max-w-[9rem] truncate font-semibold uppercase">{person!.name}</span>
+                  {person!.amount && <span className={cn("shrink-0 font-semibold tabular-nums", !isYou && "text-success")}>{person!.amount}</span>}
+                </span>
+              );
+            })}
+            {chips.map(({ icon: LinkIcon, label }) => (
+              <span
+                key={label}
+                title={label}
+                className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-full border border-border bg-secondary px-2 py-0.5 text-xs font-medium text-foreground"
+              >
+                <LinkIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+                <span className="truncate">{label}</span>
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* Primary metrics — two columns split by a hairline. Amount and its secondary fact share a line, wrapping only when narrow. */}
         <dl className={cn("grid gap-x-3.5", hasNext ? "grid-cols-2" : "grid-cols-1")}>
@@ -455,52 +508,6 @@ export function DebtCard({
               {/* A partly covered installment (e.g. an advance's remainder) is never counted as paid. */}
               {partial > 0 && <> · {partial} partial</>} · {left} left
             </span>
-          </div>
-        )}
-
-        {/* People Ledger assignment + linked records — one compact wrapping row, only when there are any. */}
-        {links.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5 border-t border-border pt-2.5">
-            {people.length > 0 && (
-              <span className="mr-0.5 text-xs font-medium text-muted-foreground">
-                {people.length > 1 ? "Split between" : people[0].person!.role}
-              </span>
-            )}
-            {people.map(({ label, person }) => {
-              const isYou = person!.name === "You";
-              return (
-                <span
-                  key={label}
-                  title={label}
-                  className={cn(
-                    "inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border py-0.5 pr-2 pl-0.5 text-xs",
-                    isYou ? "border-border bg-secondary text-muted-foreground" : "border-success/40 bg-success/10 text-foreground",
-                  )}
-                >
-                  <span
-                    aria-hidden
-                    className={cn(
-                      "flex size-[18px] shrink-0 items-center justify-center rounded-full text-[10px] font-bold uppercase",
-                      isYou ? "bg-border text-foreground" : "bg-success text-white",
-                    )}
-                  >
-                    {person!.name.trim().charAt(0) || "?"}
-                  </span>
-                  <span className="max-w-[9rem] truncate font-semibold uppercase">{person!.name}</span>
-                  {person!.amount && <span className={cn("shrink-0 font-semibold tabular-nums", !isYou && "text-success")}>{person!.amount}</span>}
-                </span>
-              );
-            })}
-            {chips.map(({ icon: LinkIcon, label }) => (
-              <span
-                key={label}
-                title={label}
-                className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-full border border-border bg-secondary px-2 py-0.5 text-xs font-medium text-foreground"
-              >
-                <LinkIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" strokeWidth={1.75} />
-                <span className="truncate">{label}</span>
-              </span>
-            ))}
           </div>
         )}
       </div>

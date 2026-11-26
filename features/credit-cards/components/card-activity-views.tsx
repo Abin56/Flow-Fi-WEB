@@ -31,7 +31,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import type { CardBill } from "@/lib/engines/card-cycle-bills";
 import type { Transaction } from "@/lib/models/transaction";
 import { statementWindowForDate } from "@/lib/repositories/credit-card-repository";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatCurrencyExact } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { CreditCardViewItem } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { cardFaceGradient } from "@/features/credit-cards/components/credit-card-tile";
@@ -39,6 +39,7 @@ import {
   cardDueStatus,
   classifyCardTransaction,
   summarizeCardActivity,
+  type CardBillBreakdown,
   type CardDueTone,
   type CardTxnKind,
   type FinancedPurchases,
@@ -109,6 +110,31 @@ function billStatus(b: CardBill): { label: string; tone: CardDueTone | "muted" }
   return { label: overdue ? "Overdue" : "Unpaid", tone: overdue ? "overdue" : "soon" };
 }
 
+export function CardBillParts({ split }: { split: CardBillBreakdown | undefined }) {
+  if (!split) return null;
+  const amounts = split.remaining ?? split.billed;
+  return (
+    <div className="space-y-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs" data-testid="card-bill-parts">
+      <p className="text-[11px] font-medium text-muted-foreground">{split.remaining ? "Remaining by type" : "Billed by type"}</p>
+      <dl className="grid grid-cols-2 gap-x-3 tabular-nums">
+        <div className="flex flex-wrap items-baseline gap-x-1.5">
+          <dt className="text-muted-foreground">Purchases</dt>
+          <dd className="font-semibold text-foreground">{formatCurrencyExact(amounts.purchases)}</dd>
+        </div>
+        <div className="flex flex-wrap items-baseline gap-x-1.5">
+          <dt className="text-muted-foreground">Loan / EMI</dt>
+          <dd className="font-semibold text-foreground">{formatCurrencyExact(amounts.loanEmi)}
+            {split.remaining && split.billed.loanEmi > 0.005 && amounts.loanEmi <= 0.005 && (
+              <span className="ml-1 font-medium text-success">Paid</span>
+            )}
+          </dd>
+        </div>
+      </dl>
+      {!split.remaining && <p className="text-[11px] text-muted-foreground">Partial payment allocation is unavailable.</p>}
+    </div>
+  );
+}
+
 /**
  * The selected card's bill — what normal Pay bill pays (`statementPayment.current`), its dates, and every bill on
  * the card (paid and unpaid) from the existing bill list. The status comes from `cardDueStatus`, the same one the
@@ -116,12 +142,14 @@ function billStatus(b: CardBill): { label: string; tone: CardDueTone | "muted" }
  */
 export function CardBillsView({
   card,
+  breakdowns,
   nextClose,
   onPayStatement,
   onPayFull,
   onHistory,
 }: {
   card: CreditCardViewItem;
+  breakdowns?: ReadonlyMap<string, CardBillBreakdown>;
   nextClose: Date;
   onPayStatement: () => void;
   onPayFull: () => void;
@@ -154,12 +182,12 @@ export function CardBillsView({
                 <DuePill tone={due.tone} label={due.label} />
               </div>
               <p className={cn("mt-2 text-[34px] leading-none font-bold tracking-tight tabular-nums", due.tone === "overdue" ? "text-expense" : "text-foreground")}>
-                {formatCurrency(bill ? scope.statementDue : 0)}
+                {formatCurrencyExact(bill ? scope.statementDue : 0)}
               </p>
               {bill && bill.amountPaid > 0.005 && (
                 <p className="mt-1.5 text-xs font-medium text-foreground/80 tabular-nums" data-testid="card-bill-paid-summary">
-                  Bill {formatCurrency(bill.totalAmount)} · Paid <span className="font-semibold text-success">{formatCurrency(bill.amountPaid)}</span> · Remaining{" "}
-                  <span className="font-semibold text-foreground">{formatCurrency(bill.remaining)}</span>
+                  Bill {formatCurrencyExact(bill.totalAmount)} · Paid <span className="font-semibold text-success">{formatCurrencyExact(bill.amountPaid)}</span> · Remaining{" "}
+                  <span className="font-semibold text-foreground">{formatCurrencyExact(bill.remaining)}</span>
                 </p>
               )}
               {!bill ? (
@@ -180,11 +208,12 @@ export function CardBillsView({
               )}
             </div>
           </div>
+          {bill && <CardBillParts split={breakdowns?.get(bill.id)} />}
           <div className="flex flex-wrap items-center gap-2">
             {bill && (
               <button type="button" onClick={onPayStatement} className={BTN_PRIMARY}>
                 <Wallet className="size-4" strokeWidth={2} />
-                Pay bill {formatCurrency(scope.statementDue)}
+                Pay bill {formatCurrencyExact(scope.statementDue)}
               </button>
             )}
             {canPayFull && (
@@ -260,15 +289,22 @@ export function CardBillsView({
               {bills.map((b) => {
                 const st = billStatus(b);
                 const isCurrent = b.id === bill?.id;
+                const parts = breakdowns?.get(b.id)?.billed;
                 return (
                   <tr key={b.id} className={cn("transition-colors hover:bg-secondary/40 [&>td]:border-t [&>td]:border-border-strong/35", isCurrent && "bg-primary/[0.07]")}>
                     <td className="truncate px-4 py-2 font-medium text-foreground tabular-nums">
                       {periodLabel(b)}
                       {isCurrent && <span className="ml-2 rounded-[4px] bg-primary/25 px-1.5 py-px text-[10px] font-bold text-primary-accent-text">PAY NOW</span>}
+                      {parts && (
+                        <div className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
+                          <span>Purchases {formatCurrencyExact(parts.purchases)}</span>
+                          <span>Loan / EMI {formatCurrencyExact(parts.loanEmi)}</span>
+                        </div>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-foreground/80 tabular-nums">{shortDate(b.dueDate, false)}</td>
-                    <td className="px-3 py-2 text-right font-semibold text-foreground tabular-nums">{formatCurrency(b.totalAmount)}</td>
-                    <td className="px-3 py-2 text-right text-foreground/75 tabular-nums">{b.amountPaid > 0.005 ? formatCurrency(b.amountPaid) : "—"}</td>
+                    <td className="px-3 py-2 text-right font-semibold text-foreground tabular-nums">{formatCurrencyExact(b.totalAmount)}</td>
+                    <td className="px-3 py-2 text-right text-foreground/75 tabular-nums">{b.amountPaid > 0.005 ? formatCurrencyExact(b.amountPaid) : "—"}</td>
                     <td className="px-4 py-2 text-right">
                       {st.tone === "muted" ? (
                         <span className="text-xs font-medium text-muted-foreground">{st.label}</span>

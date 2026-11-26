@@ -238,6 +238,8 @@ export function StackLayer({
   tone = "light",
   size = "compact",
   instant = false,
+  compactHeader = false,
+  closeWithIcon = false,
   header,
   toolbar,
   footer,
@@ -255,6 +257,8 @@ export function StackLayer({
   size?: "wide" | "compact" | "popup";
   /** Skip the enter animation — a sibling layer of the same flow just closed, so this one replaces it in place. */
   instant?: boolean;
+  compactHeader?: boolean;
+  closeWithIcon?: boolean;
   /** Must contain the layer's `DialogTitle`. */
   header: ReactNode;
   toolbar?: ReactNode;
@@ -269,11 +273,12 @@ export function StackLayer({
   const hero = tone === "hero";
   const wide = size === "wide";
   const popup = size === "popup";
+  const backToBase = base && !closeWithIcon;
   const slot = useInlineSlot(open);
   if (slot.state === "pending") return null;
   if (slot.state === "inline" && slot.el) {
     return createPortal(
-      <InlineSurface base={base} closeLabel={closeLabel} closeDisabled={closeDisabled} onRequestClose={onRequestClose} header={header} toolbar={toolbar} footer={footer} onKeyDown={onKeyDown} testId={testId} bodyClassName={bodyClassName}>
+      <InlineSurface base={backToBase} compactHeader={compactHeader} closeLabel={closeLabel} closeDisabled={closeDisabled} onRequestClose={onRequestClose} header={header} toolbar={toolbar} footer={footer} onKeyDown={onKeyDown} testId={testId} bodyClassName={bodyClassName}>
         {children}
       </InlineSurface>,
       slot.el,
@@ -314,8 +319,8 @@ export function StackLayer({
       >
         <header className={cn("relative shrink-0", hero ? "bg-surface-hero text-hero-foreground" : "border-b border-border bg-gradient-to-b from-primary/20 via-primary/[0.06] to-transparent")}>
           {hero && <div aria-hidden className="pointer-events-none absolute inset-0 bg-[radial-gradient(70%_180%_at_0%_0%,oklch(0.34_0.07_126/0.5),transparent_62%)]" />}
-          <div className="relative flex items-start gap-2 px-3 py-3 sm:px-4">
-            {base && (
+          <div className={cn("relative flex items-start gap-2 px-3 py-3 sm:px-4", compactHeader && "lg:items-center lg:py-2")}>
+            {backToBase && (
               <button
                 type="button"
                 aria-label="Back"
@@ -331,7 +336,7 @@ export function StackLayer({
               </button>
             )}
             <div className="min-w-0 flex-1">{header}</div>
-            {!base && (
+            {!backToBase && (
               <button
                 type="button"
                 aria-label={closeLabel}
@@ -357,6 +362,7 @@ export function StackLayer({
 /** A layer drawn inside the page: the same header, toolbar, scrolling body and footer, filling the host (light surface, matching the workspace). */
 function InlineSurface({
   base,
+  compactHeader,
   closeLabel,
   closeDisabled,
   onRequestClose,
@@ -369,6 +375,7 @@ function InlineSurface({
   bodyClassName,
 }: {
   base: boolean;
+  compactHeader: boolean;
   closeLabel: string;
   closeDisabled: boolean;
   onRequestClose: () => void;
@@ -399,7 +406,7 @@ function InlineSurface({
         className="flex h-full min-h-0 flex-col overflow-hidden bg-card text-foreground duration-200 animate-in fade-in-0 slide-in-from-right-3 motion-reduce:animate-none"
       >
         <header className="relative shrink-0 border-b border-border bg-gradient-to-b from-secondary/70 to-card">
-          <div className="relative flex items-start gap-2 px-3 py-2.5">
+          <div className={cn("relative flex items-start gap-2 px-3 py-2.5", compactHeader && "lg:items-center lg:py-2")}>
             {base && (
               <button type="button" aria-label="Back" onClick={onRequestClose} disabled={closeDisabled} className="mt-0.5 inline-flex h-8 shrink-0 items-center gap-0.5 rounded-[6px] pr-2.5 pl-1.5 text-xs font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40">
                 <ChevronLeft className="size-4" strokeWidth={2} />

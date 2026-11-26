@@ -8,7 +8,7 @@
  * Numbers and validation come from `planExtraAllocation`.
  */
 
-import { Check, ChevronDown, CircleAlert, Hourglass, PiggyBank, Plus, TrendingUp, X, type LucideIcon } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, CircleAlert, Hourglass, PiggyBank, Plus, TrendingUp, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { DateInput } from "@/components/forms/date-input";
 import { money } from "@/lib/engines/person-cycle-statement-share";
@@ -125,6 +125,8 @@ export const KIND_META: Record<
 };
 
 const shortDate = (d: Date) => d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+const DESTINATION_COLUMNS = "grid grid-cols-[1.75rem_6.5rem_minmax(0,1fr)_7.25rem_1.75rem] items-center gap-x-2 px-3";
+const DESTINATION_FIELD = "h-8 rounded-md border-border-strong bg-card px-2.5 text-xs placeholder:text-foreground/55 aria-invalid:border-settle-emi-text/65 aria-invalid:bg-settle-emi-tint/55";
 
 /**
  * The money left, as a short editable list. Adding a destination gives it whatever is still unassigned, so a
@@ -140,6 +142,7 @@ export function ExtraAllocationEditor({
   linkOptions,
   incomeCategories,
   hideSummary = false,
+  compact = false,
 }: {
   extra: number;
   direction: PaymentDirection;
@@ -150,6 +153,7 @@ export function ExtraAllocationEditor({
   incomeCategories: readonly { id: string; name: string }[];
   /** Presentation only: the host already shows the status + meter (e.g. the Record Payment drawer's sticky overview). */
   hideSummary?: boolean;
+  compact?: boolean;
 }) {
   const allocations = draftsToAllocations(drafts, linkOptions);
   const plan = planExtraAllocation({ extra, direction, allocations, money });
@@ -194,7 +198,7 @@ export function ExtraAllocationEditor({
   const offered = hasLeft ? canAdd : convertsDefault ? canAdd.filter((k) => k !== "advance") : [];
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className={cn("flex flex-col gap-3", compact && "gap-2.5")}>
       {/* Live picture of the money left: one coloured segment per use, the unassigned rest striped. */}
       {!hideSummary && (
         <div className="flex flex-col gap-1.5 rounded-xl bg-secondary/50 px-3 py-2.5">
@@ -209,23 +213,33 @@ export function ExtraAllocationEditor({
       )}
 
       {drafts.length > 0 && (
-        <ul ref={listRef} className="flex flex-col gap-2.5" aria-label="Uses of the money left">
-          {drafts.map((d, i) => (
-            <DestinationRow
-              key={d.key}
-              d={d}
-              a={allocations[i]}
-              direction={direction}
-              firstName={firstName}
-              linkOptions={linkOptions}
-              incomeCategories={incomeCategories}
-              taken={kindsTaken(d.key)}
-              onKind={(k) => changeKind(d.key, k)}
-              update={(patch) => update(d.key, patch)}
-              onRemove={() => onChange(drafts.filter((x) => x.key !== d.key))}
-            />
-          ))}
-        </ul>
+        <div className={compact ? "rounded-xl border border-border bg-card shadow-e1" : "contents"}>
+          {compact && (
+            <div aria-hidden className={cn(DESTINATION_COLUMNS, "rounded-t-xl border-b border-border bg-secondary/55 py-2 text-[10px] leading-tight font-bold tracking-[0.09em] text-foreground/65 uppercase")}>
+              <span className="col-span-2">Destination</span>
+              <span>Details</span>
+              <span className="pr-2.5 text-right">Amount</span>
+            </div>
+          )}
+          <ul ref={listRef} className={compact ? "divide-y divide-border" : "flex flex-col gap-2.5"} aria-label="Uses of the money left">
+            {drafts.map((d, i) => (
+              <DestinationRow
+                key={d.key}
+                d={d}
+                a={allocations[i]}
+                direction={direction}
+                firstName={firstName}
+                linkOptions={linkOptions}
+                incomeCategories={incomeCategories}
+                compact={compact}
+                taken={kindsTaken(d.key)}
+                onKind={(k) => changeKind(d.key, k)}
+                update={(patch) => update(d.key, patch)}
+                onRemove={() => onChange(drafts.filter((x) => x.key !== d.key))}
+              />
+            ))}
+          </ul>
+        </div>
       )}
       {offered.length > 0 && (
         <div className="flex flex-col gap-1.5">
@@ -243,16 +257,23 @@ export function ExtraAllocationEditor({
                   onClick={() => add(k)}
                   aria-label={name}
                   title={`${name} — ${meta.hint.toLowerCase()}`}
-                  className="group flex min-w-[9.5rem] flex-1 items-center gap-2.5 rounded-xl border border-dashed border-foreground/25 bg-card px-3 py-2.5 text-left outline-none transition-colors duration-150 hover:border-solid hover:border-foreground/40 hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
+                  className={cn(
+                    "group flex min-w-[9.5rem] flex-1 items-center gap-2.5 rounded-xl border border-dashed border-foreground/25 bg-card px-3 py-2.5 text-left outline-none transition-colors duration-150 hover:border-solid hover:border-foreground/40 hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring",
+                    compact && "min-w-[8rem] gap-2 rounded-lg border-solid border-border px-2.5 py-1.5 hover:border-settle-advance-edge/50 hover:bg-settle-advance-tint/30",
+                  )}
                 >
-                  <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-full", meta.tint, meta.ink)}>
+                  <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-full", compact && "size-7 rounded-md", meta.tint, meta.ink)}>
                     <Icon className="size-4" aria-hidden />
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[13px] font-semibold text-foreground">{another ? "Another purpose" : meta.label}</span>
                     <span className="block truncate text-[11px] text-foreground/60">{meta.hint}</span>
                   </span>
-                  <Plus className="size-4 shrink-0 text-foreground/40 group-hover:text-foreground" aria-hidden />
+                  {compact && convertsDefault ? (
+                    <ArrowRight className="size-3.5 shrink-0 text-foreground/50 group-hover:text-foreground" aria-hidden />
+                  ) : (
+                    <Plus className="size-4 shrink-0 text-foreground/50 group-hover:text-foreground" aria-hidden />
+                  )}
                 </button>
               );
             })}
@@ -262,7 +283,7 @@ export function ExtraAllocationEditor({
 
       {!hasLeft && canAdd.length > 0 && plan.status === "full" && drafts.length > 0 && (
         <p className="text-[11.5px] text-foreground/60" data-testid="rp-add-hint">
-          To split it between several uses, lower an amount first.
+          {compact ? "Lower an amount to free up money for another destination." : "To split it between several uses, lower an amount first."}
         </p>
       )}
     </div>
@@ -270,14 +291,14 @@ export function ExtraAllocationEditor({
 }
 
 /** The money left as one bar: a segment per use (its kind's colour), the unassigned rest striped. Words live in the summary. */
-export function AllocationMeter({ extra, drafts, allocations }: { extra: number; drafts: readonly AllocationDraft[]; allocations: readonly ExtraAllocation[] }) {
+export function AllocationMeter({ extra, drafts, allocations, className }: { extra: number; drafts: readonly AllocationDraft[]; allocations: readonly ExtraAllocation[]; className?: string }) {
   const amounts = allocations.map((a) => Math.max(0, a.amount));
   const total = amounts.reduce((s, x) => s + x, 0);
   const base = Math.max(extra, total, 0.01);
   const rest = Math.max(0, extra - total);
   const over = total > extra + 0.005;
   return (
-    <div aria-hidden className={cn("flex h-2 w-full gap-0.5 overflow-hidden rounded-full bg-secondary", over && "ring-1 ring-expense/60")}>
+    <div aria-hidden className={cn("flex h-2 w-full gap-0.5 overflow-hidden rounded-full bg-secondary", over && "ring-1 ring-expense/60", className)}>
       {drafts.map((d, i) =>
         amounts[i] > 0 ? (
           <span key={d.key} className={cn("h-full rounded-full transition-[width] duration-300 ease-out", KIND_META[d.kind].dot)} style={{ width: `${(amounts[i] / base) * 100}%` }} />
@@ -301,6 +322,7 @@ function DestinationRow({
   firstName,
   linkOptions,
   incomeCategories,
+  compact,
   taken,
   onKind,
   update,
@@ -312,6 +334,7 @@ function DestinationRow({
   firstName: string;
   linkOptions: readonly PurposeLink[];
   incomeCategories: readonly { id: string; name: string }[];
+  compact: boolean;
   taken: ReadonlySet<ExtraAllocationKind>;
   onKind: (k: ExtraAllocationKind) => void;
   update: (patch: Partial<AllocationDraft>) => void;
@@ -320,27 +343,53 @@ function DestinationRow({
   const name = allocationName(a, direction, firstName);
   const [more, setMore] = useState(d.due !== "" || d.note !== "" || d.connectKind !== "");
   const kinds: ExtraAllocationKind[] = direction === "theyPaid" ? ["advance", "income", "purpose"] : ["advance"];
-  const KindIcon = KIND_META[d.kind].icon;
+  const meta = KIND_META[d.kind];
+  const KindIcon = meta.icon;
   const linked = d.link ? linkOptions.find((o) => encodeLink(o) === d.link) : null;
   const moreSummary =
     d.kind === "purpose"
       ? [d.due ? `Use by ${shortDate(fromInputDate(d.due))}` : null, linked ? linked.label : null, d.note.trim() ? "Note" : null].filter(Boolean).join(" · ")
       : "";
+  const destinationField = d.kind === "advance" ? (
+    <p className="text-xs leading-snug text-foreground/70">{direction === "theyPaid" ? `Held for ${firstName}'s future dues` : `Counts toward what you'll owe ${firstName}`}</p>
+  ) : d.kind === "income" ? (
+    <select
+      data-first-field
+      aria-label="Income category"
+      className={cn(WS_FIELD, compact && DESTINATION_FIELD)}
+      value={d.categoryId}
+      aria-invalid={!d.categoryId || undefined}
+      onChange={(e) => update({ categoryId: e.target.value })}
+    >
+      <option value="">{compact ? "Choose category…" : "Choose income category…"}</option>
+      {incomeCategories.map((c) => (
+        <option key={c.id} value={c.id}>
+          {c.name}
+        </option>
+      ))}
+    </select>
+  ) : (
+    <input
+      data-first-field
+      aria-label="What is this money for?"
+      className={cn(WS_FIELD, compact && DESTINATION_FIELD)}
+      value={d.title}
+      aria-invalid={!d.title.trim() || undefined}
+      onChange={(e) => update({ title: e.target.value })}
+      placeholder={compact ? "Name this purpose" : "What is it for? e.g. SBI EMI"}
+    />
+  );
 
   return (
-    // Each destination reads as its own small card — a clear kind badge, a roomy field for the one thing it
-    // needs, its amount, done. No more squeezing a select, a field and an amount onto one line: with the editor
-    // now getting the sheet's full width, there's room to let each piece breathe.
     <li
       data-draft={d.key}
-      className={cn(
-        "rounded-xl border border-l-4 border-border bg-card p-3 shadow-e1 duration-200 ease-out animate-in fade-in slide-in-from-top-1 sm:p-3.5",
-        KIND_META[d.kind].edge,
-      )}
+      className={compact
+        ? cn(DESTINATION_COLUMNS, "py-2 transition-colors last:rounded-b-xl focus-within:bg-secondary/40")
+        : cn("rounded-xl border border-l-4 border-border bg-card p-3 shadow-e1 duration-200 ease-out animate-in fade-in slide-in-from-top-1 sm:p-3.5", meta.edge)}
     >
-      <div className="flex items-center gap-2.5">
-        <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-full", KIND_META[d.kind].tint, KIND_META[d.kind].ink)}>
-          <KindIcon className="size-[18px]" aria-hidden />
+      <div className={cn("flex items-center gap-2.5", compact && "contents")}>
+        <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-full", compact && "col-start-1 row-start-1 size-7 rounded-lg", meta.tint, meta.ink)}>
+          <KindIcon className={cn("size-[18px]", compact && "size-4")} aria-hidden />
         </span>
         <select
           aria-label={`Use for — ${name}`}
@@ -350,8 +399,9 @@ function DestinationRow({
           className={cn(
             WS_FIELD,
             "h-10 w-auto min-w-[8.5rem] shrink-0 border-transparent px-3 text-sm font-bold disabled:opacity-100",
-            KIND_META[d.kind].tint,
-            KIND_META[d.kind].ink,
+            compact
+              ? "col-start-2 row-start-1 h-8 w-full min-w-0 bg-secondary/65 px-2 text-xs hover:bg-secondary disabled:appearance-none disabled:bg-transparent"
+              : cn(meta.tint, meta.ink),
           )}
         >
           {kinds.map((k) => (
@@ -361,12 +411,15 @@ function DestinationRow({
           ))}
         </select>
 
-        <div className="ml-auto w-[7.5rem] shrink-0 sm:w-36">
+        {compact && <div className="col-start-3 row-start-1 min-w-0">{destinationField}</div>}
+
+        <div className={cn("ml-auto w-[7.5rem] shrink-0 sm:w-36", compact && "col-start-4 row-start-1 ml-0 w-full sm:w-full")}>
           <CompactAmountInput
             label={d.kind === "purpose" ? "Purpose amount" : d.kind === "income" ? "Income amount" : "Advance amount"}
             value={d.amount}
             onChange={(v) => update({ amount: v })}
             invalid={!(Number(d.amount) > 0) || undefined}
+            inputClassName={compact ? cn(DESTINATION_FIELD, "pr-2.5 pl-6 text-right text-[13px]") : undefined}
           />
         </div>
 
@@ -375,72 +428,41 @@ function DestinationRow({
           onClick={onRemove}
           aria-label={`Remove ${name}`}
           title="Remove"
-          className="flex size-9 shrink-0 items-center justify-center rounded-[8px] text-foreground/60 outline-none hover:bg-secondary hover:text-expense focus-visible:ring-2 focus-visible:ring-ring"
+          className={cn("flex size-9 shrink-0 items-center justify-center rounded-[8px] text-foreground/60 outline-none hover:bg-secondary hover:text-expense focus-visible:ring-2 focus-visible:ring-ring", compact && "col-start-5 row-start-1 size-7")}
         >
           <X className="size-4" aria-hidden />
         </button>
       </div>
 
-      {/* The one field this destination needs. */}
-      <div className="mt-2.5 min-w-0 pl-[2.9rem]">
-        {d.kind === "advance" ? (
-          <p className="text-xs leading-snug text-foreground/70">{direction === "theyPaid" ? `Held for ${firstName}'s future dues` : `Counts toward what you'll owe ${firstName}`}</p>
-        ) : d.kind === "income" ? (
-          <select
-            data-first-field
-            aria-label="Income category"
-            className={WS_FIELD}
-            value={d.categoryId}
-            aria-invalid={!d.categoryId || undefined}
-            onChange={(e) => update({ categoryId: e.target.value })}
-          >
-            <option value="">Choose income category…</option>
-            {incomeCategories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <input
-            data-first-field
-            aria-label="What is this money for?"
-            className={WS_FIELD}
-            value={d.title}
-            aria-invalid={!d.title.trim() || undefined}
-            onChange={(e) => update({ title: e.target.value })}
-            placeholder="What is it for? e.g. SBI EMI"
-          />
-        )}
-
-        {!more && moreSummary && <p className="mt-1.5 truncate text-[11px] text-foreground/65">{moreSummary}</p>}
-
+      <div className={cn("mt-2.5 min-w-0 pl-[2.9rem]", compact && "contents")}>
+        {!compact && destinationField}
         {d.kind !== "advance" && (
-          <button
-            type="button"
-            onClick={() => setMore((v) => !v)}
-            aria-expanded={more}
-            aria-label={`More details — ${name}`}
-            title={d.kind === "purpose" ? "Use-by date, link, note" : "Description"}
-            className="mt-1.5 flex h-7 w-fit items-center gap-1 rounded-[6px] px-1.5 text-[12px] font-semibold text-foreground/65 outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {d.kind === "purpose" ? "Date, link or note" : "Description"}
-            <ChevronDown className={cn("size-3.5 transition-transform duration-200", more && "rotate-180")} aria-hidden />
-          </button>
-        )}
+          <div className={compact ? "col-start-3 col-end-6 min-w-0" : "contents"}>
+            {!more && moreSummary && <p className="mt-1.5 truncate text-[11px] text-foreground/65">{moreSummary}</p>}
+            <button
+              type="button"
+              onClick={() => setMore((v) => !v)}
+              aria-expanded={more}
+              aria-label={`More details — ${name}`}
+              title={d.kind === "purpose" ? "Use-by date, link, note" : "Description"}
+              className={cn("mt-1.5 flex h-7 w-fit items-center gap-1 rounded-[6px] px-1.5 text-[12px] font-semibold text-foreground/65 outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring", compact && "mt-0.5 h-6 text-[11px]")}
+            >
+              {d.kind === "purpose" ? "Date, link or note" : "Description"}
+              <ChevronDown className={cn("size-3.5 transition-transform duration-200", more && "rotate-180")} aria-hidden />
+            </button>
 
-        {d.kind !== "advance" && (
-          <InlineReveal open={more}>
-            {d.kind === "income" ? (
-              <div className="pt-2">
-                <WsField label="Description">
-                  <input className={WS_FIELD} value={d.description} onChange={(e) => update({ description: e.target.value })} placeholder={`Extra money from ${firstName}`} />
-                </WsField>
-              </div>
-            ) : (
-              <PurposeDetails d={d} update={update} linkOptions={linkOptions} />
-            )}
-          </InlineReveal>
+            <InlineReveal open={more}>
+              {d.kind === "income" ? (
+                <div className="pt-2">
+                  <WsField label="Description">
+                    <input className={WS_FIELD} value={d.description} onChange={(e) => update({ description: e.target.value })} placeholder={`Extra money from ${firstName}`} />
+                  </WsField>
+                </div>
+              ) : (
+                <PurposeDetails d={d} update={update} linkOptions={linkOptions} />
+              )}
+            </InlineReveal>
+          </div>
         )}
       </div>
     </li>
@@ -505,20 +527,23 @@ function PurposeDetails({ d, update, linkOptions }: { d: AllocationDraft; update
 }
 
 /** Status of the money left — in words and an icon, never colour alone. */
-export function AllocationSummary({ plan, testId = "rp-left-status" }: { plan: ExtraAllocationPlan; testId?: string }) {
+export function AllocationSummary({ plan, testId = "rp-left-status", showDetails = false }: { plan: ExtraAllocationPlan; testId?: string; showDetails?: boolean }) {
   const over = plan.status === "over";
   const full = plan.status === "full";
+  const detailError = showDetails && full ? plan.error : null;
+  const complete = full && !detailError;
   return (
     <p
       className={cn(
         "flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold transition-colors duration-200",
-        over ? "bg-expense/10 text-expense" : full ? "bg-success/10 text-success" : "bg-warning/10 text-warning",
+        showDetails && "w-full items-start gap-1.5 rounded-lg px-2 py-1.5 leading-snug",
+        over ? "bg-expense/10 text-expense" : complete ? "bg-success/10 text-success" : showDetails ? "bg-settle-emi-tint text-settle-emi-text" : "bg-warning/10 text-warning",
       )}
       aria-live="polite"
       data-testid={testId}
     >
-      {full ? <Check className="size-3.5" aria-hidden /> : <CircleAlert className="size-3.5" aria-hidden />}
-      {full ? "All assigned" : over ? `${money(-plan.left)} more than the money left` : `${money(plan.left)} not yet assigned`}
+      {complete ? <Check className="size-3.5 shrink-0" aria-hidden /> : <CircleAlert className="size-3.5 shrink-0" aria-hidden />}
+      {detailError ?? (full ? "All assigned" : over ? `${money(-plan.left)} more than the money left` : `${money(plan.left)} not yet assigned`)}
     </p>
   );
 }

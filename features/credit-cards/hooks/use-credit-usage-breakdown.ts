@@ -16,8 +16,11 @@ import type { Loan } from "@/lib/models/loan";
 import type { Transaction } from "@/lib/models/transaction";
 import {
   addSplits,
+  cardBillBreakdowns,
   cardOutstandingSplit,
   financedPurchasesFrom,
+  financedTransferTargetsFrom,
+  type CardBillBreakdown,
   usageBreakdown,
   type CardUsageSplit,
   type CreditUsageBreakdown,
@@ -33,6 +36,8 @@ export interface CreditUsageBreakdowns {
   /** All cards, each shared facility counted once — adds up to the summary's Credit used. */
   total: CreditUsageBreakdown;
   financed: FinancedPurchases;
+  financedTransferTargets: ReadonlyMap<string, string>;
+  billBreakdownsByCardId: ReadonlyMap<string, ReadonlyMap<string, CardBillBreakdown>>;
   /** Card-account transactions by account id (live, not deleted), for the activity views. */
   transactionsByAccountId: ReadonlyMap<string, Transaction[]>;
 }
@@ -47,11 +52,18 @@ export function computeCreditUsageBreakdowns(items: readonly CreditCardViewItem[
     transactionsByAccountId.set(t.accountId, list);
   }
   const financed = financedPurchasesFrom(emis, loans, items.map((i) => ({ id: i.card.id, accountId: i.card.accountId })));
+  const financedTransferTargets = financedTransferTargetsFrom(emis, loans, financed);
+  const billBreakdownsByCardId = new Map(items.map((i) => [i.id, cardBillBreakdowns({
+    bills: i.bills,
+    cardTransactions: transactionsByAccountId.get(i.card.accountId) ?? [],
+    financed,
+    transferTargets: financedTransferTargets,
+  })]));
 
   const ownSplitByCardId = new Map<string, CardUsageSplit>(
     items.map((i) => [
       i.id,
-      cardOutstandingSplit({ bills: i.bills, cardTransactions: transactionsByAccountId.get(i.card.accountId) ?? [], financed, ownOutstanding: i.ownUsage }),
+      cardOutstandingSplit({ bills: i.bills, cardTransactions: transactionsByAccountId.get(i.card.accountId) ?? [], financed, ownOutstanding: i.ownUsage, breakdowns: billBreakdownsByCardId.get(i.id) }),
     ]),
   );
 
@@ -83,7 +95,7 @@ export function computeCreditUsageBreakdowns(items: readonly CreditCardViewItem[
     creditLimit: parts.reduce((s, i) => s + i.creditLimit, 0),
   });
 
-  return { byCardId, ownSplitByCardId, total, financed, transactionsByAccountId };
+  return { byCardId, ownSplitByCardId, total, financed, financedTransferTargets, billBreakdownsByCardId, transactionsByAccountId };
 }
 
 export function useCreditUsageBreakdowns(items: readonly CreditCardViewItem[]): CreditUsageBreakdowns & { isLoading: boolean } {

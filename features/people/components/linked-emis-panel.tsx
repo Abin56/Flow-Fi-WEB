@@ -10,11 +10,13 @@ import { cycleName } from "@/lib/engines/person-payment-deferral";
 import type { LinkedEmiSource } from "@/features/people/hooks/use-person-cycle-statement";
 import { ColumnLabel } from "@/features/people/components/cycle-statement/header-parts";
 import { EmiBadge } from "@/features/people/components/cycle-statement/statement-parts";
+import { TD, TH } from "@/features/people/components/money-in-out-list";
 import type { LinkedEmiInstallmentStatus, LinkedEmiStatus, PersonLinkedEmi } from "@/lib/engines/person-linked-emis";
 import { money } from "@/lib/engines/person-cycle-statement-share";
 import { emiResponsibility, RESPONSIBILITY_SEGMENTS, type EmiResponsibility } from "@/features/people/lib/emi-responsibility";
 import { cn } from "@/lib/utils";
 import { toast } from "@/store/toast-store";
+import { RepaymentLinkLockedError } from "@/lib/repositories/repayment-link-guard";
 
 const STATUS_LABEL: Record<LinkedEmiStatus | LinkedEmiInstallmentStatus, string> = {
   paid: "Paid",
@@ -32,23 +34,7 @@ const STATUS_CLASS: Record<LinkedEmiStatus | LinkedEmiInstallmentStatus, string>
   upcoming: "bg-secondary text-foreground/70",
 };
 
-const DOT_CLASS: Record<LinkedEmiInstallmentStatus, string> = {
-  paid: "bg-success",
-  partial: "bg-settle-emi-edge",
-  overdue: "bg-expense",
-  pending: "bg-settle-emi-edge",
-  upcoming: "bg-foreground/30",
-};
-
-const LENDER_LABEL: Record<PersonLinkedEmi["installments"][number]["lenderStatus"], string> = {
-  paid: "Paid",
-  partial: "Part paid",
-  overdue: "Overdue",
-  upcoming: "Scheduled",
-};
-
 const shortDate = (d: Date) => d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-const monthLabel = (d: Date) => d.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
 
 export function StatusPill({ status }: { status: LinkedEmiStatus | LinkedEmiInstallmentStatus }) {
   return <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10.5px] leading-4 font-semibold whitespace-nowrap", STATUS_CLASS[status])}>{STATUS_LABEL[status]}</span>;
@@ -76,11 +62,8 @@ function usePostponedFacts(s: PersonLinkedEmi) {
   const postponedOf = usePostponedLookup();
   // Postponed shares are still owed (Remaining keeps them) — they just aren't "overdue" while the new cycle is ahead.
   const pastDue = s.installments.filter((i) => i.remaining > 0.005 && (i.status === "overdue" || i.status === "partial"));
-  const postponed = s.installments.filter((i) => i.remaining > 0.005 && postponedOf(i.key) != null);
-  const amount = postponed.reduce((t, i) => t + i.remaining, 0);
   const allPastDuePostponed = s.status === "overdue" && pastDue.length > 0 && pastDue.every((i) => postponedOf(i.key) != null);
-  const firstMove = postponed[0] ? postponedOf(postponed[0].key) : null;
-  return { postponedOf, amount, allPastDuePostponed, firstMove };
+  return { postponedOf, allPastDuePostponed };
 }
 
 /** Settlement status in words — from the summary's own figures. */
@@ -125,61 +108,60 @@ function useResponsibility(s: PersonLinkedEmi): EmiResponsibility {
 const PILL_BTN =
   "inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-border-strong px-2.5 text-xs font-semibold text-foreground outline-none transition-colors hover:border-primary-accent-text hover:bg-primary/15 focus-visible:ring-2 focus-visible:ring-ring";
 
-function Figure({ label, value, tone, className }: { label: string; value: string; tone?: string; className?: string }) {
+function ShareAmounts({ total, paid, remaining, className }: { total: number; paid: number; remaining: number; className?: string }) {
   return (
-    <div className={cn("min-w-0 rounded-lg bg-secondary/55 px-2.5 py-2 @min-[42rem]:rounded-none @min-[42rem]:bg-transparent @min-[42rem]:py-0", className)}>
-      <dt className="text-[11px] font-semibold text-muted-foreground">{label}</dt>
-      <dd className={cn("mt-1 font-heading text-base leading-tight font-bold break-words text-foreground tabular-nums @min-[42rem]:mt-0.5", tone)}>{value}</dd>
-    </div>
+    <span className={cn("grid grid-cols-3 gap-x-3 text-xs tabular-nums", className)}>
+      <span className="flex min-w-0 flex-col text-muted-foreground">Share total
+        <span className="font-semibold break-words text-foreground">{money(total)}</span>
+      </span>
+      <span className="flex min-w-0 flex-col text-muted-foreground">Paid toward share
+        <span className={cn("font-semibold break-words", paid >= 0.005 && "text-success")}>{paid >= 0.005 ? "+" : ""}{money(paid)}</span>
+      </span>
+      <span className="flex min-w-0 flex-col text-muted-foreground">Remaining balance
+        <span className={cn("font-semibold break-words", remaining >= 0.005 && "text-expense")}>{remaining >= 0.005 ? "−" : ""}{money(remaining)}</span>
+      </span>
+    </span>
   );
 }
 
-/** The card's state in four looks — the edge, the "Due now" tile and the status callout share one tone. */
+function BalanceTiming({ responsibility: r }: { responsibility: EmiResponsibility }) {
+  return (
+    <span className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground tabular-nums">
+      <span>Due now <strong className={cn("font-semibold", r.owed >= 0.005 && "text-expense")}>{money(r.owed)}</strong></span>
+      {r.postponed >= 0.005 && <span>Postponed <strong className="font-semibold text-primary-accent-text">{money(r.postponed)}</strong></span>}
+      {r.later >= 0.005 && <span>Due later <strong className="font-semibold text-foreground">{money(r.later)}</strong></span>}
+    </span>
+  );
+}
+
+/** Shared tones for the card edge and status callout. */
 const CARD_TONE = {
-  overdue: { edge: "bg-expense", tile: "bg-expense/[0.07]", value: "text-expense", callout: "bg-expense/[0.08] text-expense", Icon: TriangleAlert },
-  postponed: { edge: "bg-primary-accent-text", tile: "bg-primary/10", value: "text-primary-accent-text", callout: "bg-primary/10 text-primary-accent-text", Icon: CalendarClock },
-  ok: { edge: "bg-success", tile: "bg-success/[0.07]", value: "text-success", callout: "bg-success/[0.08] text-success", Icon: Check },
-  due: { edge: "bg-settle-emi-edge", tile: "bg-settle-emi-tint", value: "text-settle-emi-text", callout: "bg-settle-emi-tint text-settle-emi-text", Icon: Clock },
+  overdue: { edge: "bg-expense", callout: "bg-expense/[0.08] text-expense", Icon: TriangleAlert },
+  postponed: { edge: "bg-primary-accent-text", callout: "bg-primary/10 text-primary-accent-text", Icon: CalendarClock },
+  ok: { edge: "bg-success", callout: "bg-success/[0.08] text-success", Icon: Check },
+  due: { edge: "bg-settle-emi-edge", callout: "bg-settle-emi-tint text-settle-emi-text", Icon: Clock },
 } as const;
 
 const PILL_GHOST =
   "inline-flex min-h-8 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-muted-foreground outline-none transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
 
-/** Every installment as one pip, in order — paid · partly paid · overdue · pending · not yet due · postponed. Display only. */
-function InstallmentPips({ s, postponedOf }: { s: PersonLinkedEmi; postponedOf: ReturnType<typeof usePostponedLookup> }) {
-  const count = (st: LinkedEmiInstallmentStatus) => s.installments.filter((i) => i.status === st).length;
-  const label = `Shares: ${count("paid")} repaid, ${count("overdue")} overdue, ${count("upcoming") + count("pending")} still to come`;
-  return (
-    <span role="img" aria-label={label} className="flex min-w-0 flex-wrap gap-[3px]">
-      {s.installments.map((i) => {
-        const moved = i.remaining > 0.005 ? postponedOf(i.key) : null;
-        return (
-          <span
-            key={i.key}
-            title={`#${i.number} · ${monthLabel(i.dueDate)} · ${moved ? "Postponed" : STATUS_LABEL[i.status]}`}
-            className={cn("size-[9px] rounded-[3px]", moved ? "bg-primary-accent-text" : i.status === "pending" ? "bg-settle-emi-edge/55" : i.status === "upcoming" ? "bg-border-strong/70" : DOT_CLASS[i.status])}
-          />
-        );
-      })}
-    </span>
-  );
-}
-
 function LinkedEmiCard({ s, personName, source, saving, onToggle }: { s: PersonLinkedEmi; personName: string; source: LinkedEmiSource | undefined; saving: boolean; onToggle: () => void }) {
   const [open, setOpen] = useState(false);
-  // The schedule opens on what still matters — the next unpaid installments — so it never needs an inner scroll area.
+  // Short schedules open in full. Longer schedules start with a preview of open shares.
   const [scheduleAll, setScheduleAll] = useState(false);
   const unpaidRows = s.installments.filter((i) => i.remaining > 0.005);
-  const scheduleRows = scheduleAll ? s.installments : (unpaidRows.length > 0 ? unpaidRows : s.installments.slice(-3)).slice(0, 6);
+  const scheduleRows = scheduleAll || s.installments.length <= 6 ? s.installments : (unpaidRows.length > 0 ? unpaidRows : s.installments.slice(-3)).slice(0, 6);
   const hiddenCount = s.installments.length - scheduleRows.length;
   const first = personName.split(" ")[0];
-  const { postponedOf, amount: postponedAmount, allPastDuePostponed, firstMove } = usePostponedFacts(s);
-  const line = settlementLine(s, first, allPastDuePostponed);
+  const { postponedOf, allPastDuePostponed } = usePostponedFacts(s);
   const r = useResponsibility(s);
-  const T = CARD_TONE[allPastDuePostponed ? "postponed" : s.remaining < 0.005 ? "ok" : s.overdueCount > 0 ? "overdue" : "due"];
+  const T = CARD_TONE[r.owed < 0.005 ? r.postponed >= 0.005 ? "postponed" : "ok" : r.overdueCount > 0 ? "overdue" : "due"];
   const StatusIcon = T.Icon;
-  const movedTo = firstMove ? (firstMove.date ? shortDate(firstMove.date) : `${firstMove.name} cycle`) : null;
-  const movedLine = movedTo && postponedAmount > 0.005 && !allPastDuePostponed ? `${money(postponedAmount)} moved to ${movedTo} · still owed` : null;
+  const nextDue = s.installments.find((i) => i.remaining > 0.005 && postponedOf(i.key) == null);
+  const amountLabel = s.shared ? "EMI share" : "EMI";
+  const scheduleCell = cn(TD, "@max-[42rem]:block @max-[42rem]:border-0 @max-[42rem]:p-0");
+  const scheduleNumber = cn(scheduleCell, "text-right text-[13px] font-semibold tabular-nums @max-[42rem]:row-start-2 @max-[42rem]:text-left");
+  const mobileLabel = "block text-[11px] font-medium text-muted-foreground @min-[42rem]:hidden";
   return (
     <article
       className="@container relative flex min-w-0 animate-in flex-col overflow-hidden rounded-[10px] border border-border bg-card text-xs shadow-e1 fade-in-0 fill-mode-both motion-reduce:animate-none"
@@ -198,18 +180,17 @@ function LinkedEmiCard({ s, personName, source, saving, onToggle }: { s: PersonL
           <span className="ml-auto">{allPastDuePostponed ? <span className={POSTPONED_PILL} title="The overdue share was postponed — it is still owed">Postponed</span> : <StatusPill status={s.status} />}</span>
         </div>
         <div className="mt-3 grid items-start gap-3 @min-[42rem]:mt-1.5 @min-[42rem]:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] @min-[42rem]:items-center @min-[42rem]:gap-0 @min-[42rem]:border-t @min-[42rem]:border-border-subtle @min-[42rem]:py-2">
-          <dl className="grid grid-cols-3 items-stretch gap-2 @min-[42rem]:gap-0 @min-[42rem]:divide-x @min-[42rem]:divide-border-subtle @min-[42rem]:[&>div:first-child]:pl-0">
-            <Figure className={T.tile} label="Unpaid to date" value={money(s.remaining)} tone={T.value} />
-            <Figure label="Repaid to you" value={money(s.paid)} tone={s.paid > 0 ? "text-success" : undefined} />
-            <Figure label="Due later" value={money(s.upcoming)} />
-          </dl>
+          <div className="space-y-2 rounded-lg bg-secondary/35 p-2.5 @min-[42rem]:bg-transparent @min-[42rem]:py-0 @min-[42rem]:pl-0">
+            <ShareAmounts total={r.total} paid={r.repaid} remaining={s.remaining + s.upcoming} />
+            <BalanceTiming responsibility={r} />
+          </div>
           <div className="flex min-w-0 flex-col gap-2 rounded-[8px] border border-border bg-secondary/20 p-2.5 @min-[42rem]:gap-1 @min-[42rem]:rounded-none @min-[42rem]:border-0 @min-[42rem]:border-l @min-[42rem]:border-border-subtle @min-[42rem]:bg-transparent @min-[42rem]:p-0 @min-[42rem]:pl-3">
             <div className="flex flex-wrap justify-between gap-x-3 gap-y-1 text-xs font-medium text-muted-foreground tabular-nums">
               <span className="inline-flex items-center gap-1.5"><Users className="size-3.5" aria-hidden /> {s.paidCount}/{s.installmentCount} shares repaid to you</span>
               <span className="inline-flex items-center gap-1.5"><Landmark className="size-3.5" aria-hidden /> Paid to lender {r.bankPaidCount}/{r.installmentCount}</span>
             </div>
             <ResponsibilityBar s={s} r={r} className="@min-[42rem]:h-1.5" />
-            {s.nextDue && <p className="text-xs text-muted-foreground tabular-nums">Next open share due {shortDate(s.nextDue.dueDate)}</p>}
+            {nextDue && <p className="text-xs text-muted-foreground tabular-nums">Oldest open share due {shortDate(nextDue.dueDate)}</p>}
           </div>
         </div>
       </div>
@@ -217,17 +198,13 @@ function LinkedEmiCard({ s, personName, source, saving, onToggle }: { s: PersonL
       <div className="@min-[42rem]:flex @min-[42rem]:items-center @min-[42rem]:justify-between @min-[42rem]:gap-2 @min-[42rem]:border-t @min-[42rem]:border-border @min-[42rem]:bg-secondary/30 @min-[42rem]:px-3 @min-[42rem]:py-1">
         <p className={cn("mx-3.5 my-3 flex min-w-0 items-start gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold wrap-anywhere tabular-nums @min-[42rem]:m-0 @min-[42rem]:rounded-none @min-[42rem]:bg-transparent @min-[42rem]:p-0", T.callout)}>
           <StatusIcon className="mt-0.5 size-3.5 shrink-0" strokeWidth={2.25} aria-hidden />
-          <span>
-            {line.text}
-            {movedLine ? ` · ${movedLine}` : allPastDuePostponed && movedTo ? ` · moved to ${movedTo}` : ""}
-          </span>
+          <span>{r.owed >= 0.005 ? `${first} owes ${money(r.owed)} now` : r.postponed >= 0.005 ? "Postponed shares are still owed" : r.later >= 0.005 ? "Up to date" : "Fully settled"}</span>
         </p>
         <div className="flex flex-wrap items-center gap-1.5 border-t border-border bg-secondary/30 px-3 py-2 @min-[42rem]:shrink-0 @min-[42rem]:flex-nowrap @min-[42rem]:border-0 @min-[42rem]:bg-transparent @min-[42rem]:p-0">
           <button
             type="button"
             aria-expanded={open}
             onClick={() => setOpen((o) => !o)}
-            title="Monthly schedule"
             className={cn(PILL_GHOST, "@min-[42rem]:min-h-7")}
           >
             <ChevronDown className={cn("size-3.5 transition-transform duration-200", open && "rotate-180")} strokeWidth={2} />
@@ -246,43 +223,55 @@ function LinkedEmiCard({ s, personName, source, saving, onToggle }: { s: PersonL
       </div>
 
       {open && (
-        <div className="border-t border-border px-4 py-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2">
-            <span className="font-semibold text-foreground">Share timeline</span>
-            <InstallmentPips s={s} postponedOf={postponedOf} />
-          </div>
-          <ul className="mt-1 divide-y divide-border" aria-label={`${s.name} monthly schedule`}>
-            {scheduleRows.map((i) => {
-              const moved = i.remaining > 0.005 ? postponedOf(i.key) : null;
-              return (
-                <li key={i.key} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2.5">
-                  <span className={cn("size-1.5 shrink-0 rounded-full", moved ? "bg-primary-accent-text" : DOT_CLASS[i.status])} aria-hidden />
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate font-medium text-foreground">
-                      {monthLabel(i.dueDate)} · Installment {i.number}
-                    </span>
-                    <span className="text-muted-foreground">
-                      Due {shortDate(i.dueDate)}
-                      {i.paid > 0 && i.remaining > 0 ? ` · ${money(i.paid)} paid, ${money(i.remaining)} left` : ""}
-                      {moved ? ` · moved to ${moved.date ? shortDate(moved.date) : `${moved.name} cycle`}` : ""}
-                    </span>
-                  </span>
-                  <span className="shrink-0 font-semibold text-foreground tabular-nums">{money(i.amount)}</span>
-                  <span className="flex min-w-0 flex-wrap items-center gap-1.5 text-muted-foreground" data-testid="linked-emi-schedule-status">
-                    <span className="inline-flex items-center gap-1">Share {moved ? <span className={POSTPONED_PILL}>Postponed</span> : <StatusPill status={i.status} />}</span>
-                    <span className="inline-flex items-center gap-1">Lender <span className={cn("rounded-full px-2 py-0.5 font-semibold", STATUS_CLASS[i.lenderStatus])}>{LENDER_LABEL[i.lenderStatus]}</span></span>
-                  </span>
-                </li>
-              );
-            })}
-            {(scheduleAll || hiddenCount > 0) && (
-              <li className="py-1.5">
-                <button type="button" onClick={() => setScheduleAll((all) => !all)} className="text-[11.5px] font-semibold text-primary-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">
-                  {scheduleAll ? "Show fewer installments" : `Show all ${s.installments.length} installments`}
-                </button>
-              </li>
-            )}
-          </ul>
+        <div className="border-t border-border">
+          <table role="table" aria-label={`${s.name} monthly schedule`} className="w-full border-separate border-spacing-0 @max-[42rem]:block">
+            <thead role="rowgroup" className="@max-[42rem]:sr-only">
+              <tr role="row">
+                <th role="columnheader" scope="col" className={TH}>Due date</th>
+                <th role="columnheader" scope="col" className={cn(TH, "w-[7rem] text-right")}>{amountLabel}</th>
+                <th role="columnheader" scope="col" className={cn(TH, "w-[7rem] text-right")}>Paid</th>
+                <th role="columnheader" scope="col" className={cn(TH, "w-[7rem] text-right")}>Pending</th>
+                <th role="columnheader" scope="col" className={cn(TH, "w-[14rem]")}>Status</th>
+              </tr>
+            </thead>
+            <tbody role="rowgroup" className="@max-[42rem]:block @max-[42rem]:space-y-1.5 @max-[42rem]:p-2.5">
+              {scheduleRows.map((i) => {
+                const moved = i.remaining > 0.005 ? postponedOf(i.key) : null;
+                return (
+                  <tr key={i.key} role="row" className="hover:bg-secondary/40 @max-[42rem]:grid @max-[42rem]:grid-cols-3 @max-[42rem]:items-center @max-[42rem]:gap-1.5 @max-[42rem]:rounded-lg @max-[42rem]:border @max-[42rem]:border-border @max-[42rem]:p-2">
+                    <td role="cell" className={cn(scheduleCell, "font-medium whitespace-nowrap text-foreground tabular-nums @max-[42rem]:col-start-1 @max-[42rem]:row-start-1")}>{shortDate(i.dueDate)}</td>
+                    <td role="cell" className={cn(scheduleNumber, "text-foreground @max-[42rem]:col-start-1")}>
+                      <span aria-hidden className={mobileLabel}>{amountLabel}</span>
+                      {money(i.amount)}
+                    </td>
+                    <td role="cell" className={cn(scheduleNumber, "@max-[42rem]:col-start-2", i.paid > 0.005 ? "text-success" : "text-muted-foreground")}>
+                      <span aria-hidden className={mobileLabel}>Paid</span>
+                      {money(i.paid)}
+                    </td>
+                    <td role="cell" className={cn(scheduleNumber, "@max-[42rem]:col-start-3", i.remaining <= 0.005 ? "text-muted-foreground" : i.status === "overdue" && !moved ? "text-expense" : "text-foreground")}>
+                      <span aria-hidden className={mobileLabel}>Pending</span>
+                      {i.remaining > 0.005 ? money(i.remaining) : "—"}
+                    </td>
+                    <td role="cell" className={cn(scheduleCell, "@max-[42rem]:col-span-2 @max-[42rem]:col-start-2 @max-[42rem]:row-start-1")} data-testid="linked-emi-schedule-status">
+                      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 @max-[42rem]:justify-end">
+                        {moved ? (
+                          <>
+                            <span className={POSTPONED_PILL}>Postponed</span>
+                            <span className="text-[11px] text-primary-accent-text">{moved.date ? shortDate(moved.date) : `${moved.name} cycle`}</span>
+                          </>
+                        ) : <StatusPill status={i.status} />}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {hiddenCount > 0 || scheduleAll ? (
+            <button type="button" onClick={() => setScheduleAll((all) => !all)} className="mx-2.5 my-1 min-h-7 rounded px-1 text-[11.5px] font-semibold text-primary-accent-text outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">
+              {scheduleAll ? "Show fewer" : `Show all ${s.installments.length} EMIs`}
+            </button>
+          ) : null}
         </div>
       )}
     </article>
@@ -296,8 +285,9 @@ export function useRepaysToggle(setRepays: (source: LinkedEmiSource, repays: boo
     setSavingId(source.id);
     try {
       await setRepays(source, !source.repays);
-    } catch {
-      toast.error("Couldn't update the EMI");
+    } catch (e) {
+      // A refusal explains itself (who has repayments recorded); anything else keeps the short title.
+      toast.error("Couldn't update the EMI", e instanceof RepaymentLinkLockedError ? e.message : undefined);
     } finally {
       setSavingId(null);
     }
@@ -392,7 +382,7 @@ export function LinkedEmisPanel({
                           <span className="block truncate text-[13px] font-semibold text-foreground" title={item.name}>{item.name}</span>
                           <span className="block text-[11px] text-muted-foreground">{item.kind === "loan" ? "Loan" : "EMI"}{!item.summary && " · Excluded"}</span>
                         </span>
-                        {item.summary && <span className="shrink-0 text-right text-xs font-semibold text-foreground tabular-nums" title="Unpaid to date">{money(item.summary.remaining)}</span>}
+                        {item.summary && <span className="shrink-0 text-right text-xs text-muted-foreground tabular-nums"><span className="block font-semibold text-foreground">{money(item.summary.remaining + item.summary.upcoming)}</span>Share balance</span>}
                       </button>
                     </li>
                   ))}
@@ -527,44 +517,35 @@ export function EmiResponsibilityBoard({
   );
 }
 
-/** One agreement, compact: name + status, the responsibility bar, then only the amounts that hold something. */
+/** One agreement's balance and timing in the Overview. */
 function AgreementRow({ s, onOpen }: { s: PersonLinkedEmi; onOpen: () => void }) {
   const { allPastDuePostponed } = usePostponedFacts(s);
   const r = useResponsibility(s);
-  const parts = RESPONSIBILITY_SEGMENTS.filter((seg) => r[seg.key] >= 0.005);
   return (
     <li>
       <button
         type="button"
         onClick={onOpen}
         title={`Open ${s.name} on the Linked EMIs tab`}
-        className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-[5px] px-1.5 py-2 text-left outline-none transition-colors hover:bg-secondary/55 focus-visible:ring-2 focus-visible:ring-ring"
+        className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 rounded-[5px] px-1.5 py-2 text-left outline-none transition-colors hover:bg-secondary/55 focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
           <span className="min-w-0 text-sm font-semibold wrap-anywhere text-foreground">{s.name}</span>
           {allPastDuePostponed ? <span className={POSTPONED_PILL}>Postponed</span> : s.status === "overdue" && <StatusPill status="overdue" />}
         </span>
-        <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums">
-          {parts.map((seg) => (
-            <span key={seg.key} className="inline-flex items-center gap-1 text-muted-foreground">
-              <span className={cn("size-1.5 shrink-0 rounded-full", seg.dot)} aria-hidden />
-              {seg.short} <span className={cn("font-semibold", seg.text)}>{money(r[seg.key])}</span>
-            </span>
-          ))}
+        <ArrowRight className="mt-0.5 size-3.5 text-muted-foreground" aria-hidden />
+        <ShareAmounts className="col-span-2 max-w-md" total={r.total} paid={r.repaid} remaining={s.remaining + s.upcoming} />
+        <span className="col-span-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <BalanceTiming responsibility={r} />
+          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums"><Landmark className="size-3.5 shrink-0" aria-hidden /> Paid to lender {r.bankPaidCount}/{r.installmentCount}</span>
         </span>
-        <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground tabular-nums">
-          <span>{s.paidCount}/{s.installmentCount} shares repaid</span>
-          <span className="inline-flex items-center gap-1.5"><Landmark className="size-3.5 shrink-0" aria-hidden /> Paid to lender {r.bankPaidCount}/{r.installmentCount}</span>
-        </span>
-        <ArrowRight className="ml-auto size-3.5 shrink-0 text-muted-foreground" aria-hidden />
       </button>
     </li>
   );
 }
 
 /**
- * The Overview's compact agreement list — one short block per linked agreement (name, status, bar, the non-zero
- * amounts). Same figures as the board (`personLinkedEmis` + live deferrals); the full board stays on the Linked EMIs tab.
+ * The Overview's compact agreement list uses the same share amounts and deferrals as the Linked EMIs tab.
  */
 export function EmiAgreementList({ summaries, onOpen }: { summaries: PersonLinkedEmi[]; onOpen: (key: string | null) => void }) {
   if (summaries.length === 0) return null;
@@ -595,16 +576,12 @@ export function LinkedEmiSnapshot({ personName, summaries, onViewAll }: { person
   return <EmiResponsibilityBoard personName={personName} summaries={summaries} onOpen={onViewAll} />;
 }
 
-/**
- * The person header's EMI column: owed now (the People engine's `emiReceivableOpen`), postponed (open shares moved to a
- * later cycle — part of owed, called out) and later (shares not yet due). Rendered inside the deferral provider.
- */
-export function EmiHeaderColumn({ summaries, owedNow, fallbackLater }: { summaries: PersonLinkedEmi[]; owedNow: number; fallbackLater?: { label: string; amount: number } }) {
+export function EmiHeaderColumn({ summaries, includedInReceivable, totalReceivable, fallbackLater }: { summaries: PersonLinkedEmi[]; includedInReceivable: number; totalReceivable: number; fallbackLater?: { label: string; amount: number } }) {
   const postponedOf = usePostponedLookup();
   const totals = summaries.reduce(
     (t, s) => {
       const r = emiResponsibility(s, (key) => postponedOf(key) != null);
-      return { postponed: t.postponed + r.postponed, later: t.later + s.upcoming, overdue: t.overdue + s.overdueCount };
+      return { postponed: t.postponed + r.postponed, later: t.later + r.later, overdue: t.overdue + r.overdueCount };
     },
     { postponed: 0, later: 0, overdue: 0 },
   );
@@ -622,8 +599,9 @@ export function EmiHeaderColumn({ summaries, owedNow, fallbackLater }: { summari
         {totals.overdue > 0 && <span className="rounded-full bg-expense/10 px-1.5 py-px text-[9.5px] tracking-normal whitespace-nowrap text-expense normal-case">{totals.overdue} overdue</span>}
       </ColumnLabel>
       <dl className="mt-2 space-y-1.5 text-[12.5px] tabular-nums">
-        {row("Owed to you", owedNow, "text-settle-emi-text", "now")}
-        {totals.postponed >= 0.005 && row("Of that, postponed", totals.postponed, "text-primary-accent-text", "pp")}
+        {row("Included in To receive", includedInReceivable, "text-settle-emi-text", "included")}
+        {row("People Ledger · To receive", totalReceivable, "text-foreground", "total")}
+        {totals.postponed >= 0.005 && row("Postponed shares", totals.postponed, "text-primary-accent-text", "pp")}
         {row(later.label, later.amount, "text-foreground", "later")}
       </dl>
     </>

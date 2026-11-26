@@ -37,6 +37,10 @@ import {
 } from "@/features/emi/lib/emi-payment-allocation";
 import { assertEmiReversalStillValid, planEmiReversalPreflight } from "@/features/emi/lib/emi-reversal-guard";
 import { personPaymentReverter } from "@/lib/repositories/agreement-person-revert";
+import { findStrandedDirectCredit, strandedCreditMessage } from "@/lib/repositories/direct-credit-guard";
+import { assertDirectIssuerPaymentSupported } from "@/lib/repositories/direct-issuer-guard";
+import { TxSession } from "@/lib/firestore/tx-session";
+import type { PairedReceiptRevert } from "@/lib/repositories/paired-receipt-revert";
 import { PaymentReversalBlockedError } from "@/lib/repositories/loan-advance-payment-repository";
 import { useCategories } from "@/hooks/use-categories";
 import { useCreditCards, useEmis } from "@/hooks/use-credit-cards";
@@ -203,6 +207,8 @@ export interface EditEmiPaymentParams extends Omit<RecordEmiPaymentParams, "targ
 }
 
 export interface ReverseEmiPaymentParams {
+  /** People receipts to revert in the SAME transaction (the paired undo). */
+  pairedReceipts?: PairedReceiptRevert;
   /** The recorded action being undone: its payments and the installments they sit under (parallel arrays). */
   original: { paymentIds: string[]; installmentIds: string[] };
 }
@@ -227,6 +233,21 @@ export function useEmiActions() {
     const transactionRepository = createTransactionRepository(uid, accountRepository);
     const cardAccountIds = new Set((cards as CreditCardProfile[]).map((c) => c.accountId));
     type Tx = Parameters<Parameters<typeof runTransaction>[1]>[0];
+    /** Refuses a reversal / correction that would leave People credited with more than stays paid to the lender (`direct-credit-guard.ts`). */
+    const assertDirectCreditsKept = async (tx: Tx, emi: Emi, removed: InstallmentPayment[], added: InstallmentPayment[], installments: Installment[], ignore?: ReadonlySet<string>) => {
+      const stranded = await findStrandedDirectCredit({
+        firestore: db,
+        uid,
+        tx,
+        ownerType: "emi",
+        scheduleId: emi.scheduleId,
+        removed,
+        added,
+        sequenceNumberOf: (id) => installments.find((i) => i.id === id)?.sequenceNumber ?? null,
+        ignore,
+      });
+      if (stranded) throw new PaymentReversalBlockedError(strandedCreditMessage(stranded));
+    };
     /** The EMI's linked purchase, read INSIDE the payment transaction — Case A / B is decided on the fresh record. */
     const readPurchase = async (tx: Tx, emi: Emi): Promise<Transaction | null> => {
       if (emi.purchaseTransactionId == null) return null;
@@ -312,6 +333,14 @@ export function useEmiActions() {
           // --- All reads first (Firestore transaction constraint). ---
           const sentinel = await tx.get(breakdownRepository.docRef(emiPaymentId(params.idempotencyKey, 0)));
           if (sentinel.exists()) return { alreadyRecorded: true, applied: params.amount, allocationType: "regularEmi" };
+          await assertDirectIssuerPaymentSupported({
+            firestore: db,
+            uid,
+            tx,
+            kind: "emi",
+            agreement: emi,
+            writing: [{ amount: params.amount, recordedEarlier, note: params.note ?? "", deletedAt: null }],
+          });
           const fresh: Installment[] = [];
           for (const id of ids) {
             const snap = await tx.get(installmentRepository.docRef(id));
@@ -567,6 +596,9 @@ export function useEmiActions() {
           const accounts = await readAccounts(tx, [...oldCardTransactions.map((t) => t.accountId), ...corrected.map((t) => t.accountId)]);
           if (linkedBankId != null && accounts.get(linkedBankId)?.type === "card") throw new Error("A credit card can't fund its own EMI — choose a bank or savings account");
 
+          await assertDirectCreditsKept(tx, emi, original, plan.writes.payments, fresh);
+          await assertDirectIssuerPaymentSupported({ firestore: db, uid, tx, kind: "emi", agreement: emi, writing: plan.writes.payments, replacing: original });
+
           // --- Then all writes. ---
           const now = new Date();
           for (const installment of plan.writes.installments) tx.set(installmentRepository.docRef(installment.id), installment);
@@ -615,7 +647,10 @@ export function useEmiActions() {
         const { preflight, block } = planEmiReversalPreflight({ installments: scheduleInstallments, activePayments, targetPaymentIds: params.original.paymentIds });
         if (block) throw new PaymentReversalBlockedError(block);
 
-        return runTransaction(db, async (tx) => {
+        return runTransaction(db, async (raw) => {
+          // With paired receipts everything goes through one session (see the Loan reversal); otherwise unchanged.
+          const session = params.pairedReceipts ? new TxSession(raw) : null;
+          const tx = session ? session.asTransaction() : raw;
           // --- All reads first. ---
           const original: InstallmentPayment[] = [];
           const freshTargets: (InstallmentPayment | null)[] = [];
@@ -629,11 +664,14 @@ export function useEmiActions() {
           }
           // Every installment the preflight saw, read inside `tx` so a payment committing concurrently forces a retry.
           const freshInstallments = new Map<string, Installment | null>();
-          const installmentSnaps = await Promise.all([...preflight.installments.keys()].map((id) => tx.get(installmentRepository.docRef(id))));
-          installmentSnaps.forEach((snap) => freshInstallments.set(snap.id, snap.exists() ? snap.data() : null));
+          const preflightIds = [...preflight.installments.keys()];
+          const installmentSnaps = await Promise.all(preflightIds.map((id) => tx.get(installmentRepository.docRef(id))));
+          installmentSnaps.forEach((snap, i) => freshInstallments.set(preflightIds[i], snap.exists() ? snap.data() : null));
           const validity = assertEmiReversalStillValid({ preflight, freshTargets, freshInstallments });
           if (!validity.ok) throw new PaymentReversalBlockedError(validity.message);
           if (validity.outcome === "alreadyReversed") return { alreadyReversed: true };
+          // Before any account is read: a receipt and this payment can move the same account.
+          if (session) await params.pairedReceipts!.apply(session);
           const fresh: Installment[] = [];
           for (const id of new Set(original.map((p) => p.installmentId))) {
             const snap = await tx.get(installmentRepository.docRef(id));
@@ -661,6 +699,7 @@ export function useEmiActions() {
 
           const plan = planEmiPaymentReversal({ installments: fresh, original });
           if (plan == null) return { alreadyReversed: true };
+          await assertDirectCreditsKept(tx, emi, original, [], fresh, params.pairedReceipts?.keys);
 
           // --- Then all writes. ---
           const now = new Date();
@@ -673,6 +712,7 @@ export function useEmiActions() {
           for (const [id, delta] of netBalanceDeltas(cardTransactions, [])) {
             if (delta !== 0) tx.set(accountRepository.docRef(id), accountRepository.applyBalanceDelta(accounts.get(id)!, delta));
           }
+          session?.flush();
           return { alreadyReversed: false };
         });
       },

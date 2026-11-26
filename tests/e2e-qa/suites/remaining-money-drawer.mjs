@@ -1,6 +1,6 @@
 /**
- * People → Record payment → Remaining money: the notice card under the receipt and the right-side drawer INSIDE the
- * Record Payment sheet. UI-only: nothing is recorded (the drawer never submits). Local emulator only.
+ * People → Record payment → Remaining money: the notice card and its editor inside the Record Payment sheet.
+ * Runs on the local emulator without submitting a payment.
  */
 import { scenario } from "../lib/core.mjs";
 import * as f from "../lib/flows.mjs";
@@ -14,7 +14,7 @@ const box = async (loc) => {
 for (const [id, vp, scheme] of [
   ["rmd-desktop-light", { width: 1366, height: 900 }, "light"],
   ["rmd-mobile-light", { width: 390, height: 844 }, "light"],
-  ["rmd-desktop-dark", { width: 1366, height: 900 }, "dark"],
+  ["rmd-desktop-dark", { width: 1024, height: 768 }, "dark"],
 ]) {
   scenario(
     id,
@@ -41,8 +41,12 @@ for (const [id, vp, scheme] of [
       chk("no separate Remaining money section elsewhere", (await page.locator("#rp-remaining-heading").count()) === 1);
       if (!mobile) {
         const r = await box(page.getByTestId("rp-receipt"));
+        const intent = await box(page.getByTestId("rp-intent"));
         const c = await box(card);
+        chk("the receipt starts alongside the payment options", !!r && !!intent && Math.abs(r.y - intent.y) < 4 && r.x > intent.x + intent.w);
         chk("card sits directly under the receipt card on the right", !!r && !!c && c.y >= r.y + r.h && c.y - (r.y + r.h) < 40 && Math.abs(c.x - r.x) < 4 && c.x > vp.width / 2, JSON.stringify({ r, c }));
+        const overflow = await page.getByTestId("sheet-body").evaluate((el) => el.scrollHeight - el.clientHeight);
+        chk("desktop payment form fits the standard advance case without scrolling", overflow <= 1, String(overflow));
       }
       chk("drawer is closed (hidden) to start", !(await drawer.isVisible()));
       await h.shot(page, `${id}-01-card`);
@@ -53,7 +57,7 @@ for (const [id, vp, scheme] of [
       const cb = await card.boundingBox();
       await page.mouse.click(cb.x + 24, cb.y + cb.height - 10);
       await page.waitForTimeout(120);
-      const midX = await drawer.evaluate((el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).m41);
+      const midX = await drawer.evaluate((el) => el.getBoundingClientRect().left - el.parentElement.getBoundingClientRect().left);
       chk("drawer slides in from the right (mid-animation offset > 0)", midX > 1, `translateX≈${Math.round(midX)}`);
       await h.shot(page, `${id}-02-sliding`);
       await page.waitForTimeout(600);
@@ -65,6 +69,16 @@ for (const [id, vp, scheme] of [
       chk("no navigation / URL change", page.url() === urlBefore);
       chk("focus moved to Back", await page.evaluate(() => document.activeElement?.getAttribute("data-testid") === "rp-remaining-back"));
       chk("status shown once in the drawer", (await page.getByTestId("rp-left-status").count()) === 1 && /All assigned|not yet assigned/.test(await page.getByTestId("rp-left-status").innerText()));
+      if (!mobile) {
+        const editor = await box(page.getByTestId("rp-remaining-editor"));
+        const summary = await box(page.getByTestId("rp-remaining-sheet-summary"));
+        const amount = await box(drawer.getByRole("spinbutton", { name: "Advance amount" }));
+        const overflow = await page.getByTestId("rp-remaining-editor-body").evaluate((el) => el.scrollHeight - el.clientHeight);
+        chk("desktop editor fits the common allocation without scrolling", !!editor && !!s && editor.h < s.h && overflow <= 1, JSON.stringify({ editor, s, overflow }));
+        chk("allocation summary sits alongside the destination table", !!summary && !!amount && summary.x >= amount.x + amount.w && amount.y - summary.y >= 0 && amount.y - summary.y < 48);
+        const focusStaysInDrawer = await page.getByTestId("sheet-body").evaluate((el) => el.inert);
+        chk("the underlying form is inert while editing destinations", focusStaysInDrawer);
+      }
       const overflow = await drawer.evaluate((el) => el.scrollWidth - el.clientWidth);
       chk("no horizontal overflow inside the drawer", overflow <= 1, String(overflow));
       await h.shot(page, `${id}-03-open`);
@@ -82,12 +96,42 @@ for (const [id, vp, scheme] of [
       if ((await asIncome.count()) > 0) {
         await asIncome.click();
         await page.waitForTimeout(300);
+        if (!mobile) {
+          chk("an assigned amount still flags a missing income category", /choose a category/i.test(await page.getByTestId("rp-left-status").innerText()));
+        }
         await h.shot(page, `${id}-04-income`);
         await page.getByTestId("rp-remaining-back").click();
         await page.waitForTimeout(550);
         chk("choice kept after Back (card shows Income)", /Income/.test(await card.innerText()));
         chk("card asks to Finish while the income category is missing", /Finish/.test(await page.getByTestId("rp-remaining-toggle").innerText()));
         await h.shot(page, `${id}-05-back-finish`);
+        if (!mobile) {
+          await page.getByTestId("rp-remaining-toggle").click();
+          await drawer.getByRole("spinbutton", { name: "Income amount" }).fill("100");
+          chk("lowering an amount shows the unassigned money", /₹400 not yet assigned/.test(await page.getByTestId("rp-left-status").innerText()));
+          await drawer.getByRole("button", { name: "Add purpose" }).click();
+          await drawer.getByRole("textbox", { name: "What is this money for?" }).fill("School fees");
+          chk("a new purpose receives the unassigned amount", (await drawer.getByRole("spinbutton", { name: "Purpose amount" }).inputValue()) === "400");
+          await drawer.getByRole("combobox", { name: /Use for.*Extra money/ }).selectOption("purpose");
+          const purposeNames = drawer.getByRole("textbox", { name: "What is this money for?" });
+          chk("two purposes retain their amounts and flag the blank name", await purposeNames.count() === 2
+            && (await purposeNames.first().getAttribute("aria-invalid")) === "true"
+            && (await drawer.getByRole("spinbutton", { name: "Purpose amount" }).first().inputValue()) === "100"
+            && /Purpose 1/.test(await page.getByTestId("rp-left-status").innerText()));
+          const overflow = await page.getByTestId("rp-remaining-editor-body").evaluate((el) => el.scrollHeight - el.clientHeight);
+          chk("two purpose rows fit without scrolling", overflow <= 1, String(overflow));
+          await h.shot(page, `${id}-06-split-purpose`);
+          await purposeNames.first().fill("Travel");
+          chk("naming both purposes completes the allocation", /All assigned/.test(await page.getByTestId("rp-left-status").innerText()));
+          await page.getByTestId("rp-remaining-done").click();
+          chk("both destinations remain in the payment preview", /Travel.*School fees/s.test(await card.innerText()));
+          const receipt = page.getByTestId("rp-receipt");
+          await receipt.getByRole("button", { name: "Choose account" }).click();
+          await page.getByRole("option", { name: /QA Bank/ }).click();
+          chk("choosing an account from the receipt updates the same payment form",
+            /QA Bank/.test(await receipt.innerText()) && await sheet.getByRole("button", { name: /^Record .+ received$/ }).isEnabled());
+          await h.shot(page, `${id}-07-receipt-ready`);
+        }
       } else {
         chk("'Add as income' offered (received money, all on advance)", false);
       }
