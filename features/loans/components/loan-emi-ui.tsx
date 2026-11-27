@@ -638,6 +638,7 @@ export interface SegmentOption<T extends string> {
   value: T;
   label: string;
   icon?: LucideIcon;
+  disabled?: boolean;
   /** Optional trailing count. */
   count?: number;
 }
@@ -675,7 +676,7 @@ export function SegmentedControl<T extends string>({
   className,
 }: {
   options: SegmentOption<T>[];
-  value: T;
+  value: T | undefined;
   onChange: (v: T) => void;
   ariaLabel: string;
   /** "tablist" when it switches views, "radiogroup" when it's a form choice. */
@@ -687,7 +688,7 @@ export function SegmentedControl<T extends string>({
 }) {
   return (
     <div role={role} aria-label={ariaLabel} className={cn("flex w-full gap-1.5 sm:self-start", fullWidth ? "sm:w-full" : "sm:w-auto", className)}>
-      {options.map(({ value: v, label, icon: Icon, count }) => {
+      {options.map(({ value: v, label, icon: Icon, count, disabled }) => {
         const active = v === value;
         return (
           <button
@@ -696,6 +697,7 @@ export function SegmentedControl<T extends string>({
             role={role === "tablist" ? "tab" : "radio"}
             aria-selected={role === "tablist" ? active : undefined}
             aria-checked={role === "radiogroup" ? active : undefined}
+            disabled={disabled}
             onClick={() => onChange(v)}
             className={cn(
               LE_RADIUS.input,
@@ -703,6 +705,7 @@ export function SegmentedControl<T extends string>({
               fullWidth ? "sm:flex-1" : "sm:flex-none",
               size === "md" ? "min-h-10 px-3.5 text-sm" : "min-h-9 px-3 text-[13px]",
               choiceClass(active),
+              disabled && (active ? "disabled:cursor-default" : "disabled:cursor-default disabled:opacity-50"),
             )}
           >
             <RadioDot checked={active} />

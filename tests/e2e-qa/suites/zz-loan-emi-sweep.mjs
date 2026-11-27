@@ -611,43 +611,44 @@ scenario("le-sweep-edit", "Loan & EMI sweep: editing an unpaid loan — a lender
   const loanDate0 = l0.loanDate;
   const due0 = i0.map((i) => i.dueDate);
 
-  await openRecord(page, "QA Loan 60");
-  await page.getByRole("dialog").first().getByRole("button", { name: "Edit", exact: true }).click();
-  await page.waitForTimeout(1500);
-  let ed = topDialog(page);
+  await page.locator(CARDS).filter({ hasText: "QA Loan 60" }).first().click();
+  const workspace = page.getByTestId("loan-emi-workspace");
+  const edit = workspace.getByRole("button", { name: "Edit", exact: true });
+  const ed = workspace.locator("[data-stack-layer]");
+  await edit.click();
+  await ed.waitFor();
+  const loanType = ed.getByRole("radio", { name: /^Loan I Took/ });
+  chk("Edit shows the selected Add-form loan type as read-only", await loanType.isDisabled() && (await loanType.getAttribute("aria-checked")) === "true");
+  chk("Edit shows the account and ownership sections from Add", (await ed.getByRole("radiogroup", { name: "Account" }).isVisible()) && (await ed.getByRole("radiogroup", { name: "Who is this for?" }).isVisible()));
   const dates = ed.locator('input[placeholder="dd/mm/yyyy"]');
   const shownLoan = await dates.nth(0).inputValue();
   const shownFirst = await dates.nth(1).inputValue();
   const ddmmyyyy = (iso) => { const d = new Date(iso); return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`; };
   chk(`Edit form shows the stored loan date (${ddmmyyyy(loanDate0)}) and first EMI date (${ddmmyyyy(due0[0])})`, shownLoan === ddmmyyyy(loanDate0) && shownFirst === ddmmyyyy(due0[0]), `${shownLoan} / ${shownFirst}`);
-  await ed.getByText("Bank / lender", { exact: true }).first().locator("xpath=following::input[1]").fill("QA Housing Bank 2");
+  await ed.getByPlaceholder("e.g. HDFC Bank").fill("QA Housing Bank 2");
   await page.evaluate(() => window.__reset());
   await ed.getByRole("button", { name: "Save Changes" }).click();
-  await page.waitForTimeout(4000);
+  await ed.waitFor({ state: "hidden", timeout: 40000 });
   const l1 = await loanDoc();
   const i1 = await instDocs(l1);
   chk("lender rename persisted", l1.institutionName === "QA Housing Bank 2", l1.institutionName);
   chk("a details-only edit left the loan date and all 60 due dates exactly as stored", l1.loanDate === loanDate0 && i1.length === 60 && JSON.stringify(i1.map((i) => i.dueDate)) === JSON.stringify(due0), `${l1.loanDate} vs ${loanDate0}; changed dues: ${i1.filter((i, k) => i.dueDate !== due0[k]).length}`);
   chk("amounts untouched (₹3,00,000, 60 × same EMI)", l1.loanAmount === 300000 && i1.every((i, k) => Math.abs(i.amountDue - i0[k].amountDue) < 0.005));
 
-  // Change the first EMI date (after a save the app returns to the loan details — close them first)
-  for (let i = 0; i < 3 && (await page.getByRole("dialog").count()) > 0; i++) await escOnce(page);
-  await openRecord(page, "QA Loan 60");
-  await page.getByRole("dialog").first().getByRole("button", { name: "Edit", exact: true }).click();
-  await page.waitForTimeout(1500);
-  ed = topDialog(page);
+  // Reopen Edit from the same loan detail page.
+  await edit.click();
+  await ed.waitFor();
+  chk("Reopening Edit shows the persisted lender name", (await ed.getByPlaceholder("e.g. HDFC Bank").inputValue()) === "QA Housing Bank 2");
   await typeDate(ed.locator('input[placeholder="dd/mm/yyyy"]').nth(1), "20/12/2026");
   await page.evaluate(() => window.__reset());
   await ed.getByRole("button", { name: "Save Changes" }).click();
   // Re-planning 60 installments takes a while on the emulator — wait for the progress to finish.
-  await page.waitForFunction(() => !/Updating loan/.test(document.body.innerText), null, { timeout: 60000 }).catch(() => {});
-  await page.waitForTimeout(2500);
+  await ed.waitFor({ state: "hidden", timeout: 60000 });
   const i2 = await instDocs(await loanDoc());
   const d20 = new Date(i2[0].dueDate);
   chk("first installment is now due on 20 Dec 2026 (local day), 60 installments kept", i2.length === 60 && d20.getFullYear() === 2026 && d20.getMonth() === 11 && d20.getDate() === 20, `${i2.length}; first due ${d20.toString().slice(0, 21)}`);
   chk("the next installments follow monthly on the 20th", [1, 2, 3].every((k) => { const x = new Date(i2[k].dueDate); return x.getDate() === 20 && ((11 + k) % 12) === x.getMonth(); }), [1, 2, 3].map((k) => new Date(i2[k].dueDate).toString().slice(4, 15)).join(" | "));
   chk("the loan date itself did not move", (await loanDoc()).loanDate === loanDate0);
-  await openRecord(page, "QA Loan 60").catch(() => {});
   await h.shot(page, "le-sweep-edit-saved");
   const errs = logs.filter((l) => !IGNORED.test(l));
   chk("no console errors / page errors", errs.length === 0, errs.slice(0, 5).join(" || "));

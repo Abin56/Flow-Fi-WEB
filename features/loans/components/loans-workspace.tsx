@@ -74,8 +74,8 @@ export function LoansWorkspace({
       transactions,
       (accountId) => accounts.find((a) => a.id === accountId)?.name,
     );
-  /** The Account a wizard-created loan's money moved through, for the details view's Linked section. */
-  const originationAccountName = (loanId: string): string | null => {
+  /** The account a wizard-created loan's money moved through. */
+  const originationAccountName = (loanId: string, unavailableName: string | null = null): string | null => {
     const key = originationKeyFromLoanId(loanId);
     if (key == null) return null;
     const transactionId = originationIdsFor(key).transactionId;
@@ -83,7 +83,7 @@ export function LoansWorkspace({
       (t) => t.id === transactionId && t.deletedAt == null,
     );
     return origination
-      ? (accounts.find((a) => a.id === origination.accountId)?.name ?? null)
+      ? (accounts.find((a) => a.id === origination.accountId)?.name ?? unavailableName)
       : null;
   };
   // The Loan being permanently deleted (the confirmation is open) and whether that deletion is running.
@@ -526,6 +526,7 @@ export function LoansWorkspace({
           key={`edit-${editRow.loan.id}-${editSeq}`}
           open={editOpen}
           editRow={editRow}
+          editAccountName={transactionsQuery.isPending ? undefined : originationAccountName(editRow.loan.id, "Linked account unavailable")}
           onOpenChange={setEditOpen}
         />
       )}

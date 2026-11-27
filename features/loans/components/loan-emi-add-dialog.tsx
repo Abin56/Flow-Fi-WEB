@@ -81,7 +81,7 @@ const INSTALLMENT_PRESETS = [3, 6, 12, 24];
 const PURCHASE_TYPES: EmiLoanType[] = ["other", "vehicle", "home", "personal", "education", "gold", "business"];
 
 /** "What is this?" — four compact option buttons; selected = lime fill, dark icon tile and a check. */
-function KindPicker({ value, onChange }: { value: AddKind | null; onChange: (kind: AddKind) => void }) {
+function KindPicker({ value, onChange, disabled = false }: { value: AddKind | null; onChange: (kind: AddKind) => void; disabled?: boolean }) {
   return (
     <div role="radiogroup" aria-label="What is this?" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
       {KIND_OPTIONS.map(({ value: v, label, hint, icon: Icon }) => {
@@ -92,12 +92,14 @@ function KindPicker({ value, onChange }: { value: AddKind | null; onChange: (kin
             type="button"
             role="radio"
             aria-checked={active}
+            disabled={disabled}
             onClick={() => onChange(v)}
             className={cn(
               LE_RADIUS.control,
               "group relative flex min-w-0 items-center gap-2.5 border px-2.5 py-2 text-left outline-none",
               "transition-[background-color,border-color,box-shadow,transform] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring",
-              active ? choiceClass(true) : cn(choiceClass(false), "motion-safe:hover:-translate-y-px hover:shadow-e1"),
+              choiceClass(active),
+              !active && (disabled ? "opacity-50" : "motion-safe:hover:-translate-y-px hover:shadow-e1"),
             )}
           >
             <span
@@ -127,9 +129,11 @@ export interface LoanEmiAddDialogProps {
   initialKind?: AddKind | null;
   /**
    * Edit mode — the saved Loan to change. The screen is the very same one Add uses, pre-filled; only what a
-   * saved Loan can't change (its type, lender/person, linked account, a shared split) is locked or hidden.
+   * saved Loan can't change (its type, linked person/account, a shared split) is read-only.
    */
   editRow?: LoanRow | null;
+  /** The linked origination account, or null when the loan had no account movement. */
+  editAccountName?: string | null;
 }
 
 /**
@@ -138,7 +142,7 @@ export interface LoanEmiAddDialogProps {
  * With `editRow` it is the same screen, pre-filled, saving through the existing Loan edit operations.
  * Mount with a fresh `key` per open so every Add/Edit starts clean (and gets a new idempotency key).
  */
-export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null, editRow = null }: LoanEmiAddDialogProps) {
+export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null, editRow = null, editAccountName }: LoanEmiAddDialogProps) {
   const loanActions = useLoanActions();
   const emiActions = useEmiActions();
   const { data: accounts = [] } = useAccounts();
@@ -146,7 +150,7 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null, editR
   const { data: cards = [] } = useCreditCards();
   const isEdit = editRow != null;
   const limits = editRow ? loanEditLimits(editRow) : null;
-  const sharedLocked = editRow != null && isSharedLoan(editRow.loan);
+  const savedShares = editRow && isSharedLoan(editRow.loan) ? editRow.loan.ownershipShares ?? undefined : undefined;
   const [form, setForm] = useState<LoanEmiAddForm>(() => (editRow ? loanEditForm(editRow) : emptyLoanEmiAddForm(initialKind, crypto.randomUUID())));
   const [saving, setSaving] = useState(false);
   // Tracks whether the "Other" box is being typed in, so typing "3" on the way to "33" doesn't snap to the 3 preset.
@@ -174,6 +178,7 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null, editR
   const cardLoan = kind === "creditCard" && form.cardEmiKind === "creditCardLoan";
   const preview = previewInstallment(form);
   const kindMeta = KIND_OPTIONS.find((k) => k.value === kind);
+  const accountLinked = isEdit ? editAccountName != null : form.useAccount;
 
   /** Edit: the existing Loan edit operations, in order — details, then schedule re-plan, then date moves. */
   async function handleEditSave(row: LoanRow) {
@@ -293,32 +298,23 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null, editR
       success={operation.snapshot?.status === "success"}
       operation={operation.snapshot}
     >
-      {isEdit ? (
-        <FormSection title="What is this?">
-          <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            {kindMeta && <kindMeta.icon aria-hidden className="size-4 text-muted-foreground" strokeWidth={1.75} />}
-            {recordKindForLoan(editRow.loan).label}
-            <span className="text-xs font-medium text-muted-foreground">— the type can&apos;t be changed after it&apos;s created.</span>
-          </p>
-        </FormSection>
-      ) : (
-        <FormSection title="What is this?">
-          <KindPicker value={kind} onChange={(k) => set({ kind: k })} />
-        </FormSection>
-      )}
+      <FormSection title="What is this?">
+        <KindPicker value={kind} onChange={(k) => set({ kind: k })} disabled={isEdit} />
+        {isEdit && <p className="text-xs text-muted-foreground">Loan type is locked after creation.</p>}
+      </FormSection>
 
       {s.details && (
         // Keyed by kind so switching type re-plays the short reveal instead of swapping fields abruptly.
         <Reveal key={`basics-${kind}`}>
           <FormSection title="Basics" icon={FileText}>
-            {kind === "borrowed" && !isEdit && (
+            {kind === "borrowed" && (
               <FieldGroup label="Loan taken from">
                 <SegmentedControl<LoanCategory>
                   ariaLabel="Loan taken from"
                   size="sm"
                   options={[
-                    { value: "institutional", label: "Bank / Lender", icon: Building2 },
-                    { value: "personal", label: "Person", icon: UserRound },
+                    { value: "institutional", label: "Bank / Lender", icon: Building2, disabled: isEdit },
+                    { value: "personal", label: "Person", icon: UserRound, disabled: isEdit },
                   ]}
                   value={form.borrowedFrom}
                   onChange={(v) => set({ borrowedFrom: v })}
@@ -600,20 +596,33 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null, editR
         </Reveal>
       )}
 
-      {s.account && !isEdit && (
+      {s.account && (
         <Reveal key={`account-${kind}`}>
           <FormSection title={kind === "lent" ? "Where did the money come from?" : "Where did the money go?"} icon={Wallet}>
             <SegmentedControl<"none" | "account">
               ariaLabel="Account"
               size="sm"
               options={[
-                { value: "none", label: kind === "lent" ? "Not from an account" : "Not added to an account" },
-                { value: "account", label: "FlowFi account", icon: Wallet },
+                { value: "none", label: kind === "lent" ? "Not from an account" : "Not added to an account", disabled: isEdit },
+                { value: "account", label: "FlowFi account", icon: Wallet, disabled: isEdit },
               ]}
-              value={form.useAccount ? "account" : "none"}
+              value={isEdit && editAccountName === undefined ? undefined : accountLinked ? "account" : "none"}
               onChange={(v) => set({ useAccount: v === "account" })}
             />
-            {form.useAccount && (
+            {isEdit && (
+              <>
+                {accountLinked && (
+                  <dl className="max-w-md">
+                    <dt className="text-xs font-semibold">{kind === "lent" ? "Paid from" : "Received into"}</dt>
+                    <dd className="mt-1.5 flex min-h-10 items-center rounded-[6px] border border-border px-3 text-sm">{editAccountName}</dd>
+                  </dl>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  {editAccountName === undefined ? "Waiting for linked account details." : "The account used when the loan was created is locked."}
+                </p>
+              </>
+            )}
+            {!isEdit && accountLinked && (
               <Reveal className="flex max-w-md flex-col gap-1.5">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-foreground">{kind === "lent" ? "Paid from" : "Received into"}</span>
@@ -636,13 +645,7 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null, editR
       {s.whoFor && (
         <Reveal key={`who-${kind}`}>
           <FormSection title="Who is this for?" icon={Users}>
-            {sharedLocked ? (
-              <p className="text-sm text-muted-foreground">
-                This loan is shared between people. The split can&apos;t be changed after it&apos;s created — open it to see each person&apos;s share.
-              </p>
-            ) : (
-              <LoanAllocationField form={form} people={people} onChange={set} allowShared={!isEdit} />
-            )}
+            <LoanAllocationField form={form} people={people} onChange={set} allowShared={!isEdit} savedShares={savedShares} />
           </FormSection>
         </Reveal>
       )}
@@ -650,8 +653,6 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null, editR
       {kind != null && (
         <MoreOptions
           key={`more-${kind}`}
-          // Edit opens it straight away: who pays the installments, the name and the references live here.
-          defaultOpen={isEdit}
           summary={
             kind === "borrowed"
               ? s.bankReferences
