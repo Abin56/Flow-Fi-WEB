@@ -8,7 +8,7 @@ import { ordinalDay } from "@/lib/engines/month-cycle-range";
 import { cn } from "@/lib/utils";
 
 const ICON_BUTTON =
-  "flex size-8 items-center justify-center rounded-[6px] text-foreground/70 transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none";
+  "flex size-7 shrink-0 items-center justify-center rounded-md text-foreground/70 transition-colors hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none";
 const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export interface BillsCycleNav {
@@ -36,18 +36,18 @@ export function BillsCycleSwitcher({ nav, periodLabel, rangeLabel, isCustomCycle
   const today = new Date();
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div role="group" aria-label="Bills cycle" className="flex flex-wrap items-center gap-1">
       {!isCurrent && (
         <button
           type="button"
           onClick={nav.current}
-          className="inline-flex h-8 items-center gap-1 rounded-[7px] border border-border-strong bg-card px-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none"
+          className="inline-flex h-8 items-center gap-1 rounded-lg border border-border-strong/60 bg-card px-2 text-xs font-semibold whitespace-nowrap text-foreground transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none"
         >
           <RotateCcw className="size-3" strokeWidth={2} />
           This cycle
         </button>
       )}
-      <div className="flex items-center rounded-[8px] border border-border-strong bg-card p-0.5">
+      <div className="flex items-center rounded-lg border border-border-strong/60 bg-card p-px">
         <button type="button" onClick={nav.previous} aria-label="Previous cycle" className={ICON_BUTTON}>
           <ChevronLeft className="size-4" strokeWidth={1.9} />
         </button>
@@ -62,11 +62,11 @@ export function BillsCycleSwitcher({ nav, periodLabel, rangeLabel, isCustomCycle
             <button
               type="button"
               aria-label="Choose cycle"
-              className="min-w-[9.5rem] rounded-[6px] px-2 py-0.5 text-center transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none"
+              className="min-h-7 min-w-28 rounded-md px-1.5 text-center transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none"
             >
-              <span className="flex items-center justify-center gap-1.5 text-sm leading-tight font-semibold text-foreground" aria-live="polite">
+              <span className="flex items-center justify-center gap-1.5 text-xs font-semibold whitespace-nowrap text-foreground" aria-live="polite">
                 {periodLabel}
-                <CalendarDays className="size-3.5 text-foreground/60" />
+                <CalendarDays className="size-3.5 shrink-0 text-foreground/60" aria-hidden />
               </span>
               {isCustomCycle ? null : <span className="sr-only">{rangeLabel}</span>}
             </button>
@@ -117,7 +117,7 @@ export function BillsCycleSwitcher({ nav, periodLabel, rangeLabel, isCustomCycle
           <button
             type="button"
             aria-label="About this cycle"
-            className="inline-flex size-5 items-center justify-center rounded-full text-foreground/55 hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none"
+            className="inline-flex size-6 items-center justify-center rounded-full text-foreground/65 hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none"
           >
             <Info className="size-3.5" />
           </button>

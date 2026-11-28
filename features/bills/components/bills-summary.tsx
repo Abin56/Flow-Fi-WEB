@@ -32,14 +32,18 @@ function Cell({
   testId: string;
 }) {
   return (
-    <div data-testid={testId} className="relative flex min-w-0 flex-col gap-1 px-4 pt-3.5 pb-3 sm:px-5">
-      <span aria-hidden className={cn("absolute inset-x-0 top-0 h-[3px]", accent)} />
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.06em] text-foreground/70 uppercase">
-        <Icon className="size-3.5" strokeWidth={2} aria-hidden />
-        {label}
+    <div data-testid={testId} className="relative min-w-0 bg-card px-2.5 pt-2.5 pb-2 @xl/bills:px-3">
+      <span aria-hidden className={cn("absolute inset-x-0 top-0 h-0.5", accent)} />
+      <div className="flex flex-col gap-y-0.5 @5xl/bills:flex-row @5xl/bills:flex-wrap @5xl/bills:items-baseline @5xl/bills:justify-between @5xl/bills:gap-x-2">
+        <div className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wide text-foreground/70 uppercase">
+          <Icon className="size-3.5 shrink-0" strokeWidth={2} aria-hidden />
+          {label}
+        </div>
+        <p className={cn("font-heading text-xl leading-tight font-bold wrap-anywhere tracking-tight tabular-nums @sm/bills:text-[1.375rem]", tone ?? "text-foreground")}>
+          {formatCurrency(amount)}
+        </p>
       </div>
-      <p className={cn("font-heading text-[1.6rem] leading-none font-bold tracking-tight tabular-nums", tone ?? "text-foreground")}>{formatCurrency(amount)}</p>
-      <p className="min-h-4 text-xs text-foreground/70">{meta}</p>
+      <p className="mt-0.5 text-xs text-foreground/70">{meta}</p>
     </div>
   );
 }
@@ -49,13 +53,13 @@ function Cell({
  * the same obligations feed My Money's "To pay", so the two pages agree to the rupee.
  */
 export function BillsSummary({ data }: { data: BillsOverviewData }) {
-  const { summary, periodLabel, nextPeriodLabel } = data;
+  const { summary, nextPeriodLabel } = data;
   const next = summary.next;
   const byKind = OBLIGATION_KINDS.filter((k) => summary.byKind[k] > 0);
 
   return (
-    <section aria-label="Payment summary" className="overflow-hidden rounded-[14px] border border-border-strong/60 bg-card shadow-e1">
-      <div className="grid grid-cols-2 divide-x divide-y divide-border-strong/40 lg:grid-cols-4 lg:divide-y-0">
+    <section aria-label="Payment summary" className="overflow-hidden rounded-xl border border-border-strong/55 bg-card">
+      <div className="grid grid-cols-2 gap-px bg-border-strong/35 @2xl/bills:grid-cols-4">
         <Cell
           testId="bills-summary-due"
           label="Due this cycle"
@@ -65,11 +69,11 @@ export function BillsSummary({ data }: { data: BillsOverviewData }) {
           accent={summary.overdue > 0 ? "bg-expense" : summary.dueSoon > 0 ? "bg-warning" : summary.dueThisCycleCount === 0 ? "bg-success" : "bg-primary"}
           meta={
             summary.dueThisCycleCount === 0 ? (
-              `Nothing left to pay in ${periodLabel}`
+              "Nothing due"
             ) : (
               <>
                 {summary.dueThisCycleCount} payment{summary.dueThisCycleCount === 1 ? "" : "s"}
-                {summary.overdue > 0 && <span className="text-expense"> · incl. {formatCurrency(summary.overdue)} overdue</span>}
+                {summary.overdue > 0 && <span className="text-expense"> · includes overdue</span>}
                 {next && summary.overdue === 0 && ` · next ${shortDate(next.dueDate)}`}
               </>
             )
@@ -82,7 +86,7 @@ export function BillsSummary({ data }: { data: BillsOverviewData }) {
           amount={summary.overdue}
           tone={summary.overdue > 0 ? "text-expense" : undefined}
           accent={summary.overdue > 0 ? "bg-expense" : "bg-border-strong/70"}
-          meta={summary.overdue > 0 ? `${summary.overdueCount} past due — stays here until paid` : "Nothing past due"}
+          meta={summary.overdue > 0 ? `${summary.overdueCount} past due` : "Nothing past due"}
         />
         <Cell
           testId="bills-summary-upcoming"
@@ -90,7 +94,7 @@ export function BillsSummary({ data }: { data: BillsOverviewData }) {
           icon={CalendarClock}
           amount={summary.upcoming}
           accent="bg-border-strong/70"
-          meta={summary.upcomingCount > 0 ? `${summary.upcomingCount} due next cycle · ${nextPeriodLabel}` : `Nothing due in ${nextPeriodLabel}`}
+          meta={summary.upcomingCount > 0 ? `${summary.upcomingCount} due · ${nextPeriodLabel}` : `Nothing due · ${nextPeriodLabel}`}
         />
         <Cell
           testId="bills-summary-paid"
@@ -99,12 +103,12 @@ export function BillsSummary({ data }: { data: BillsOverviewData }) {
           amount={summary.paid}
           tone={summary.paid > 0 ? "text-success" : undefined}
           accent={summary.paid > 0 ? "bg-success" : "bg-border-strong/70"}
-          meta={summary.paidCount > 0 ? `${summary.paidCount} paid in ${periodLabel}` : `No payments recorded in ${periodLabel}`}
+          meta={summary.paidCount > 0 ? `${summary.paidCount} payment${summary.paidCount === 1 ? "" : "s"} this cycle` : "No payments this cycle"}
         />
       </div>
       {byKind.length > 0 && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border-strong/40 bg-secondary/30 px-4 py-2 text-xs text-foreground/75 sm:px-5">
-          <span className="font-semibold text-foreground/70">Still to pay, by type</span>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border-t border-border-strong/35 bg-secondary/35 px-2.5 py-1.5 text-xs text-foreground/75 @xl/bills:px-3">
+          <span className="font-semibold text-foreground/70">To pay by type</span>
           {byKind.map((k) => (
             <span key={k} className="tabular-nums">
               {KIND_PLURAL[k]} <span className="font-semibold text-foreground">{formatCurrency(summary.byKind[k])}</span>

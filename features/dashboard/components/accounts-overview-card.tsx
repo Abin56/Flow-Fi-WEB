@@ -37,21 +37,21 @@ export interface AccountsOverviewCardProps {
  */
 export function AccountsOverviewCard({ accountsOverview, isLoading }: AccountsOverviewCardProps) {
   return (
-    <DashPanel label="Accounts">
-      <DashPanelHeader icon={Wallet} title="Accounts" />
+    <DashPanel label="Accounts" className="h-auto">
+      <DashPanelHeader icon={Wallet} title="Accounts" compact />
       {isLoading ? (
-        <div className="flex flex-col gap-2 p-4">
-          <Skeleton className="h-7 w-40" />
+        <div className="flex flex-col gap-1.5 p-2">
+          <Skeleton className="h-6 w-40" />
           {Array.from({ length: 3 }, (_, i) => (
-            <Skeleton key={i} className="h-8 w-full rounded-[6px]" />
+            <Skeleton key={i} className="h-7 w-full rounded" />
           ))}
         </div>
       ) : (
         <>
-          <div className="flex items-baseline justify-between gap-3 border-b border-border-strong/35 bg-secondary/25 px-4 py-2.5">
+          <div className="flex items-baseline justify-between gap-2 border-b border-border-strong/35 bg-secondary/25 px-3 py-1.5">
             <p className={DASH_LABEL}>Total balance</p>
             <div className="text-right">
-              <p className="text-xl leading-tight font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(accountsOverview.totalBalance)}</p>
+              <p className="text-base leading-5 font-bold tracking-tight text-foreground tabular-nums">{formatCurrency(accountsOverview.totalBalance)}</p>
               {accountsOverview.changeThisMonth !== 0 && (
                 <p className={cn("text-xs font-semibold", accountsOverview.changeThisMonth > 0 ? "text-success" : "text-expense")}>
                   {accountsOverview.changeThisMonth > 0 ? "+" : ""}
@@ -64,6 +64,7 @@ export function AccountsOverviewCard({ accountsOverview, isLoading }: AccountsOv
             <DashEmpty
               title="No accounts yet"
               description="Add an account to see it here."
+              compact
               action={
                 <Link href="/accounts" className="text-xs font-semibold text-primary-accent-text hover:underline">
                   Add account
@@ -71,27 +72,27 @@ export function AccountsOverviewCard({ accountsOverview, isLoading }: AccountsOv
               }
             />
           ) : (
-            <div className="max-h-[14.5rem] divide-y divide-border-strong/35 overflow-y-auto">
+            <div className="max-h-44 divide-y divide-border-strong/35 overflow-y-auto">
               {accountsOverview.accounts.map((account) => {
                 const Icon = account.mask ? Landmark : Wallet;
                 return (
-                  <Link key={account.id} href="/accounts" className={cn(DASH_ROW, "group")}>
+                  <Link key={account.id} href="/accounts" className={cn(DASH_ROW, "group min-h-9")}>
                     {account.bankId ? (
-                      <BankLogo bankId={account.bankId} size={28} shape="square" />
+                      <BankLogo bankId={account.bankId} size={24} shape="square" />
                     ) : (
                       <span
-                        className={cn("flex size-7 shrink-0 items-center justify-center rounded-[7px]", account.palette ? account.palette.onGradient : ACCENTS[account.accent])}
+                        className={cn("flex size-6 shrink-0 items-center justify-center rounded-md", account.palette ? account.palette.onGradient : ACCENTS[account.accent])}
                         style={account.palette ? { background: account.palette.gradient } : undefined}
                       >
-                        <Icon className="size-3.5" strokeWidth={1.9} />
+                        <Icon className="size-3" strokeWidth={1.9} />
                       </span>
                     )}
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-[13px] leading-snug font-semibold text-foreground">{account.name}</p>
-                      {account.mask && <p className="text-[11.5px] leading-snug text-muted-foreground tabular-nums">•••• {account.mask}</p>}
+                      <p className="truncate text-xs leading-4 font-semibold text-foreground">{account.name}</p>
+                      {account.mask && <p className="text-[11px] leading-3.5 text-muted-foreground tabular-nums">•••• {account.mask}</p>}
                     </div>
-                    <p className="shrink-0 text-sm font-bold text-foreground tabular-nums">{formatCurrency(account.balance)}</p>
-                    <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-hover:translate-x-0.5" />
+                    <p className="shrink-0 text-xs font-bold text-foreground tabular-nums">{formatCurrency(account.balance)}</p>
+                    <ChevronRight className="size-3 shrink-0 text-muted-foreground transition-transform duration-200 group-hover:translate-x-0.5" />
                   </Link>
                 );
               })}

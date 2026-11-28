@@ -249,6 +249,9 @@ export function matchRows(rows: ReconRow[], ctx: MatchContext): RowMatch[] {
           }
           continue;
         }
+        // Loan and People movements routinely share an amount and day. Keep manual links available when the bank narration is sparse.
+        const loanOrPeople = record.owner === "loan" || record.owner === "emi" || record.owner === "people";
+        if (loanOrPeople && record.id !== linkedId && !candidate.referenceMatch && candidate.merchantStrength !== "same" && candidate.merchantStrength !== "similar") continue;
         (record.kind === "sms_pending" ? smsCandidates : txnCandidates).push(candidate);
         continue;
       }

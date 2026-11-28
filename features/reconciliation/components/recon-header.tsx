@@ -10,6 +10,7 @@ import { useState } from "react";
 import { AlertTriangle, Check, ChevronDown, CreditCard, Landmark, Loader2, Lock, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ClayButton } from "@/components/clay/clay-button";
+import { AccountPickerMark } from "@/components/finance/account-label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { formatRowDate, type AccountIdentity } from "./recon-ui";
 
@@ -66,7 +67,6 @@ function AccountPicker({ options, accountId, onChange, selected, compact }: { op
           <ul role="listbox" aria-label="Accounts" className="flex max-h-80 flex-col gap-0.5 overflow-y-auto">
             {options.map((o) => {
               const active = o.id === accountId;
-              const OptionIcon = o.isCard ? CreditCard : Landmark;
               return (
                 <li key={o.id}>
                   <button
@@ -81,7 +81,7 @@ function AccountPicker({ options, accountId, onChange, selected, compact }: { op
                     }}
                     className={cn("flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none", active && "bg-primary/10")}
                   >
-                    <OptionIcon className="size-4 shrink-0 text-muted-foreground" />
+                    <AccountPickerMark account={o} size={18} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium text-foreground">{o.name}</span>
                       <span className="block text-[11px] text-muted-foreground">
@@ -129,6 +129,7 @@ function InlineAccount({ options, accountId, onChange, status, onRetry, period, 
         </p>
       ) : selected ? (
         <p className="flex min-w-0 items-center gap-1.5" data-testid="selected-account" title={`${selected.name}${selected.last4 ? ` •••• ${selected.last4}` : ""} · ${selected.kind} — matches are checked on this account only`}>
+          {selected.isCard && <AccountPickerMark account={selected} />}
           <span className="max-w-[12rem] truncate text-[13px] font-semibold text-foreground">{selected.name}</span>
           <span className="sr-only">{selected.kind}</span>
           {selected.last4 && <span className="font-mono text-[11px] whitespace-nowrap text-muted-foreground tabular-nums">•••• {selected.last4}</span>}
@@ -206,6 +207,7 @@ function AccountBar({ options, accountId, onChange, status, onRetry, period, exp
             </p>
           ) : selected ? (
             <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 lg:flex-nowrap" data-testid="selected-account">
+              {selected.isCard && <AccountPickerMark account={selected} />}
               <span className="truncate text-sm font-semibold text-foreground lg:max-w-[18rem]">{selected.name}</span>
               <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap text-muted-foreground">{selected.kind}</span>
               {selected.last4 && <span className="font-mono text-xs whitespace-nowrap text-muted-foreground tabular-nums">•••• {selected.last4}</span>}
@@ -239,7 +241,6 @@ function AccountBar({ options, accountId, onChange, status, onRetry, period, exp
               <ul role="listbox" aria-label="Accounts" className="flex max-h-80 flex-col gap-0.5 overflow-y-auto">
                 {options.map((o) => {
                   const active = o.id === accountId;
-                  const OptionIcon = o.isCard ? CreditCard : Landmark;
                   return (
                     <li key={o.id}>
                       <button
@@ -254,7 +255,7 @@ function AccountBar({ options, accountId, onChange, status, onRetry, period, exp
                         }}
                         className={cn("flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none", active && "bg-primary/10")}
                       >
-                        <OptionIcon className="size-4 shrink-0 text-muted-foreground" />
+                        <AccountPickerMark account={o} size={18} />
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-sm font-medium text-foreground">{o.name}</span>
                           <span className="block text-[11px] text-muted-foreground">

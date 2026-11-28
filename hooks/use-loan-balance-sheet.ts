@@ -51,9 +51,10 @@ export function useLoanBalanceSheet(): {
   /** The part of the outstanding Loan/EMI principal (inside Debt) that belongs to other people, by ownership shares. */
   assignedDebt: number;
   isLoading: boolean;
+  lenderChargesLoading: boolean;
 } {
   const accountBalances = useNetWorth();
-  const { charges: lenderCharges } = useLenderCharges();
+  const { charges: lenderCharges, isLoading: lenderChargesLoading } = useLenderCharges();
   const unpaidLenderCharges = useMemo(() => unpaidLenderChargeTotal(lenderCharges), [lenderCharges]);
   const { rows: loanRows, isLoading: loansLoading } = useLoanRows();
   const { rows: emiRows, isLoading: emisLoading } = useEmiRows();
@@ -146,5 +147,6 @@ export function useLoanBalanceSheet(): {
     emiDueReceivable: assigned.dueOpen,
     assignedDebt: assigned.debt,
     isLoading: loansLoading || emisLoading || cardsLoading || cardListLoading || peopleLoading,
+    lenderChargesLoading,
   };
 }

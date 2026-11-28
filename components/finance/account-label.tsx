@@ -1,11 +1,14 @@
 "use client";
 
 import { CreditCard, Landmark, Wallet } from "lucide-react";
-import type { ReactNode } from "react";
+import type { ComponentProps, CSSProperties, ReactNode } from "react";
 import { BankLogo } from "@/components/finance/bank-logo";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { argbToHex, resolveColorValue } from "@/lib/account-color";
 import { formatCurrency } from "@/lib/format";
+import type { CreditCardProfile } from "@/lib/models/credit-card";
 import { cn } from "@/lib/utils";
+import styles from "./account-picker.module.css";
 
 /** The bits of an account (or anything account-like) needed to show it with its bank's logo. */
 export interface AccountLabelSource {
@@ -14,6 +17,7 @@ export interface AccountLabelSource {
   type?: string | null;
   /** Only meaningful for `type: "card"` — `"credit"` is what makes it a credit card. */
   cardSubtype?: string | null;
+  colorValue?: number | null;
 }
 
 /** How an account is presented: a credit card, any other card (debit/prepaid/…), or a plain account (bank/cash/wallet/…). */
@@ -29,7 +33,7 @@ export function isCreditCardAccount(account: Pick<AccountLabelSource, "type" | "
   return accountKind(account) === "credit";
 }
 
-/** Credit-card accent: one violet family so a credit card reads the same in every picker, list and tile. */
+/** Default accent for plain account labels outside the picker. */
 const CREDIT_TINT = "bg-violet-500/12 text-violet-700 dark:bg-violet-400/15 dark:text-violet-300";
 
 /**
@@ -123,62 +127,145 @@ export function groupAccountsByKind<T extends Pick<AccountLabelSource, "type" | 
 
 /** "•••• 1234" for an account that has its last four digits recorded. */
 export function last4Suffix(a: { accountNumberLast4?: string | null }): string | undefined {
-  return a.accountNumberLast4 ? `•••• ${a.accountNumberLast4}` : undefined;
+  const digits = String(a.accountNumberLast4 ?? "").trim().slice(-4);
+  return digits ? `•••• ${digits}` : undefined;
 }
 
-/**
- * The `<SelectItem>`s of an account dropdown, sectioned by kind — bank/cash accounts, debit & other cards, and a
- * tinted "Credit cards" section — so a credit card is unmistakable. Drop it inside any `<SelectContent>` in place of
- * `accounts.map(... <SelectItem> ...)`. Values, order within a section and selection behaviour are unchanged.
- * Section headings only appear when there is more than one section (or the only section is credit cards).
- */
-export function AccountOptions<T extends AccountLabelSource & { id: string; accountNumberLast4?: string | null }>({
+export interface AccountOptionSource extends AccountLabelSource {
+  id: string;
+  accountNumberLast4?: string | null;
+  currentBalance?: number | null;
+}
+
+/** Uses the profile ID for selection and its linked account for the saved appearance. */
+export function creditCardOption(
+  card: Pick<CreditCardProfile, "id" | "issuer" | "lastFourDigits">,
+  account: (AccountLabelSource & { accountNumberLast4?: string | null }) | undefined,
+  fallbackName = "Credit Card",
+): AccountOptionSource {
+  return {
+    id: card.id,
+    name: account?.name ?? fallbackName,
+    bankId: account?.bankId ?? card.issuer,
+    type: "card",
+    cardSubtype: "credit",
+    accountNumberLast4: card.lastFourDigits ?? account?.accountNumberLast4,
+    colorValue: account?.colorValue,
+  };
+}
+
+function cardColorStyle(account: AccountLabelSource): CSSProperties | undefined {
+  if (account.type !== "card") return;
+  const color = resolveColorValue(account.colorValue, "card");
+  if (color != null) return { "--account-card-color": argbToHex(color) } as CSSProperties;
+}
+
+/** Card artwork for both the menu and its selected value. */
+export function AccountPickerMark({ account, size = 20 }: { account: AccountLabelSource; size?: number }) {
+  const kind = accountKind(account);
+  if (kind === "account") return <AccountMark account={account} size={size} />;
+  return (
+    <span
+      className={styles.cardMark}
+      data-account-kind={kind}
+      style={cardColorStyle(account)}
+    >
+      {account.bankId ? (
+        <BankLogo bankId={account.bankId} size={16} shape="square" className="rounded-[4px] ring-0" />
+      ) : (
+        <span aria-hidden className={styles.cardIcon}><CreditCard className="size-3" /></span>
+      )}
+    </span>
+  );
+}
+
+function AccountPickerLabel({ account, detail, hideDetailInTrigger }: {
+  account: AccountOptionSource;
+  detail?: ReactNode;
+  hideDetailInTrigger?: boolean;
+}) {
+  const kind = accountKind(account);
+  const last4 = last4Suffix(account);
+  const cardLabel = kind === "credit" ? "Credit" : account.cardSubtype === "debit" ? "Debit" : "Card";
+  return (
+    <span className={styles.label} title={account.name}>
+      <AccountPickerMark account={account} />
+      <span className={styles.identity}>
+        <span className={styles.name}>{account.name}</span>
+        {(last4 || detail != null) && (
+          <span className={styles.metadata}>
+            {last4 && <span className={styles.lastFour}>{last4}</span>}
+            {detail != null && (
+              <span className={cn(styles.detail, hideDetailInTrigger && styles.menuOnly)}>
+                {last4 && " · "}{detail}
+              </span>
+            )}
+          </span>
+        )}
+      </span>
+      {kind !== "account" && <span className={styles.cardKind}>{cardLabel}</span>}
+    </span>
+  );
+}
+
+export function AccountSelectContent({ className, ...props }: ComponentProps<typeof SelectContent>) {
+  return (
+    <SelectContent
+      align="start"
+      sideOffset={2}
+      className={cn(styles.menu, "rounded-xl border border-border shadow-lg ring-0 duration-150 motion-reduce:animate-none", className)}
+      {...props}
+    />
+  );
+}
+
+/** Account choices in display order, each retaining the caller's original ID. */
+export function AccountOptions<T extends AccountOptionSource>({
   accounts,
-  label,
+  detail,
+  hideDetailInTrigger,
 }: {
   accounts: T[];
-  /** Custom row content; defaults to logo + name + last four. */
-  label?: (a: T) => ReactNode;
+  detail?: (account: T) => ReactNode;
+  hideDetailInTrigger?: boolean;
 }) {
   const groups = groupAccountsByKind(accounts);
   const headed = groups.length > 1 || groups[0]?.kind === "credit";
   return (
     <>
-      {groups.map((g, i) => {
-        const credit = g.kind === "credit";
-        return (
-          <div key={g.kind}>
-            {i > 0 && <SelectSeparator />}
-            <SelectGroup className={cn(credit && headed && "rounded-md bg-violet-500/[0.06] pb-0.5 dark:bg-violet-400/[0.08]")}>
-              {headed && (
-                <SelectLabel
-                  className={cn(
-                    "flex items-center gap-1.5 pt-1.5 pb-1 text-[10px] font-semibold tracking-wide uppercase",
-                    credit && "text-violet-700 dark:text-violet-300",
-                  )}
-                >
-                  {credit && <CreditCard className="size-3" strokeWidth={2.4} />}
-                  {KIND_HEADING[g.kind]}
-                </SelectLabel>
-              )}
-              {g.accounts.map((a) => (
-                <SelectItem key={a.id} value={a.id} data-account-kind={g.kind}>
-                  {label ? label(a) : <AccountLabel account={a} suffix={last4Suffix(a)} />}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </div>
-        );
-      })}
+      {groups.map(({ kind, accounts: group }, i) => (
+        <div key={kind}>
+          {i > 0 && <SelectSeparator className="mx-1 my-1.5" />}
+          <SelectGroup className="grid grid-cols-1 gap-1">
+            {headed && (
+              <SelectLabel className="flex items-center gap-1.5 pt-1.5 pb-0.5 text-[10px] font-semibold tracking-wide uppercase">
+                {kind !== "account" && <CreditCard aria-hidden className="size-3" strokeWidth={2} />}
+                {KIND_HEADING[kind]}
+              </SelectLabel>
+            )}
+            {group.map((account) => (
+              <SelectItem
+                key={account.id}
+                value={account.id}
+                textValue={account.name}
+                data-account-kind={kind}
+                className={styles.option}
+                style={cardColorStyle(account)}
+              >
+                <AccountPickerLabel account={account} detail={detail?.(account)} hideDetailInTrigger={hideDetailInTrigger} />
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </div>
+      ))}
     </>
   );
 }
 
-/**
- * Account dropdown with each account's logo — a drop-in for a native `<select>` of accounts: same string
- * value ("" = none chosen) and the same `onChange(id)`. Only the presentation differs.
- */
-export function AccountSelect({
+const EMPTY_ACCOUNT_OPTION = "__empty_account__";
+
+/** Selects an account by ID. An empty string represents no choice. */
+export function AccountSelect<T extends AccountOptionSource>({
   accounts,
   value,
   onChange,
@@ -186,29 +273,36 @@ export function AccountSelect({
   className,
   ariaLabel,
   showBalance = false,
+  detail,
+  clearable = false,
+  disabled,
+  invalid,
 }: {
-  accounts: (AccountLabelSource & { id: string; accountNumberLast4?: string | null; currentBalance?: number })[];
+  accounts: T[];
   value: string;
   onChange: (id: string) => void;
   placeholder?: string;
   className?: string;
   ariaLabel?: string;
-  /** Paying-account pickers: shows each account's recorded balance next to its name, so the choice is informed. */
+  /** Paying-account pickers can show the recorded balance with each choice. */
   showBalance?: boolean;
+  detail?: (account: T) => ReactNode;
+  clearable?: boolean;
+  disabled?: boolean;
+  invalid?: boolean;
 }) {
-  const suffix = (a: { accountNumberLast4?: string | null; currentBalance?: number }) => {
-    const last4 = a.accountNumberLast4 ? `•••• ${a.accountNumberLast4}` : null;
-    const balance = showBalance && a.currentBalance != null ? formatCurrency(a.currentBalance) : null;
-    return [last4, balance].filter(Boolean).join(" · ") || undefined;
-  };
+  const accountDetail = detail ?? (showBalance ? (account: T) => (
+    account.currentBalance == null ? undefined : formatCurrency(account.currentBalance)
+  ) : undefined);
   return (
-    <Select value={value || undefined} onValueChange={onChange}>
-      <SelectTrigger aria-label={ariaLabel} className={cn("w-full justify-between", className)}>
+    <Select value={value} onValueChange={(id) => onChange(clearable && id === EMPTY_ACCOUNT_OPTION ? "" : id)} disabled={disabled}>
+      <SelectTrigger aria-label={ariaLabel} aria-invalid={invalid || undefined} className={cn("w-full justify-between", className)}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
-      <SelectContent className="max-h-72 rounded-[8px]">
-        <AccountOptions accounts={accounts} label={(a) => <AccountLabel account={a} suffix={suffix(a)} />} />
-      </SelectContent>
+      <AccountSelectContent>
+        {clearable && <SelectItem value={EMPTY_ACCOUNT_OPTION}>{placeholder}</SelectItem>}
+        <AccountOptions accounts={accounts} detail={accountDetail} />
+      </AccountSelectContent>
     </Select>
   );
 }

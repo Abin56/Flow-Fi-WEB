@@ -1,6 +1,6 @@
 "use client";
 
-import { AccountOptions } from "@/components/finance/account-label";
+import { AccountOptions, AccountSelectContent } from "@/components/finance/account-label";
 import { CalendarClock, Plus, StickyNote, Wallet } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ClayBadge } from "@/components/clay/clay-badge";
@@ -45,6 +45,7 @@ import { BillDuplicateReviewPanel } from "@/features/bills/components/bill-dupli
 import { AlertTriangle } from "lucide-react";
 
 const RECURRENCE_OPTIONS: BillRecurrence[] = ["oneTime", "daily", "weekly", "monthly", "yearly", "custom"];
+const BILL_CARD_GRID = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,15rem),1fr))] gap-2";
 
 interface BillFormState {
   name: string;
@@ -312,16 +313,16 @@ export function BillsWorkspace() {
 
   if (isLoading) {
     return (
-      <div className="flex flex-col gap-6 px-1">
-        <h1 className="font-heading text-xl font-semibold tracking-tight text-foreground">Bills</h1>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="@container/bills flex min-w-0 flex-col gap-3 px-1">
+        <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Bills</h1>
+        <div className="grid grid-cols-2 gap-2 @2xl/bills:grid-cols-4">
           {Array.from({ length: 4 }, (_, i) => (
-            <Skeleton key={i} className="h-20 rounded-3xl" />
+            <Skeleton key={i} className="h-16 rounded-xl" />
           ))}
         </div>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div className={BILL_CARD_GRID}>
           {Array.from({ length: 6 }, (_, i) => (
-            <Skeleton key={i} className="h-36 rounded-3xl" />
+            <Skeleton key={i} className="h-24 rounded-xl" />
           ))}
         </div>
       </div>
@@ -329,16 +330,36 @@ export function BillsWorkspace() {
   }
 
   return (
-    <div className="flex flex-col gap-5 px-1">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-baseline gap-2">
-            <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground sm:text-[1.75rem]">Bills</h1>
-            <span className="text-sm text-muted-foreground">{rows.length} bills</span>
+    <div className="@container/bills flex min-w-0 flex-col gap-3 px-1">
+      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Bills</h1>
+          <div role="tablist" aria-label="Bills views" className="flex items-center gap-0.5 rounded-lg border border-border-strong/60 bg-card p-0.5">
+            {(
+              [
+                ["payments", "Payments"],
+                ["bills", `My bills (${rows.length})`],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                id={`bills-tab-${value}`}
+                aria-selected={tab === value}
+                aria-controls={`bills-panel-${value}`}
+                onClick={() => setTab(value)}
+                className={cn(
+                  "h-7 rounded-md px-2.5 text-xs font-semibold whitespace-nowrap tabular-nums transition-colors focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none",
+                  tab === value ? "bg-primary text-primary-foreground" : "text-foreground/75 hover:bg-secondary",
+                )}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-          <p className="mt-0.5 text-sm text-foreground/70">What you need to pay, what is overdue and what is due next — bills, loans, EMIs and card bills in one place.</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           <BillsCycleSwitcher
             nav={overview.nav}
             periodLabel={overview.periodLabel}
@@ -349,49 +370,24 @@ export function BillsWorkspace() {
             selectedEnd={overview.cycleRange.end}
           />
           {duplicateGroups.length > 0 && (
-            <ClayButton size="sm" variant="secondary" onClick={() => setDuplicatesOpen(true)} className="gap-1.5 text-warning-foreground">
+            <ClayButton size="sm" variant="secondary" onClick={() => setDuplicatesOpen(true)} className="gap-1.5 rounded-lg px-2.5 text-warning-foreground">
               <AlertTriangle className="size-3.5" />
               {duplicateGroups.length} duplicate cycle{duplicateGroups.length > 1 ? "s" : ""}
             </ClayButton>
           )}
-          <ClayButton size="sm" onClick={openAdd} className="gap-1.5">
+          <ClayButton size="sm" onClick={openAdd} className="gap-1.5 rounded-lg px-2.5">
             <Plus className="size-3.5" />
             Add Bill
           </ClayButton>
         </div>
       </header>
 
-      <div role="tablist" aria-label="Bills views" className="flex items-center gap-1 self-start rounded-[9px] border border-border-strong/60 bg-card p-0.5">
-        {(
-          [
-            ["payments", "Payments"],
-            ["bills", `My bills (${rows.length})`],
-          ] as const
-        ).map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            role="tab"
-            id={`bills-tab-${value}`}
-            aria-selected={tab === value}
-            aria-controls={`bills-panel-${value}`}
-            onClick={() => setTab(value)}
-            className={cn(
-              "h-8 rounded-[7px] px-3 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none",
-              tab === value ? "bg-primary text-primary-foreground" : "text-foreground/75 hover:bg-secondary",
-            )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
       {tab === "payments" ? (
-        <div role="tabpanel" id="bills-panel-payments" aria-labelledby="bills-tab-payments" className="flex flex-col gap-5">
+        <div role="tabpanel" id="bills-panel-payments" aria-labelledby="bills-tab-payments" className="flex min-w-0 flex-col gap-2.5">
           {overview.isLoading ? (
-            <div className="flex flex-col gap-3" aria-busy="true">
-              <Skeleton className="h-28 rounded-[14px]" />
-              <Skeleton className="h-64 rounded-[14px]" />
+            <div className="flex flex-col gap-2.5" aria-busy="true">
+              <Skeleton className="h-32 rounded-xl @2xl/bills:h-24 @5xl/bills:h-20" />
+              <Skeleton className="h-52 rounded-xl" />
             </div>
           ) : (
             <>
@@ -411,7 +407,7 @@ export function BillsWorkspace() {
               onAction={openAdd}
             />
           ) : (
-            <Stagger className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <Stagger className={BILL_CARD_GRID}>
               {rows.map((row) => (
                 <BillCard key={row.bill.id} row={row} onClick={() => openRow(row)} />
               ))}
@@ -700,10 +696,10 @@ function BillFormFields({
               <SelectTrigger className="h-10 w-full rounded-xl">
                 <SelectValue placeholder="No account" />
               </SelectTrigger>
-              <SelectContent>
+              <AccountSelectContent>
                 <SelectItem value="none">No account</SelectItem>
                 <AccountOptions accounts={accounts} />
-              </SelectContent>
+              </AccountSelectContent>
             </Select>
           </label>
           <label className="flex flex-col gap-1">

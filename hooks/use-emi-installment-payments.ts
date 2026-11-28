@@ -40,7 +40,7 @@ export function countsAsEmiCashOut(row: Pick<EmiPaidRow, "recordedEarlier">): bo
   return !row.recordedEarlier;
 }
 
-export function useEmiInstallmentPayments(): { payments: EmiPaidRow[]; isLoading: boolean } {
+export function useEmiInstallmentPayments(): { payments: EmiPaidRow[]; isLoading: boolean; isPlaceholderData: boolean } {
   const uid = useAuthStore((s) => s.user?.uid);
   const { data: installments = [] } = useAllEmiInstallments();
 
@@ -74,5 +74,5 @@ export function useEmiInstallmentPayments(): { payments: EmiPaidRow[]; isLoading
     },
   });
 
-  return { payments: paid.length === 0 ? [] : (query.data ?? []), isLoading: paid.length > 0 && query.isLoading };
+  return { payments: paid.length === 0 ? [] : (query.data ?? []), isLoading: paid.length > 0 && query.isLoading, isPlaceholderData: paid.length > 0 && query.isPlaceholderData };
 }

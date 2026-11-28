@@ -107,6 +107,27 @@ describe("category suggestion from the description", () => {
     expect(actions.createTransaction.mock.calls[0][0]).toMatchObject({ type: "expense", amount: 120, description: "Coffee", categoryId: "food" });
   });
 
+  it("starts the next expense with a fresh description and automatic category after a manual category save", async () => {
+    const user = userEvent.setup();
+    renderAdd();
+    await user.type(amountInput(), "120");
+    await user.type(descriptionInput(), "Coffee");
+    await pickCategory(user, /Transport/);
+    await user.click(screen.getByRole("button", { name: "Add Expense" }));
+    await waitFor(() => expect(amountInput().value).toBe(""));
+    expect(actions.createTransaction.mock.calls[0][0]).toMatchObject({ description: "Coffee", categoryId: "transport" });
+    expect(descriptionInput()).toHaveProperty("value", "");
+    expect(categoryTrigger().textContent).toMatch(/Optional/);
+
+    await user.type(amountInput(), "90{Enter}");
+    expect(document.activeElement).toBe(descriptionInput());
+    await user.keyboard("Mandi");
+    expect(categoryTrigger().textContent).toMatch(/Food/);
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    await waitFor(() => expect(actions.createTransaction).toHaveBeenCalledTimes(2));
+    expect(actions.createTransaction.mock.calls[1][0]).toMatchObject({ amount: 90, description: "Mandi", categoryId: "food", accountId: "sbi" });
+  });
+
   it("4. a manual category choice made after the auto-pick is never replaced while typing on", async () => {
     const user = userEvent.setup();
     renderAdd();

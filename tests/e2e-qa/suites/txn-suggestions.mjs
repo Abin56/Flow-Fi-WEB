@@ -159,9 +159,9 @@ scenario("txn-suggest-save", "Description-only / category-only / both / neither:
   let t1 = (await h.list("transactions")).find((t) => t.description === d1);
   chk("description only: saved uncategorized with the typed description", !!t1 && t1.categoryId === "" && t1.amount === 50, JSON.stringify(t1 && { c: t1.categoryId, a: t1.amount }));
 
-  // category only (form stays open and carries the description over → clear it, set amount)
+  // category only (the next expense starts with a fresh description)
   await amount.fill("70");
-  await descInput(page).fill("");
+  chk("the next expense starts with a blank description and category", (await descInput(page).inputValue()) === "" && /Optional/.test(await categoryTrigger(page).innerText()));
   await pickCategory(page, "Health");
   await saveButton(page).click();
   await page.waitForTimeout(2500);

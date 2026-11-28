@@ -58,6 +58,22 @@ describe("findSameAmountDateDuplicateIds", () => {
     expect(result.has("real-2")).toBe(true);
   });
 
+  it("skips separate Loan and People movements while still flagging ordinary transactions of the same amount", () => {
+    const amount = 2000;
+    const transactions = [
+      txn({ id: "borrowed", amount, isPersonLedgerMovement: true }),
+      txn({ id: "repaid", amount, isPersonLedgerMovement: true }),
+      txn({ id: "borrowed-again", amount, isPersonLedgerMovement: true }),
+      txn({ id: "loan-origination", amount, loanId: "loan-1" }),
+      txn({ id: "loan-repayment", amount, loanId: "loan-1" }),
+      txn({ id: "emi-repayment", amount, emiId: "emi-1" }),
+      txn({ id: "linked-payment", amount, earlierPaymentLink: { ownerType: "loan", ownerId: "loan-2", scheduleId: "s1", installmentId: "i1", paymentId: "p1" } }),
+      txn({ id: "ordinary-1", amount }),
+      txn({ id: "ordinary-2", amount }),
+    ];
+    expect(findSameAmountDateDuplicateIds(transactions)).toEqual(new Set(["ordinary-1", "ordinary-2"]));
+  });
+
   it("groups three or more matching transactions together, not just pairs", () => {
     const a = txn({ id: "a" });
     const b = txn({ id: "b" });

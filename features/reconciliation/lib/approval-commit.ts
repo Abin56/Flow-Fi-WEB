@@ -106,6 +106,8 @@ export function classifyDuplicateWarnings(staged: StagedRecord[], data: Reconcil
       }
       const existing = byId.get(match.transactionId);
       if (!existing || existing.deletedAt != null) continue;
+      const sameDirection = (existing.type === "income") === (row?.direction === "credit");
+      if (existing.accountId !== accountId || !sameDirection) continue;
       if (differentReferences(rrn, existing.description, existing.notes)) continue;
       const sibling = ownImportOf.get(existing.id);
       if (sibling && sibling !== warning.recordId) {
@@ -116,8 +118,6 @@ export function classifyDuplicateWarnings(staged: StagedRecord[], data: Reconcil
         }
         continue;
       }
-      const sameDirection = (existing.type === "income") === (row?.direction === "credit");
-      if (existing.accountId !== accountId || !sameDirection) continue;
       if (!seen.has(existing.id)) {
         unseen.push({ code: "new_duplicate", rowId: warning.recordId, rowNumber: rowNumber(warning.recordId), message: "A transaction that looks like this row has appeared since you reviewed it." });
       }

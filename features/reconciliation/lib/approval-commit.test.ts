@@ -253,6 +253,24 @@ describe("revalidateApproval — account and card identity", () => {
 });
 
 describe("revalidateApproval — repeated rows in one import", () => {
+  it("allows a repayment after the same amount borrowed earlier on the statement was already imported", async () => {
+    const rows = [
+      reconRow({ id: "borrow", day: OCT_24, description: "ANU", direction: "credit", amount: 2000 }),
+      reconRow({ id: "repay", day: OCT_24, description: "ANU", amount: 2000 }),
+    ];
+    const session = reconSession(rows, {
+      borrow: { kind: "import_new", category: "Salary", creditAs: "income" },
+      repay: { kind: "import_new", category: "Food" },
+    });
+    const sessionId = reconciliationSessionId(session.fingerprint, "acc-card");
+    const borrowed = txn({ id: `txn_${importTransferKey("borrow", sessionId)}`, description: "ANU", dateTime: at(24), type: "income", amount: 2000 });
+    const h = harness(reconData({ transactions: [borrowed] }));
+
+    const result = await runApproval({ session, reviewed: h.review(session), repeatsAcknowledged: false, deps: h.deps });
+    expect(result).toMatchObject({ status: "complete", outcomes: [{ kind: "already_imported" }, { kind: "imported" }] });
+    expect(h.fake.creates).toBe(1);
+  });
+
   const twins = () => {
     const rows = [reconRow({ id: "a", day: OCT_24, description: "COFFEE SHOP", amount: 120 }), reconRow({ id: "b", day: OCT_24, description: "COFFEE SHOP", amount: 120 })];
     const decisions = { a: { kind: "import_new" as const, category: "Food" }, b: { kind: "import_new" as const, category: "Food" } };

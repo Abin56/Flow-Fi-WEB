@@ -33,7 +33,6 @@
  * candidate gets a red-bordered row instead of a separate summary panel).
  */
 
-import type { Transaction } from "@/lib/models/transaction";
 import type { SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
 import { checkForDuplicates, type ExistingTransactionForDuplicateCheck } from "@/lib/services/duplicate-detection/duplicate-detection-service";
 
@@ -55,19 +54,10 @@ const NO_DUPLICATE: CandidateDuplicateResult = { duplicateOfTransactionId: null,
  */
 export function evaluateCandidateDuplicate(
   candidate: Pick<SmsTransactionCandidate, "merchant" | "bankName" | "amount" | "transactionDate" | "referenceNumber" | "direction" | "accountId">,
-  existingTransactions: Pick<Transaction, "id" | "description" | "amount" | "dateTime" | "accountId" | "type">[],
+  existingTransactions: ExistingTransactionForDuplicateCheck[],
 ): CandidateDuplicateResult {
   const description = candidate.merchant ?? candidate.bankName ?? "";
   const requireDescriptionMatch = description.trim().length > 0;
-
-  const existing: ExistingTransactionForDuplicateCheck[] = existingTransactions.map((t) => ({
-    id: t.id,
-    description: t.description,
-    amount: t.amount,
-    dateTime: t.dateTime,
-    accountId: t.accountId,
-    type: t.type,
-  }));
 
   const result = checkForDuplicates(
     {
@@ -80,7 +70,7 @@ export function evaluateCandidateDuplicate(
       source: "sms",
       requireDescriptionMatch,
     },
-    existing,
+    existingTransactions,
   );
 
   if (result.status === "unique" || result.bestMatch == null) return NO_DUPLICATE;

@@ -65,9 +65,10 @@ export function useSavingsContributions() {
         return () => {};
       }
       const byGoal = new Map<string, SavingsContribution[]>();
+      const ids = goalIds.split(",");
       let erroredOnce = false;
-      const publish = () => onData(Array.from(byGoal.values()).flat());
-      const unsubscribes = goalIds.split(",").map((goalId) =>
+      const publish = () => onData(Array.from(byGoal.values()).flat(), byGoal.size === ids.length);
+      const unsubscribes = ids.map((goalId) =>
         onSnapshot(
           query(createSavingsContributionsCollection(uid, goalId), where("deletedAt", "==", null)),
           (snapshot) => {

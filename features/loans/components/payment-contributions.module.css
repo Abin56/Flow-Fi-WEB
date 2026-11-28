@@ -9,9 +9,50 @@
   overflow-wrap: anywhere;
 }
 
+.peopleTable {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.peopleTable :is(thead, tbody:not(:last-child)) > tr:last-child > :is(th, td) {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.peopleTable tbody > tr + tr > :is(th, td) {
+  border-top: 1px solid var(--color-border);
+}
+
+.receiptTreatment {
+  min-width: 0;
+}
+
+.receiptTreatment > [role="radiogroup"] {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-color: color-mix(in oklab, var(--color-border-strong) 75%, transparent);
+  border-radius: 8px;
+}
+
+.receiptTreatment [role="radio"] {
+  min-height: 30px;
+  padding-inline: 0.375rem;
+  line-height: 1.2;
+}
+
+.receiptTreatment [role="radio"] + [role="radio"] {
+  border-inline-start: 1px solid var(--color-border);
+}
+
 @container contributions (width >= 36rem) {
   .table {
     table-layout: fixed;
+  }
+
+  .peopleTable tbody > tr > :is(th, td) {
+    padding-block: 0.3125rem;
   }
 
   .share {
@@ -87,5 +128,10 @@
 
   .row td :global(.justify-end) {
     justify-content: flex-start;
+  }
+
+  .peopleTable tbody > tr + tr > :is(th, td),
+  .peopleTable tbody:not(:last-child) > tr:last-child > :is(th, td) {
+    border: 0;
   }
 }

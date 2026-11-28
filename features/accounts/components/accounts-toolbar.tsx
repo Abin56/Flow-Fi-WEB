@@ -33,15 +33,15 @@ export function AccountsToolbar({
   const chips = [{ label: "All Types", count }, ...types];
 
   return (
-    <div className="flex flex-col gap-3 border-b border-border-strong/50 pb-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 className="mr-auto font-heading text-base font-semibold text-foreground">
+    <div className="@container flex flex-col gap-1.5 border-b border-border-strong/50 pb-1.5">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 @[26rem]:grid-cols-[minmax(0,1fr)_minmax(0,13rem)_auto]">
+        <h2 className="col-span-2 font-heading text-sm font-semibold text-foreground @[26rem]:col-span-1">
           My accounts{" "}
-          <span className="ml-0.5 rounded-full bg-secondary px-2 py-0.5 text-xs font-semibold text-foreground/70 tabular-nums">{count}</span>
+          <span className="ml-0.5 rounded-full bg-secondary px-1.5 text-[11px] font-semibold text-muted-foreground tabular-nums">{count}</span>
         </h2>
 
-        <label className="flex h-9 w-full items-center gap-2 rounded-full border border-border-strong bg-card px-3.5 text-sm transition-colors focus-within:border-primary-accent-text focus-within:ring-2 focus-within:ring-ring sm:w-64 dark:bg-input">
-          <Search className="size-4 shrink-0 text-foreground/55" strokeWidth={1.75} />
+        <label className="flex h-8 min-w-0 items-center gap-1.5 rounded-md border border-border-strong bg-card px-2.5 text-sm transition-colors focus-within:border-primary-accent-text focus-within:ring-2 focus-within:ring-ring dark:bg-input">
+          <Search className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.75} aria-hidden />
           <input
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
@@ -56,7 +56,7 @@ export function AccountsToolbar({
           )}
         </label>
 
-        <div role="radiogroup" aria-label="View" className="flex items-center rounded-full border border-border-strong bg-card p-0.5">
+        <div role="radiogroup" aria-label="View" className="flex items-center rounded-md border border-border-strong bg-card p-px">
           {(
             [
               { value: "grid", icon: LayoutGrid, label: "Grid view" },
@@ -71,11 +71,11 @@ export function AccountsToolbar({
               aria-label={v.label}
               onClick={() => onViewChange(v.value)}
               className={cn(
-                "flex size-8 items-center justify-center rounded-full transition-colors",
+                "flex size-7 items-center justify-center rounded-sm transition-colors",
                 view === v.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
               )}
             >
-              <v.icon className="size-4" strokeWidth={1.9} />
+              <v.icon className="size-3.5" strokeWidth={1.9} aria-hidden />
             </button>
           ))}
         </div>
@@ -93,7 +93,7 @@ export function AccountsToolbar({
               aria-checked={selected}
               onClick={() => onTypeChange(chip.label)}
               className={cn(
-                "relative flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                "relative flex h-7 shrink-0 items-center gap-1 rounded-full border px-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                 selected ? "border-transparent font-semibold text-primary-foreground" : "border-border-strong/70 bg-card font-medium text-foreground/75 hover:border-border-strong hover:text-foreground",
               )}
             >

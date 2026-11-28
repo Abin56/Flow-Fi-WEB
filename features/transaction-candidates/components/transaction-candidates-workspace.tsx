@@ -53,7 +53,7 @@ import { smsCandidateEventTypeLabel, type SmsTransactionCandidate } from "@/lib/
 import { useAuthStore } from "@/store/auth-store";
 import { toast } from "@/store/toast-store";
 import { DuplicateWarningDialog } from "@/lib/services/duplicate-detection/duplicate-warning-dialog";
-import type { DuplicateDetectionResult, ExistingTransactionForDuplicateCheck } from "@/lib/services/duplicate-detection/duplicate-detection-service";
+import type { DuplicateDetectionResult } from "@/lib/services/duplicate-detection/duplicate-detection-service";
 import {
   candidateDestinationGroupKey,
   candidateDestinationState,
@@ -108,12 +108,15 @@ import { candidateTitle, FOCUS_RING, type CandidateRowModel } from "./candidate-
 import { CandidateToolbar } from "./candidate-toolbar";
 import { CandidateViews } from "./candidate-views";
 import { CandidatesLoadError } from "./candidates-load-error";
+import { DismissedCandidates } from "./dismissed-candidates";
 import { PartialImportNotices } from "./partial-import-notice";
+
+const EMPTY_CANDIDATES: SmsTransactionCandidate[] = [];
 
 export function TransactionCandidatesWorkspace() {
   const uid = useAuthStore((s) => s.user?.uid);
   const {
-    data: liveCandidates = [],
+    data: liveCandidates = EMPTY_CANDIDATES,
     hasSnapshot,
     unreadableCount,
     isError: listenerFailed,
@@ -221,6 +224,19 @@ export function TransactionCandidatesWorkspace() {
   // Ids whose Dismiss is currently in its undo window (see `delayed-dismiss.ts`) — hidden from every view of the list
   // immediately, before the real Firestore delete actually runs.
   const [pendingDismissIds, setPendingDismissIds] = useState<Set<string>>(new Set());
+  const [previousLiveCandidates, setPreviousLiveCandidates] = useState(liveCandidates);
+  if (liveCandidates !== previousLiveCandidates) {
+    setPreviousLiveCandidates(liveCandidates);
+    if (pendingDismissIds.size > 0) {
+      const previousIds = new Set(previousLiveCandidates.map(({ id }) => id));
+      const restoredIds = liveCandidates.filter(({ id }) => pendingDismissIds.has(id) && !previousIds.has(id));
+      if (restoredIds.length > 0) {
+        const remaining = new Set(pendingDismissIds);
+        restoredIds.forEach(({ id }) => remaining.delete(id));
+        setPendingDismissIds(remaining);
+      }
+    }
+  }
   const hideCandidate = (candidateId: string) => setPendingDismissIds((prev) => new Set(prev).add(candidateId));
   const unhideCandidate = (candidateId: string) =>
     setPendingDismissIds((prev) => {
@@ -247,14 +263,6 @@ export function TransactionCandidatesWorkspace() {
     return map;
   }, [candidates, transactions]);
   const transactionById = useMemo(() => new Map(transactions.map((t) => [t.id, t])), [transactions]);
-  // Source-agnostic — manual entry, PDF import, and prior SMS imports are all just `Transaction` records here. Passed straight
-  // through to `importCandidate`'s own fresh, immediately-before-write duplicate check rather than only feeding the display-only
-  // `duplicates` map above.
-  const existingTransactionsForDuplicateCheck: ExistingTransactionForDuplicateCheck[] = useMemo(
-    () => transactions.map((t) => ({ id: t.id, description: t.description, amount: t.amount, dateTime: t.dateTime, accountId: t.accountId, type: t.type })),
-    [transactions],
-  );
-
   // The watch hooks resolve `[]` before their first snapshot, so an empty accounts/cards list can't be told from "not loaded
   // yet". Until real accounts (and, for card candidates, cards) are present, don't judge whether Android's ids still resolve.
   // While not ready NOTHING is bulk-eligible, so a not-yet-verified match can never slip into a batch.
@@ -481,7 +489,7 @@ export function TransactionCandidatesWorkspace() {
   }
 
   /**
-   * Runs `bulkImportCandidates` for exactly `candidatesToImport`, against the live `existingTransactionsForDuplicateCheck`.
+   * Runs `bulkImportCandidates` for exactly `candidatesToImport`, against the live transactions.
    * CONFIRMATION-STAGE GATE: every row must still have a reliable account/card identity; if any doesn't, nothing at all is
    * written (the whole call is refused), so a row that lost its match between selecting and confirming can never be imported
    * into a destination the reviewer chose for other rows. `force` is only `true` from `DuplicateWarningDialog`'s "Import
@@ -503,7 +511,7 @@ export function TransactionCandidatesWorkspace() {
         repositories.transactionRepository,
         repositories.candidateRepository,
         repositories.expenseRepository,
-        existingTransactionsForDuplicateCheck,
+        transactions,
         force,
         { accountId: selection.accountId, matchedCard: selection.matchedCard },
         selection.personAssignment,
@@ -602,7 +610,7 @@ export function TransactionCandidatesWorkspace() {
   function handleBulkDismissSelected() {
     if (!repositories || selectedCandidates.length === 0) return;
     const undo = dismissWithUndo(selectedCandidates);
-    toast.success("Dismissed", `${selectedCandidates.length} candidate${selectedCandidates.length === 1 ? "" : "s"} won't show in the review queue.`, undoToastAction(undo), UNDO_TOAST_OPTIONS);
+    toast.success("Dismissed", `${selectedCandidates.length} candidate${selectedCandidates.length === 1 ? "" : "s"} will be available in Dismissed for 30 days.`, undoToastAction(undo), UNDO_TOAST_OPTIONS);
     setSelectedIds(new Set());
     setBulkDismissConfirmOpen(false);
   }
@@ -700,6 +708,7 @@ export function TransactionCandidatesWorkspace() {
   if (!selectionIsUniform) bulkNotes.push("These rows span different accounts or directions — clear the selection and pick one group.");
 
   const filterChips: FilterChip[] = buildFilterChips(filters, (key) => destinationOptions.find((o) => o.key === key)?.label ?? key);
+  const dismissedButton = repositories && <DismissedCandidates key={uid} repository={repositories.candidateRepository} onRestore={unhideCandidate} />;
 
   // SMS candidates are shown only while a phone is paired (the server-written `backgroundUpload` switch is on).
   // Unpaired — never paired, or unpaired by Auto Sync OFF / Disconnect — the inbox shows only the pairing panel.
@@ -709,7 +718,10 @@ export function TransactionCandidatesWorkspace() {
     return (
       <div className="flex min-w-0 flex-col gap-3 p-4 sm:gap-4 sm:p-6" data-testid="sms-inbox-unpaired">
         <div className="min-w-0">
-          <h1 className="font-heading text-2xl font-semibold tracking-tight text-foreground">Transaction Inbox</h1>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <h1 className="font-heading text-2xl font-semibold tracking-tight text-foreground">Transaction Inbox</h1>
+            {syncConfig === "not-configured" && dismissedButton}
+          </div>
           <p className="mt-0.5 max-w-2xl text-sm text-muted-foreground">Pair your Android phone to see detected bank SMS here.</p>
         </div>
         {syncConfig === "loading" ? <CandidateLedgerSkeleton /> : <SmsInboxEmptyState />}
@@ -749,7 +761,10 @@ export function TransactionCandidatesWorkspace() {
       )}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="font-heading text-2xl font-semibold tracking-tight text-foreground">Transaction Inbox</h1>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <h1 className="font-heading text-2xl font-semibold tracking-tight text-foreground">Transaction Inbox</h1>
+            {dismissedButton}
+          </div>
           <p className="mt-0.5 max-w-2xl text-sm text-muted-foreground">Detected transactions wait here for your review — nothing is added until you confirm it.</p>
         </div>
         <button
@@ -937,7 +952,7 @@ export function TransactionCandidatesWorkspace() {
           duplicate={detailDuplicate}
           matchedTransaction={detailMatchedTransaction}
           similarMatch={detailBestMatch && detailSimilarTransaction ? { transaction: detailSimilarTransaction, kind: detailBestMatch.kind } : null}
-          existingTransactions={existingTransactionsForDuplicateCheck}
+          existingTransactions={transactions}
           descriptionHistory={descriptionHistory}
           categoryHistory={categoryHistory}
           accounts={accounts}
@@ -972,7 +987,7 @@ export function TransactionCandidatesWorkspace() {
         open={bulkDismissConfirmOpen}
         onOpenChange={setBulkDismissConfirmOpen}
         title={`Dismiss ${selectedCandidates.length} candidate${selectedCandidates.length === 1 ? "" : "s"}?`}
-        description="This removes them from the review queue without creating a transaction. You'll get a few seconds to undo from the confirmation toast."
+        description="These suggestions will move to Dismissed, where you can restore them for 30 days."
         variant="destructive"
         confirmLabel="Dismiss"
         onConfirm={handleBulkDismissSelected}

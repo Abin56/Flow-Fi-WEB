@@ -3,8 +3,7 @@
 import { useMemo, useState } from "react";
 import { FormDialog } from "@/components/finance";
 import { DateInput } from "@/components/forms/date-input";
-import { AccountLabel, AccountOptions } from "@/components/finance/account-label";
-import { Select, SelectContent, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { AccountSelect } from "@/components/finance/account-label";
 import { useAccounts } from "@/hooks/use-accounts";
 import { previewFunds } from "@/lib/engines/payment-funding";
 import { formatCurrency } from "@/lib/format";
@@ -183,14 +182,7 @@ function BillPaymentForm({
           <>
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">Paid from</span>
-              <Select value={accountId || undefined} onValueChange={setAccountId}>
-                <SelectTrigger className="h-10 w-full rounded-xl">
-                  <SelectValue placeholder="Choose an account" />
-                </SelectTrigger>
-                <SelectContent>
-                  <AccountOptions accounts={accounts} label={(a) => <AccountLabel account={a} suffix={formatCurrency(a.currentBalance)} />} />
-                </SelectContent>
-              </Select>
+              <AccountSelect accounts={accounts} value={accountId} onChange={setAccountId} className="h-10 rounded-xl" placeholder="Choose an account" showBalance />
             </label>
             {view && (
               <div className="flex flex-col gap-2">

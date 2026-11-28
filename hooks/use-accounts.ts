@@ -29,11 +29,12 @@ export function useAccounts() {
     enabled: !!uid,
     hookName: "useAccounts",
     emptyValue: [],
-    deps: [uid, queryClient],
+    // Replace any listener already open without metadata events during Fast Refresh.
+    deps: [uid, queryClient, "account-snapshot-metadata"],
     subscribe: (onData, onError) => {
       if (!uid) return () => {};
       const repository = createAccountRepository(uid);
-      return repository.watchAll(onData, onError);
+      return repository.watchAll(onData, onError, { includeMetadataChanges: true });
     },
   });
 }

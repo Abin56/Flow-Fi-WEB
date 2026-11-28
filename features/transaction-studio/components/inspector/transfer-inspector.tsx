@@ -1,8 +1,7 @@
 "use client";
 
-import { AccountLabel, AccountOptions } from "@/components/finance/account-label";
+import { AccountSelect } from "@/components/finance/account-label";
 import { ArrowRight } from "lucide-react";
-import { Select, SelectContent, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { formatCurrencyPrecise } from "@/lib/format";
 import type { Account } from "@/lib/models/account";
@@ -52,14 +51,7 @@ export function TransferInspector({
 
         <div>
           <Label className="mb-1.5 block text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">Destination account</Label>
-          <Select value={detail?.destinationAccountId ?? undefined} onValueChange={onCommit}>
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Choose the account this went to" />
-            </SelectTrigger>
-            <SelectContent>
-              <AccountOptions accounts={accounts} label={(account) => <AccountLabel account={account} />} />
-            </SelectContent>
-          </Select>
+          <AccountSelect accounts={accounts} value={detail?.destinationAccountId ?? ""} onChange={onCommit} placeholder="Choose the account this went to" ariaLabel="Destination account" />
         </div>
       </div>
     </InspectorShell>

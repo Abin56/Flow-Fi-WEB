@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ClayButton } from "@/components/clay/clay-button";
 import { FLAT_INPUT } from "@/components/finance";
-import { groupAccountsByKind } from "@/components/finance/account-label";
+import { AccountSelect, creditCardOption, groupAccountsByKind } from "@/components/finance/account-label";
 import { PersonPickerField } from "@/features/loans/components/loans-workspace";
 import { useLoanActions } from "@/features/loans/hooks/use-loans-data";
 import { WhoIsThisForField } from "@/features/loans/components/who-is-this-for-field";
@@ -131,10 +131,14 @@ export function UnifiedAgreementCreateDialog({ open, onOpenChange }: { open: boo
               <>
                 <label className="grid gap-1 text-sm">
                   FlowFi credit card
-                  <select className={FLAT_INPUT} value={form.cardId} onChange={(e) => set({ cardId: e.target.value, purchaseId: "" })}>
-                    <option value="">Choose card</option>
-                    {cards.map((c) => <option key={c.id} value={c.id}>{c.issuer ?? "Credit card"} · {c.lastFourDigits ?? "••••"}</option>)}
-                  </select>
+                  <AccountSelect
+                    className={FLAT_INPUT}
+                    accounts={cards.map((card) => creditCardOption(card, accounts.find((account) => account.id === card.accountId), card.issuer ?? "Credit card"))}
+                    value={form.cardId}
+                    onChange={(cardId) => set({ cardId, purchaseId: "" })}
+                    placeholder="Choose card"
+                    clearable
+                  />
                 </label>
                 <label className="grid gap-1 text-sm">
                   Original card purchase (optional)

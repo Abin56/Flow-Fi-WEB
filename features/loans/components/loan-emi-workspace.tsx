@@ -62,6 +62,7 @@ const CREATE_HANDOFF: Record<string, AddKind> = { borrowed: "borrowed", lent: "l
 /** Primary CTA in the Loan & EMI style — lime with a dark olive edge so it holds its shape on pale displays. */
 const PRIMARY_CTA = "rounded-[6px] border-primary-accent-text font-semibold";
 const SECONDARY_BTN = "rounded-[6px] border-border-strong font-medium text-foreground hover:bg-secondary";
+const OBLIGATION_GRID = "grid grid-cols-1 items-start gap-2.5 @[38rem]:grid-cols-2 @[60rem]:grid-cols-3 @[80rem]:grid-cols-4";
 
 const amountDigits = (...values: (number | null | undefined)[]) => values.filter((v): v is number => v != null && Number.isFinite(v)).map((v) => String(Math.round(v)));
 
@@ -277,10 +278,12 @@ export function LoanEmiWorkspace() {
       {isLoading ? (
         <>
           <Skeleton className={cn(LE_RADIUS.panel, "h-16")} />
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {Array.from({ length: 3 }, (_, i) => (
-              <Skeleton key={i} className={cn(LE_RADIUS.card, "h-40")} />
-            ))}
+          <div className="@container">
+            <div className={OBLIGATION_GRID}>
+              {Array.from({ length: 3 }, (_, i) => (
+                <Skeleton key={i} className={cn(LE_RADIUS.card, "h-36")} />
+              ))}
+            </div>
           </div>
         </>
       ) : !hasAny ? (
@@ -429,7 +432,7 @@ export function LoanEmiWorkspace() {
                 />
               </div>
             ) : (
-              <Stagger className="grid grid-cols-1 items-start gap-3 @[38rem]:grid-cols-2 @[62rem]:grid-cols-3 @[96rem]:grid-cols-4">
+              <Stagger className={OBLIGATION_GRID}>
                 {visible.map((entry) => {
                   if (entry.source === "loan") {
                     const row = loanById.get(entry.id)!;

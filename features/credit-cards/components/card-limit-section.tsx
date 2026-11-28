@@ -4,14 +4,14 @@ import { useState, type Dispatch, type SetStateAction } from "react";
 import { motion } from "framer-motion";
 import { AlertTriangle, Check, CreditCard as CreditCardIcon, Link2, Plus, Wallet } from "lucide-react";
 import { BankCombobox, BankLogo } from "@/components/finance";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { AccountSelect, creditCardOption } from "@/components/finance/account-label";
 import { bankById } from "@/lib/data/bank-registry";
 import type { CardNetwork, SharedCreditLimit } from "@/lib/models/credit-card";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Field, FieldGroup, FormSection, LE_RADIUS, LOAN_EMI_INPUT, choiceClass } from "@/features/loans/components/loan-emi-ui";
 import { defaultSharedLimitName } from "@/features/credit-cards/lib/shared-limit-save";
-import { CARD_ACCENTS, type CardAccent, type CreditCardViewItem } from "@/features/credit-cards/hooks/use-credit-cards-data";
+import { CARD_ACCENTS, colorValueForCardAccent, type CardAccent, type CreditCardViewItem } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { CARD_GRADIENT } from "@/features/credit-cards/components/credit-card-tile";
 import type { CardFormState } from "@/features/credit-cards/components/credit-cards-workspace";
 
@@ -268,26 +268,26 @@ export function CardLimitSection({
               {partner === "existing" && otherCards.length > 0 && (
                 <div className="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-2">
                   <Field label="Other card *" className="gap-1">
-                    <Select value={form.linkCardId ?? (onCurrentGroup && currentGroupOthers[0] ? currentGroupOthers[0].id : undefined)} onValueChange={pickCard}>
-                      <SelectTrigger className={cn(COMBOBOX, "w-full")}>
-                        <SelectValue placeholder="Choose the other card" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {otherCards.map((c) => {
-                          const g = groupOf(c.card.sharedLimitId);
-                          return (
-                            <SelectItem key={c.id} value={c.id}>
-                              <span className="inline-flex items-center gap-2">
-                                <BankLogo bankId={bankIdOf(c)} size={16} />
-                                {cardLabel(c)}
-                              </span>
-                              {c.network !== "—" ? ` · ${c.network.toUpperCase()}` : ""}
-                              {g ? ` · shares ${formatCurrency(g.creditLimit)}` : ""}
-                            </SelectItem>
-                          );
-                        })}
-                      </SelectContent>
-                    </Select>
+                    <AccountSelect
+                      accounts={otherCards.map((c) => ({
+                        ...creditCardOption(c.card, {
+                          name: c.name,
+                          bankId: bankIdOf(c),
+                          colorValue: c.customColor ?? colorValueForCardAccent(c.accent),
+                          accountNumberLast4: c.last4,
+                        }),
+                        network: c.network,
+                        sharedLimit: groupOf(c.card.sharedLimitId),
+                      }))}
+                      value={form.linkCardId ?? (onCurrentGroup ? currentGroupOthers[0]?.id ?? "" : "")}
+                      onChange={pickCard}
+                      className={COMBOBOX}
+                      placeholder="Choose the other card"
+                      detail={({ network, sharedLimit }) => [
+                        network !== "—" ? network.toUpperCase() : null,
+                        sharedLimit ? `shares ${formatCurrency(sharedLimit.creditLimit)}` : null,
+                      ].filter(Boolean).join(" · ") || undefined}
+                    />
                   </Field>
                   {(targetGroup || linkedCard) && amountField}
                   {targetGroup && linkedCard && linkedCard.card.sharedLimitId === targetGroup.id && membersOf(targetGroup.id).length > 1 && (

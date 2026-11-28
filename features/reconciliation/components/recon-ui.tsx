@@ -7,6 +7,7 @@
 
 import { CheckCircle2, CircleHelp, Copy, EyeOff, Inbox, Link2, Plus, Search, Split, TriangleAlert, Layers } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import type { AccountLabelSource } from "@/components/finance/account-label";
 import { cn } from "@/lib/utils";
 import { formatCurrencyPrecise } from "@/lib/format";
 import type { Account } from "@/lib/models/account";
@@ -226,10 +227,9 @@ export function formatExistingDate(date: Date): string {
   return date.toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" });
 }
 
-/** The parts of an account's identity the account picker shows — name, kind and masked last four only. */
-export interface AccountIdentity {
+/** Display data for choosing the account a statement belongs to. */
+export interface AccountIdentity extends AccountLabelSource {
   id: string;
-  name: string;
   /** "Credit card", "Bank account", "Wallet", "Cash"… */
   kind: string;
   isCard: boolean;
@@ -241,7 +241,18 @@ const ACCOUNT_KIND: Record<Account["type"], string> = { card: "Credit card", ban
 export function accountIdentity(account: Account, creditCards: CreditCardProfile[]): AccountIdentity {
   const card = creditCards.find((c) => c.accountId === account.id && c.deletedAt == null);
   const last4 = card?.lastFourDigits?.trim() || account.accountNumberLast4?.trim() || null;
-  return { id: account.id, name: account.name, kind: ACCOUNT_KIND[account.type] ?? "Account", isCard: account.type === "card", last4 };
+  const kind = account.type === "card" && account.cardSubtype === "debit" ? "Debit card" : ACCOUNT_KIND[account.type] ?? "Account";
+  return {
+    id: account.id,
+    name: account.name,
+    bankId: account.bankId ?? card?.issuer,
+    type: account.type,
+    cardSubtype: account.cardSubtype ?? (card ? "credit" : null),
+    colorValue: account.colorValue,
+    kind,
+    isCard: account.type === "card",
+    last4,
+  };
 }
 
 /** "HDFC Millennia •••• 4821" — masked last-4 only. */

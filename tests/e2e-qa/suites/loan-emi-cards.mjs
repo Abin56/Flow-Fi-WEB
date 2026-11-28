@@ -7,7 +7,7 @@ import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
 
 const VPS = {
-  desktop: { vp: { width: 1920, height: 1080 }, cols: 3 },
+  desktop: { vp: { width: 1920, height: 1080 }, cols: 4 },
   tablet: { vp: { width: 1024, height: 768 }, cols: 2 },
   mobile: { vp: { width: 390, height: 844 }, cols: 1 },
 };
@@ -58,7 +58,7 @@ for (const [name, { vp, cols }] of Object.entries(VPS)) {
       chk("focused card shows a focus indicator", await focus.evaluate((el) => getComputedStyle(el).boxShadow !== "none" || getComputedStyle(el).outlineStyle !== "none"));
       await h.shot(page, `${id}-list`);
       await page.keyboard.press("Enter");
-      await page.getByRole("dialog").first().waitFor({ timeout: 15000 });
+      await page.getByTestId("loan-emi-workspace").waitFor({ timeout: 15000 });
       chk("Enter on a card opens its details", true);
       await h.shot(page, `${id}-opened`);
     },

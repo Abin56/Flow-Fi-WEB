@@ -19,7 +19,7 @@ type PanelId = "how" | "troubleshoot";
 const HOW_IT_WORKS = [
   "FlowFi for Android reads eligible bank SMS alerts on your phone and stores them there first.",
   "Alerts received after you signed in are uploaded here as transaction candidates, once Cloud Sync is on.",
-  "Nothing becomes a transaction until you review and import it. Imported or dismissed alerts are not shown again.",
+  "Nothing becomes a transaction until you review and import it. Dismissed alerts can be restored for 30 days.",
 ];
 
 const TROUBLESHOOT = [

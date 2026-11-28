@@ -173,6 +173,30 @@ describe("Edit / Revert a recorded People payment", () => {
 
   // ---------------------------------------------------------------- Edit
 
+  it("assigns a general receipt to installments in parts while preserving its transaction and account balance", async () => {
+    const general = (amount: number): PaymentLineInput => ({ key: "general", amount, route: { kind: "general" } });
+    installments.push(emiInst("i2", 2, d(10, 30), 1200));
+    const second: PaymentLineInput = { key: "emi-inst:i2", amount: 1000, route: { kind: "derived", obligationRef: "emi-inst:i2", sourceKind: "emiInstallment" } };
+    const originalId = await payments.recordPayment(person(), input([general(3000)]));
+    const [receipt] = liveTx();
+    const originalBalance = person().currentBalance;
+    const options = { keepReceiptTransactionId: receipt.id };
+
+    const partialId = await payments.editPayment(person(), originalId, input([EMI(2000), general(1000)]), options);
+    expect(row("emi-inst:i1").remaining).toBe(0);
+    expect(ledger().find((e) => e.paymentId === partialId && e.obligationRef == null)?.amount).toBe(1000);
+    await expect(payments.editPayment(person(), partialId, input([EMI(1500), second, general(500)]), options)).rejects.toThrow(/Choose one installment/);
+    const finalId = await payments.editPayment(person(), partialId, input([EMI(2000), second]), options);
+
+    expect(row("emi-inst:i2", OCT).remaining).toBe(200);
+    expect(liveTx()).toEqual([receipt]);
+    expect(person().currentBalance).toBe(originalBalance);
+    expect(balanceOf("sbi")).toBe(13000);
+    await payments.revertPayment(person(), finalId);
+    expect(balanceOf("sbi")).toBe(10000);
+    expect(liveTx()).toHaveLength(0);
+  });
+
   it("edit amount ₹5,000 → ₹4,500 (advance ₹2,000 → ₹1,500): SBI +₹4,500 once, no orphan", async () => {
     const id = await payments.recordPayment(person(), input([KSEB(1000), EMI(2000)], ADV(2000)));
     expect(balanceOf("sbi")).toBe(15_000);

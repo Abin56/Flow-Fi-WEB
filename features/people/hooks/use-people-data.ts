@@ -635,9 +635,9 @@ export function usePeopleActions() {
         // Money I pay out must be covered by the chosen account — re-checked inside the write.
         return createPersonPaymentRepository(uid, person.id, category.id).recordPayment(person, { ...input, enforceFunds: input.direction === "iPaid" });
       },
-      editPersonPayment: async (person: Person, paymentId: string, input: RecordPaymentInput) => {
+      editPersonPayment: async (person: Person, paymentId: string, input: RecordPaymentInput, options?: { keepReceiptTransactionId: string }) => {
         const category = await createCategoryRepository(uid).getOrCreatePersonalLoanCategory();
-        return createPersonPaymentRepository(uid, person.id, category.id).editPayment(person, paymentId, { ...input, enforceFunds: input.direction === "iPaid" });
+        return createPersonPaymentRepository(uid, person.id, category.id).editPayment(person, paymentId, { ...input, enforceFunds: input.direction === "iPaid" }, options);
       },
       /** Date-only edit of one recorded payment — in place, no revert / re-record, no money moves. */
       editPersonPaymentDate: async (person: Person, paymentId: string, params: { date: Date; expectedDate: Date }) => {

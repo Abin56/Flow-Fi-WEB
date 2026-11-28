@@ -181,7 +181,7 @@ export function useAllEmiPaymentBreakdowns() {
       const breakdownsByEmi = new Map<string, EmiPaymentBreakdown[]>();
       let erroredOnce = false;
 
-      const publish = () => onData(Array.from(breakdownsByEmi.values()).flat());
+      const publish = () => onData(Array.from(breakdownsByEmi.values()).flat(), breakdownsByEmi.size === ids.length);
 
       const unsubscribes = ids.map((emiId) => {
         const repository = createEmiPaymentBreakdownRepository(uid, emiId);

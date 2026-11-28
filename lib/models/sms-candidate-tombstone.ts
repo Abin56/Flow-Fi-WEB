@@ -12,15 +12,9 @@
  * gives Android no way to tell "never synced" apart from "already handled,"
  * and would resurrect a handled candidate on the next device sync.
  *
- * PROPOSAL STATUS (2026-10-23): schema + rules only so far (Phase A). Nothing
- * writes or reads this collection yet — `markHandled` on the candidate
- * repository, and the Android-side tombstone check, land in later phases.
- *
- * Immutable once written — `firestore.rules` denies `update` outright, so a
- * dismissed candidate's tombstone can never later be rewritten as imported
- * or vice versa. The web app only ever creates or reads these; nothing
- * deletes a tombstone in the current design (see "Retention" in the
- * architecture doc, §1 — kept indefinitely for now, revisit later).
+ * Firestore rules deny updates. An explicit restore can remove a dismissal
+ * marker alongside its recovery copy when it recreates the original candidate.
+ * Clearing or expiring the recovery copy keeps the dismissal marker indefinitely.
  */
 
 import type { DocumentData, QueryDocumentSnapshot, SnapshotOptions } from "firebase/firestore";

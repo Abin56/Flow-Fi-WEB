@@ -45,6 +45,16 @@ describe("evaluateCandidateDuplicate", () => {
     expect(result.confidence).toBe(0.98);
   });
 
+  it("distinguishes a recorded borrowing from its repayment while keeping reference-backed matches", () => {
+    const borrowed = existing({ type: "income", amount: 2000, description: "Anu", isPersonLedgerMovement: true });
+    const sms = candidate({ amount: 2000, merchant: "Anu" });
+    expect(evaluateCandidateDuplicate(sms, [borrowed]).duplicateOfTransactionId).toBeNull();
+
+    const recordedRepayment = existing({ id: "repayment", amount: 2000, description: "Loan payment", loanId: "loan-1", notes: "Ref 628323405861" });
+    const result = evaluateCandidateDuplicate({ ...sms, referenceNumber: "628323405861" }, [borrowed, recordedRepayment]);
+    expect(result).toMatchObject({ duplicateOfTransactionId: "repayment", confidence: 0.98 });
+  });
+
   it("matches exact date with an unconfirmed reference number at 0.75 confidence", () => {
     const result = evaluateCandidateDuplicate(candidate({ referenceNumber: "NOMATCH" }), [existing()]);
     expect(result.duplicateOfTransactionId).toBe("txn-1");

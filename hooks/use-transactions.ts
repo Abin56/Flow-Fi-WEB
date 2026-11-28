@@ -10,6 +10,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { dashboardCashFlowWeeks } from "@/features/dashboard/lib/weekly-cash-flow";
 import { useCreditCards } from "@/hooks/use-credit-cards";
 import { countsAsEmiCashOut, useEmiInstallmentPayments, type EmiPaidRow } from "@/hooks/use-emi-installment-payments";
 import { useEmis } from "@/hooks/use-credit-cards";
@@ -102,13 +103,13 @@ function paidThisMonth(payments: readonly EmiPaidRow[], now: Date): number {
  * comment in `lib/engines/cash-flow.ts` for why it's split-expense
  * settlement collections, not a `receiptPurpose` transaction sum.
  */
-export function useCashFlowThisMonth(): CashFlowSummary {
+export function useCashFlowThisMonth(): CashFlowSummary & { isLoading: boolean; weeks: ReturnType<typeof dashboardCashFlowWeeks> } {
   const { data: transactions } = useTransactions();
-  const { payments: emiPayments } = useEmiInstallmentPayments();
+  const { payments: emiPayments, isLoading: emiPaymentsLoading, isPlaceholderData: emiPaymentsPlaceholder } = useEmiInstallmentPayments();
   const { data: emis } = useEmis();
   // Payment-level (not installment-level) so each Loan money movement counts once: payments with a
   // linked Transaction are already in `transactions`; only legacy unlinked ones come from here.
-  const { payments: loanScheduledPayments } = useLoanScheduledPayments();
+  const { payments: loanScheduledPayments, isLoading: loanPaymentsLoading, isPlaceholderData: loanPaymentsPlaceholder } = useLoanScheduledPayments();
   const { data: expenses } = useExpenses();
   const { installmentsByScheduleId } = useExpenseInstallmentsBySchedule();
 
@@ -127,7 +128,7 @@ export function useCashFlowThisMonth(): CashFlowSummary {
       new Map(
         (transactions ?? []).map((t) => [
           t.id,
-          { effectiveMonth: effectiveMonth(t), isDeleted: t.deletedAt != null, excludeFromCalculations: t.excludeFromCalculations },
+          { dateTime: t.dateTime, effectiveMonth: effectiveMonth(t), isDeleted: t.deletedAt != null, excludeFromCalculations: t.excludeFromCalculations },
         ]),
       ),
     [transactions],
@@ -135,28 +136,26 @@ export function useCashFlowThisMonth(): CashFlowSummary {
 
   // Bucketed by the real payment date, matching Flutter's Cash Flow loan lines.
   const loanScheduleFlows = scheduleOnlyLoanFlows(loanScheduledPayments, monthRange, "paymentDate");
+  const cashEmiPayments = emiPayments.filter((p) => !cardLinkedEmiScheduleIds.has(p.scheduleId) && countsAsEmiCashOut(p));
+  const splitReceipts = {
+    expenses: ((expenses ?? []) as Expense[]).map((e) => ({ isSplit: isSplit(e), scheduleId: e.scheduleId, transactionId: e.transactionId })),
+    transactionsById,
+    installmentsByScheduleId,
+  };
 
-  return cashFlowThisMonth({
+  const summary = cashFlowThisMonth({
     transactions: cashFlowTransactions,
     // A card-linked EMI is cash out only when its card bill is paid (counted as a card payment) — never at
     // EMI-payment time too (WFI-P1-06). Every other EMI is cash out here, once (its bank row is dropped above).
-    emiPaidThisMonth: paidThisMonth(emiPayments.filter((p) => !cardLinkedEmiScheduleIds.has(p.scheduleId) && countsAsEmiCashOut(p)), now),
+    emiPaidThisMonth: paidThisMonth(cashEmiPayments, now),
     loanPaidThisMonth: loanScheduleFlows.moneyOut,
     loanReceivedThisMonth: loanScheduleFlows.moneyIn,
     // A bill is cash out only through the account debit its payment posts (a normal expense in `transactions`,
     // counted once above). A paid-earlier or legacy bill moved no money, so occurrences are never summed here.
     billsPaidThisMonth: 0,
-    moneyReceivedThisMonth: moneyReceivedInMonth(
-      {
-        expenses: ((expenses ?? []) as Expense[]).map((e) => ({
-          isSplit: isSplit(e),
-          scheduleId: e.scheduleId,
-          transactionId: e.transactionId,
-        })),
-        transactionsById,
-        installmentsByScheduleId,
-      },
-      now,
-    ),
+    moneyReceivedThisMonth: moneyReceivedInMonth(splitReceipts, now),
+    now,
   });
+  const weeks = dashboardCashFlowWeeks({ now, transactions: cashFlowTransactions, emiPayments: cashEmiPayments, loanPayments: loanScheduledPayments, splitReceipts });
+  return { ...summary, weeks, isLoading: emiPaymentsLoading || emiPaymentsPlaceholder || loanPaymentsLoading || loanPaymentsPlaceholder };
 }

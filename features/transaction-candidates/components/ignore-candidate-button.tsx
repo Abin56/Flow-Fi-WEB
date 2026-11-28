@@ -77,7 +77,7 @@ export function IgnoreCandidateButton({
       },
     });
 
-    toast.success("Candidate dismissed", `${dismissedCandidateLabel(candidate)} won't show in the review queue.`, undoToastAction(cancel), UNDO_TOAST_OPTIONS);
+    toast.success("Candidate dismissed", `${dismissedCandidateLabel(candidate)} will be available in Dismissed for 30 days.`, undoToastAction(cancel), UNDO_TOAST_OPTIONS);
   }
 
   return (
@@ -102,7 +102,7 @@ export function IgnoreCandidateButton({
           </button>
         </TooltipTrigger>
         <TooltipContent side="top" sideOffset={6} className="max-w-[15rem] text-center leading-snug">
-          Remove from your inbox without importing. You can undo for {Math.round(DISMISS_UNDO_WINDOW_MS / 1000)} seconds.
+          Move to Dismissed for 30 days. You can undo for {Math.round(DISMISS_UNDO_WINDOW_MS / 1000)} seconds.
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>

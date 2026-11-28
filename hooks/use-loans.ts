@@ -126,7 +126,7 @@ export function useAllLoanInstallments() {
       const installmentsBySchedule = new Map<string, Installment[]>();
       let erroredOnce = false;
 
-      const publish = () => onData(Array.from(installmentsBySchedule.values()).flat());
+      const publish = () => onData(Array.from(installmentsBySchedule.values()).flat(), ids.every((id) => installmentsBySchedule.has(id)));
 
       const unsubscribes = ids.map((scheduleId) => {
         const repository = createInstallmentRepositoryFor(uid, scheduleId);

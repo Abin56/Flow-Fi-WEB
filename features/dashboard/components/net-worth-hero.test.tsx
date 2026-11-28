@@ -8,6 +8,27 @@ const nw = { amount: 16_000, changeAmount: 0, changePercent: 0, trend: [], asset
 afterEach(cleanup);
 
 describe("Net Worth card breakdown", () => {
+  it("shows a flat seven-day trend and keeps a small negative balance visible", () => {
+    const amount = -0.25;
+    render(<NetWorthHero netWorth={{ ...nw, assets: 68_000, debt: 68_000.25, amount, trend: Array.from({ length: 7 }, () => amount) }} />);
+    expect(screen.getByText("Last 7 days")).toBeTruthy();
+    const chart = screen.getByRole("img", { name: /net worth -₹0\.25/ });
+    expect(within(chart).getByText("Shortfall")).toBeTruthy();
+    expect(within(chart).getByText("−₹0.25")).toBeTruthy();
+  });
+
+  it("holds the headline and trend until ready and shows the full amount immediately", () => {
+    const { rerender } = render(<NetWorthHero netWorth={{ ...nw, trend: [15_000, 16_000] }} isLoading />);
+    const card = screen.getByRole("region", { name: "Net worth" });
+    expect(card.getAttribute("aria-busy")).toBe("true");
+    expect(within(card).queryByText("₹16,000")).toBeNull();
+    expect(within(card).queryByText("Last 7 days")).toBeNull();
+
+    rerender(<NetWorthHero netWorth={nw} />);
+    expect(within(card).getAllByText("₹16,000")).toHaveLength(2);
+    expect(within(card).queryByText("₹0")).toBeNull();
+  });
+
   it("shows own / owe / net worth in the chart and explains the EMI receivable and assigned debt without altering any figure", () => {
     render(<NetWorthHero netWorth={nw} />);
     const chart = screen.getByRole("img", { name: /You own ₹68,000, owe ₹52,000, net worth ₹16,000/ });

@@ -1,11 +1,10 @@
 "use client";
 
-import { AccountLabel } from "@/components/finance/account-label";
+import { AccountSelect, creditCardOption } from "@/components/finance/account-label";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { FormDialog } from "@/components/finance";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAccounts } from "@/hooks/use-accounts";
 import { db } from "@/lib/firebase/client";
 import { hasSavedPassword } from "@/lib/repositories/pdf-analyzer-config-repository";
@@ -37,7 +36,6 @@ interface UploadStatementDialogProps {
 export function UploadStatementDialog({ open, onOpenChange, uid, creditCards, onUploaded }: UploadStatementDialogProps) {
   const router = useRouter();
   const { data: accounts = [] } = useAccounts();
-  const accountNameById = new Map(accounts.map((a) => [a.id, a.name]));
   const [cardId, setCardId] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -102,21 +100,13 @@ export function UploadStatementDialog({ open, onOpenChange, uid, creditCards, on
       <div className="flex flex-col gap-3 py-1 text-sm">
         <label className="flex flex-col gap-1">
           <span className="text-xs font-medium text-muted-foreground">Credit Card</span>
-          <Select value={cardId} onValueChange={setCardId}>
-            <SelectTrigger className="h-10 w-full rounded-xl">
-              <SelectValue placeholder="Select a card" />
-            </SelectTrigger>
-            <SelectContent>
-              {creditCards.map((c) => {
-                const name = accountNameById.get(c.accountId) ?? `Card ${c.id.slice(0, 8)}`;
-                return (
-                  <SelectItem key={c.id} value={c.id}>
-                    <AccountLabel account={{ name, bankId: accounts.find((a) => a.id === c.accountId)?.bankId ?? null, type: "card", cardSubtype: "credit" }} suffix={c.lastFourDigits ? `•••• ${c.lastFourDigits}` : undefined} />
-                  </SelectItem>
-                );
-              })}
-            </SelectContent>
-          </Select>
+          <AccountSelect
+            accounts={creditCards.map((card) => creditCardOption(card, accounts.find((account) => account.id === card.accountId), `Card ${card.id.slice(0, 8)}`))}
+            value={cardId}
+            onChange={setCardId}
+            placeholder="Select a card"
+            className="h-10 rounded-xl"
+          />
         </label>
         <div className="flex flex-col gap-1">
           <span className="text-xs font-medium text-muted-foreground">Statement PDF</span>

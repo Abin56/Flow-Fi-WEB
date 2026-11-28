@@ -29,7 +29,7 @@
  * banner's "Retry" button force a teardown+resubscribe.
  */
 
-import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { hashKey, useQuery, useQueryClient, type Query, type QueryClient, type QueryKey, type UseQueryResult } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { acquireSharedSubscription, keyFor, markSharedSubscriptionFailed, registerRetry } from "@/lib/services/firestore-watch-registry";
 
@@ -43,11 +43,28 @@ function depsSignature(deps: readonly unknown[]): string {
   return JSON.stringify(deps.filter((d) => d == null || typeof d === "string" || typeof d === "number" || typeof d === "boolean"));
 }
 
+// Store completion on the query itself so the marker survives Fast Refresh along with the cache and live listener.
+const completeSnapshot = Symbol.for("flowfi.complete-firestore-snapshot");
+// Keep server confirmation when a complete listener later goes offline.
+const confirmedSnapshot = Symbol.for("flowfi.confirmed-firestore-snapshot");
+type WatchedQuery = Query & { [completeSnapshot]?: string; [confirmedSnapshot]?: string };
+
+export function hasCompleteFirestoreSnapshot(client: QueryClient, queryKey: QueryKey, deps?: readonly unknown[]): boolean {
+  const query: WatchedQuery | undefined = client.getQueryCache().get(hashKey(queryKey));
+  const signature = query?.[completeSnapshot];
+  return signature !== undefined && (deps === undefined || signature === depsSignature(deps));
+}
+
+export function hasConfirmedFirestoreSnapshot(client: QueryClient, queryKey: QueryKey): boolean {
+  const query: WatchedQuery | undefined = client.getQueryCache().get(hashKey(queryKey));
+  return query?.[confirmedSnapshot] !== undefined && query[confirmedSnapshot] === query[completeSnapshot];
+}
+
 export interface UseFirestoreWatchOptions<T> {
   queryKey: readonly unknown[];
   enabled: boolean;
   /** Opens the live subscription; must return its own unsubscribe function. */
-  subscribe: (onData: (data: T) => void, onError: (error: unknown) => void) => () => void;
+  subscribe: (onData: (data: T, complete?: boolean, fromCache?: boolean) => void, onError: (error: unknown) => void) => () => void;
   /** Effect dependency array — pass whatever the `subscribe` closure actually captures (uid, queryClient, and any other identifiers it reads). */
   deps: readonly unknown[];
   /** Used only in the console.error line, so a failure in the network tab can be traced back to which hook opened the listener. */
@@ -70,6 +87,8 @@ export function useFirestoreWatch<T>(options: UseFirestoreWatchOptions<T>): UseQ
 
   useEffect(() => {
     if (!enabled) return;
+    const signature = depsSignature(deps);
+    const queryHash = hashKey(queryKey);
     // Reference-counted — see acquireSharedSubscription's doc comment. Only the first
     // concurrently-mounted consumer for this queryKey actually opens the Firestore listener;
     // every other one (another component watching the same data, or this same page being
@@ -77,7 +96,19 @@ export function useFirestoreWatch<T>(options: UseFirestoreWatchOptions<T>): UseQ
     // of tearing down and re-fetching the whole collection on every mount.
     return acquireSharedSubscription(queryKey, () =>
       subscribe(
-        (data) => queryClient.setQueryData(queryKey, data),
+        (data, complete = true, fromCache) => {
+          const query: WatchedQuery | undefined = queryClient.getQueryCache().get(queryHash);
+          if (query) {
+            if (complete) {
+              query[completeSnapshot] = signature;
+              if (fromCache === false) query[confirmedSnapshot] = signature;
+            } else {
+              delete query[completeSnapshot];
+              delete query[confirmedSnapshot];
+            }
+          }
+          queryClient.setQueryData(queryKey, data);
+        },
         (error) => {
           console.error(`${hookName} watchAll failed:`, error);
           markSharedSubscriptionFailed(queryKey); // so Retry (or the next page) reopens it instead of reusing a dead listener
@@ -88,7 +119,7 @@ export function useFirestoreWatch<T>(options: UseFirestoreWatchOptions<T>): UseQ
           queryClient.getQueryCache().find({ queryKey })?.setState({ status: "error", error: err, fetchStatus: "idle" });
         },
       ),
-      depsSignature(deps),
+      `snapshot-v1:${signature}`,
     );
     // `deps` is intentionally the effect's real dependency list, supplied by the caller —
     // this hook's own body has nothing else that would need to trigger a re-subscribe,

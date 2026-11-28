@@ -29,17 +29,12 @@ import {
   ArrowDownToLine,
   ArrowLeft,
   ArrowUpFromLine,
-  Banknote,
-  Briefcase,
   CalendarClock,
   Check,
   ChevronDown,
   SlidersHorizontal,
-  CreditCard as CreditCardIcon,
   EyeOff,
   Info,
-  Landmark,
-  Layers,
   Loader2,
   Lock,
   NotebookPen,
@@ -67,7 +62,7 @@ import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-prefer
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { BankLogo } from "@/components/finance/bank-logo";
+import { AccountOptions, AccountPickerMark, AccountSelectContent } from "@/components/finance/account-label";
 import { PaymentSourceSummary } from "@/components/finance/payment-source-summary";
 import { accountAllowsNegative, previewFunds } from "@/lib/engines/payment-funding";
 import { ClayButton } from "@/components/clay/clay-button";
@@ -193,17 +188,6 @@ const BORROW_FUNDING_OPTIONS: { value: BorrowFunding; label: (name: string) => s
   { value: "person", label: (name) => `${name} paid this expense for me`, description: (name) => `No money entered my account. I owe ${name} for this purchase.` },
 ];
 
-/** Matches the icon set the Add Account dialog already uses for these types — kept visually
- *  consistent so an account reads the same way everywhere it appears as a picker. */
-const ACCOUNT_TYPE_ICON: Record<AccountType, LucideIcon> = {
-  bank: Landmark,
-  cash: Banknote,
-  wallet: Wallet,
-  card: CreditCardIcon,
-  business: Briefcase,
-  other: Layers,
-};
-
 /** Add-mode footer recap of what's about to be saved — "−₹450 · Food · HDFC" (a transfer carries no
  *  +/− — it is neither income nor expense). Display only: reads the same form state the save handler
  *  reads, never feeds anything back. Hidden on phones. */
@@ -238,11 +222,10 @@ function FooterSummary({ kind, amount, category, account }: { kind: FormKind; am
   );
 }
 
-const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = {
+const ACCOUNT_TYPE_LABEL: Record<Exclude<AccountType, "card">, string> = {
   bank: "Bank account",
   cash: "Cash",
   wallet: "Wallet",
-  card: "Credit card",
   business: "Business",
   other: "Other",
 };
@@ -274,10 +257,7 @@ function EmptyPickerOption({ label, onNavigate }: { label: string; onNavigate: (
   );
 }
 
-/** Account picker — a real dropdown (not an inline chip row) whose options render as an attractive
- *  2-column grid of icon tiles. The list opens in its own floating, self-scrolling popover instead
- *  of ever growing the popup's own height, no matter how many accounts exist. */
-function AccountSelect({
+function TransactionAccountSelect({
   accounts,
   value,
   onChange,
@@ -288,82 +268,20 @@ function AccountSelect({
   onChange: (id: string) => void;
   placeholder?: string;
 }) {
-  const selected = accounts.find((a) => a.id === value);
   const router = useRouter();
-  // Grouped so cards, banks and wallets don't blur together (presentation only — same list, same values).
-  const groups = [
-    { key: "money", label: "Bank & cash", items: accounts.filter((a) => a.type === "bank" || a.type === "cash" || a.type === "business") },
-    { key: "card", label: "Credit cards", items: accounts.filter((a) => a.type === "card") },
-    { key: "other", label: "Wallets & other", items: accounts.filter((a) => a.type === "wallet" || a.type === "other") },
-  ].filter((g) => g.items.length > 0);
-  const mark = (a: Account, size: number) => {
-    if (a.bankId) return <BankLogo bankId={a.bankId} size={size} />;
-    const Icon = ACCOUNT_TYPE_ICON[a.type];
-    return (
-      <span className="flex shrink-0 items-center justify-center rounded-full bg-secondary text-foreground/70" style={{ width: size, height: size }}>
-        <Icon style={{ width: size * 0.55, height: size * 0.55 }} />
-      </span>
-    );
-  };
   return (
-    <Select value={value || undefined} onValueChange={onChange}>
+    <Select value={value} onValueChange={onChange}>
       <SelectTrigger className={TXN_TRIGGER}>
-        <SelectValue placeholder={placeholder}>
-          {selected && (
-            <span className="flex min-w-0 items-center gap-2">
-              {mark(selected, 20)}
-              <span className="truncate font-medium">{selected.name}</span>
-              {selected.accountNumberLast4 && <span className="shrink-0 font-mono text-xs text-foreground/60">•••• {selected.accountNumberLast4}</span>}
-              <span className="shrink-0 text-xs text-foreground/60">· {ACCOUNT_TYPE_LABEL[selected.type]}</span>
-            </span>
-          )}
-        </SelectValue>
+        <SelectValue placeholder={placeholder} />
       </SelectTrigger>
-      <SelectContent className="w-(--radix-select-trigger-width) rounded-[14px] border-border-strong p-0 shadow-[0_18px_40px_-16px_rgba(0,0,0,0.35)]">
-        <div className="@container flex max-h-80 flex-col gap-2 overflow-y-auto p-2">
-          {accounts.length === 0 && <EmptyPickerOption label="Add account" onNavigate={() => router.push("/accounts")} />}
-          {groups.map((group) => (
-            <div key={group.key} className="flex flex-col gap-1">
-              <p className="px-1 pt-0.5 text-[10.5px] font-bold tracking-[0.08em] text-foreground/55 uppercase">{group.label}</p>
-              {/* Columns follow the popover's own width (it matches the field), not the screen — so a narrow field never squeezes names. */}
-              <div className="grid grid-cols-1 gap-1.5 @min-[30rem]:grid-cols-2">
-                {group.items.map((a) => {
-                  const isSelected = a.id === value;
-                  return (
-                    <SelectItem
-                      key={a.id}
-                      value={a.id}
-                      className={cn(
-                        "relative flex min-h-12 items-center rounded-[12px] border py-1.5 pr-7 pl-2 text-left transition-colors [&>span:first-child]:hidden [&>span:last-child]:min-w-0 [&>span:last-child]:flex-1",
-                        isSelected
-                          ? "border-primary-accent-text bg-primary/15 shadow-[inset_3px_0_0_var(--primary-accent-text)]"
-                          : "border-border-strong/60 bg-card hover:border-border-strong hover:bg-secondary/60",
-                      )}
-                    >
-                      <span className="flex min-w-0 items-center gap-2.5">
-                        {mark(a, 28)}
-                        <span className="flex min-w-0 flex-col">
-                          <span className="truncate text-[13px] leading-tight font-semibold text-foreground">{a.name}</span>
-                          <span className="truncate text-[11px] leading-tight text-foreground/60">
-                            {a.accountNumberLast4 ? <span className="font-mono">•••• {a.accountNumberLast4}</span> : ACCOUNT_TYPE_LABEL[a.type]}
-                            {a.accountNumberLast4 ? ` · ${ACCOUNT_TYPE_LABEL[a.type]}` : ""}
-                            {a.type !== "card" ? ` · ${formatCurrency(a.currentBalance)}` : ""}
-                          </span>
-                        </span>
-                      </span>
-                      {isSelected && (
-                        <span className="absolute top-1/2 right-2 flex size-4 -translate-y-1/2 items-center justify-center rounded-full bg-primary-accent-text text-white">
-                          <Check className="size-2.5" strokeWidth={3} />
-                        </span>
-                      )}
-                    </SelectItem>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      </SelectContent>
+      <AccountSelectContent>
+        {accounts.length === 0 && <EmptyPickerOption label="Add account" onNavigate={() => router.push("/accounts")} />}
+        <AccountOptions
+          accounts={accounts}
+          detail={(a) => a.type !== "card" ? `${ACCOUNT_TYPE_LABEL[a.type]} · ${formatCurrency(a.currentBalance)}` : undefined}
+          hideDetailInTrigger
+        />
+      </AccountSelectContent>
     </Select>
   );
 }
@@ -425,9 +343,7 @@ function SuggestionChip({
 /** Radix Select items can't have an empty value, so "No category" uses this sentinel (mapped back to ""). */
 const NO_CATEGORY_VALUE = "__none__";
 
-/** Category picker — same reasoning as `AccountSelect`: an attractive 2-column grid of icon tiles
- *  that opens in a dropdown whose list scrolls inside its own floating popover, so a growing
- *  category list never affects the popup's own height. */
+/** Category tiles scroll inside the dropdown. */
 function CategorySelect({
   categories,
   value,
@@ -1445,13 +1361,23 @@ export function TransactionDetailsModal({
       setJustSaved(true);
       setTransferKey(crypto.randomUUID());
       if (!transaction) {
-        // Add mode stays open for rapid entry of the next transaction — date, account, category,
-        // description, and notes carry over since they're commonly the same across a run of
-        // entries; only the amount (and any person/split assignment) resets.
+        // Keep the form open with the same date, account and notes for rapid entry. Each new
+        // expense gets its own description, category and suggestion state.
         setTimeout(() => {
           setJustSaved(false);
           setFormError(null);
           setAmount("");
+          if (kind === "expense") {
+            setDescription("");
+            setCategoryId("");
+            categoryManualRef.current = false;
+            autoCategoryRef.current = null;
+            setDismissedCategorySuggestions([]);
+            setDismissedDescriptionSuggestions([]);
+            setDescListOpen(false);
+            setDescActive(-1);
+            setDescNavigated(false);
+          }
           setPersonId(null);
           setPersonEntryType(null);
           setBorrowFunding(null);
@@ -2242,17 +2168,16 @@ export function TransactionDetailsModal({
                     {(() => {
                       const locked = accounts.find((a) => a.id === accountId);
                       if (!locked) return "Unknown account";
-                      const Icon = ACCOUNT_TYPE_ICON[locked.type];
                       return (
                         <>
-                          {locked.bankId ? <BankLogo bankId={locked.bankId} size={16} /> : <Icon className="size-3.5" />}
+                          <AccountPickerMark account={locked} size={16} />
                           {locked.name}
                         </>
                       );
                     })()}
                   </div>
                 ) : (
-                  <AccountSelect
+                  <TransactionAccountSelect
                     accounts={filteredAccounts}
                     value={accountId}
                     onChange={(id) => {
@@ -2278,7 +2203,7 @@ export function TransactionDetailsModal({
                   from={fromRow}
                   to={
                     <FormRow label="To Account *" field="destination" error={fieldError("destination")}>
-                      <AccountSelect
+                      <TransactionAccountSelect
                         accounts={accounts.filter((a) => a.id !== accountId)}
                         value={destinationAccountId}
                         onChange={(id) => {

@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { TheyPaidDialog } from "@/features/loans/components/they-paid-dialog";
 import { AgreementPeopleTab } from "@/features/loans/components/agreement-people-tab";
+import { AgreementRecordingResetDialog } from "@/features/loans/components/agreement-recording-reset-dialog";
 import { AgreementScheduleTab } from "@/features/loans/components/agreement-schedule-tab";
 import { useAgreementPeople } from "@/features/loans/hooks/use-agreement-people";
 import { ClayButton } from "@/components/clay/clay-button";
@@ -92,6 +93,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
   const { people, cycleBalance } = useAgreementPeople(page && row && row.direction !== "given" ? { sourceKind: "loan", source: row.loan, installments: row.installments } : null);
   // "They paid": the installment whose share the person already paid — the dialog mounts fresh per open (one batch id per save).
   const [theyPaid, setTheyPaid] = useState<{ id: string; n: number } | null>(null);
+  const [resetId, setResetId] = useState<string | null>(null);
   const askTheyPaid = (installmentId: string) => setTheyPaid((prev) => ({ id: installmentId, n: (prev?.n ?? 0) + 1 }));
   if (!row) return null;
 
@@ -181,7 +183,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
                   returnTo={pathname || "/loans/"}
                 />
               ),
-              people: <AgreementPeopleTab people={people} returnTo={pathname || "/loans/"} onTheyPaid={lent ? undefined : askTheyPaid} />,
+              people: <AgreementPeopleTab people={people} agreementName={loanDisplayName(row)} returnTo={pathname || "/loans/"} target={lent ? undefined : { sourceKind: "loan", source: row.loan, installments: row.installments }} />,
               peopleCount: people.length,
               nextPayment: !isClosed && nextPayable ? { amount: remainingAmount(nextPayable), dueDate: nextPayable.dueDate, sequenceNumber: nextPayable.sequenceNumber, overdue: nextOverdue } : null,
             }
@@ -253,6 +255,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
                     : []),
                   ...(onPaySeveral && !isClosed && pastDueCount(row.installments) > 1 ? [{ label: lent ? "Receive several" : "Pay several", icon: Layers, onSelect: () => onPaySeveral(row) }] : []),
                   { label: additionalCopy.label, icon: HandCoins, disabled: isClosed, onSelect: () => onAdditionalDisbursement(row) },
+                  { label: "Delete all transactions", icon: Trash2, disabled: statusBusy, onSelect: () => setResetId(row.loan.id) },
                 ]}
               />
               {nextPayable == null && !isClosed ? (
@@ -287,6 +290,7 @@ export function LoanScheduleDialog({ open, onOpenChange, row, onEdit, onDelete, 
         />
       }
     />
+    {open && resetId === row.loan.id && <AgreementRecordingResetDialog kind="loan" id={row.loan.id} name={loanDisplayName(row)} onClose={() => setResetId(null)} />}
     {theyPaid && (
       <TheyPaidDialog
         key={theyPaid.n}

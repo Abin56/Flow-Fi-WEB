@@ -3,11 +3,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, Eye, EyeOff, Landmark } from "lucide-react";
-import { Area, AreaChart, ResponsiveContainer } from "recharts";
-import { AnimatedNumber } from "@/components/foundation/animated-number";
+import { Area, AreaChart, ResponsiveContainer, YAxis } from "recharts";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DASH_LABEL, DASH_PANEL } from "@/features/dashboard/components/dash-ui";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatCurrencyExact } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export interface NetWorthHeroProps {
@@ -15,7 +14,7 @@ export interface NetWorthHeroProps {
     amount: number;
     changeAmount: number;
     changePercent: number;
-    /** Cumulative net (income - expense) for each of the last 7 days, oldest first — see `use-dashboard-data.ts`. */
+    /** Net worth at the end of each of the last 7 days, oldest first. */
     trend: number[];
     /** Everything owned (accounts, money lent, what people owe you) — Net Worth + Debt + Held for people. */
     assets?: number;
@@ -50,13 +49,14 @@ export interface NetWorthHeroProps {
  * breakdown is a display of the hook's values, never recomputed here.
  */
 export function NetWorthHero({ netWorth, isLoading, hideAmount = false, onToggleHideAmount }: NetWorthHeroProps) {
-  const hasTrend = !hideAmount && netWorth.trend.length > 0 && netWorth.trend.some((v) => v !== netWorth.trend[0]);
+  const hasTrend = !isLoading && !hideAmount && netWorth.trend.length > 1;
   const hasChange = netWorth.changeAmount !== 0;
   const showChart = !isLoading && netWorth.assets != null && netWorth.debt != null && (netWorth.assets > 0 || netWorth.debt > 0);
 
   return (
     <section
       aria-label="Net worth"
+      aria-busy={isLoading}
       className={cn(DASH_PANEL, "relative flex h-full flex-col gap-2 bg-gradient-to-br from-primary/15 via-card to-card p-4 sm:p-5 dark:from-primary/[0.08]")}
     >
       <span className="pointer-events-none absolute -top-20 -right-16 size-56 rounded-full bg-primary/15 blur-3xl dark:bg-primary/[0.07]" aria-hidden />
@@ -71,7 +71,7 @@ export function NetWorthHero({ netWorth, isLoading, hideAmount = false, onToggle
             <Skeleton className="mt-1.5 h-10 w-52" />
           ) : (
             <p className="mt-1 text-[30px] leading-none font-bold tracking-tight text-foreground tabular-nums sm:text-[32px]">
-              {hideAmount ? "••••••" : <AnimatedNumber value={netWorth.amount} format={formatCurrency} />}
+              {hideAmount ? "••••••" : formatCurrencyExact(netWorth.amount)}
             </p>
           )}
           <p className="mt-1.5 text-xs text-muted-foreground">
@@ -93,6 +93,7 @@ export function NetWorthHero({ netWorth, isLoading, hideAmount = false, onToggle
                         <stop offset="100%" stopColor="var(--primary-accent-text)" stopOpacity={0} />
                       </linearGradient>
                     </defs>
+                    <YAxis hide domain={[(min: number) => min - 1, (max: number) => max + 1]} />
                     <Area type="monotone" dataKey="v" stroke="var(--primary-accent-text)" strokeWidth={2} strokeLinecap="round" fill="url(#net-worth-trend)" isAnimationActive={false} />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -201,10 +202,10 @@ function NetWorthFunnel({ netWorth, hide, className }: { netWorth: NetWorthHeroP
   // Net worth is the RESULT, not a third kind of money: its own block, never joined to the assets / debt curve.
   const netBar: Bar = {
     key: "net",
-    label: "What's left",
-    value: net < 0 && !hide ? `−${formatCurrency(Math.abs(net))}` : money(net),
-    amount: Math.max(net, 0),
-    ink: "var(--primary-accent-text)",
+    label: net < 0 && !hide ? "Shortfall" : "What's left",
+    value: hide ? "••••" : `${net < 0 ? "−" : ""}${formatCurrencyExact(Math.abs(net))}`,
+    amount: Math.abs(net),
+    ink: net < 0 && !hide ? "var(--expense)" : "var(--primary-accent-text)",
     tip: null,
   };
 
@@ -248,7 +249,7 @@ function NetWorthFunnel({ netWorth, hide, className }: { netWorth: NetWorthHeroP
             <span className="size-1.5 shrink-0 rounded-full" style={{ background: b.ink }} />
             <span className="truncate">{b.label}</span>
           </p>
-          <p className={cn("truncate text-sm leading-tight font-semibold tracking-tight tabular-nums transition-colors duration-200", on ? (solid ? "text-primary-accent-text" : "text-foreground") : "text-muted-foreground/60")}>
+          <p className={cn("truncate text-sm leading-tight font-semibold tracking-tight tabular-nums transition-colors duration-200", solid ? "text-(--ink)" : on ? "text-foreground" : "text-muted-foreground/60")}>
             {b.value}
           </p>
         </div>
@@ -288,7 +289,7 @@ function NetWorthFunnel({ netWorth, hide, className }: { netWorth: NetWorthHeroP
     <div
       className={cn("relative flex min-h-[124px] min-w-0", className)}
       role="img"
-      aria-label={hide ? "Assets and debt chart, hidden" : `You own ${formatCurrency(assets)}, owe ${formatCurrency(debt)}, net worth ${formatCurrency(net)}`}
+      aria-label={hide ? "Assets and debt chart, hidden" : `You own ${formatCurrency(assets)}, owe ${formatCurrency(debt)}, net worth ${formatCurrencyExact(net)}`}
     >
       {/* y axis */}
       <div className="flex w-9 shrink-0 flex-col" aria-hidden>

@@ -585,7 +585,8 @@ scenario("le-sweep-add", "Loan & EMI sweep: Add a loan I took, a loan I gave, a 
 
   // ── Credit card EMI ──
   d = await openAddDialog(page, "Credit Card");
-  await pickNative(d, /QA Credit Card/);
+  await d.getByRole("combobox", { name: "Credit card", exact: true }).click();
+  await page.getByRole("option", { name: /QA Credit Card/ }).click();
   await d.locator('input[placeholder="e.g. iPhone 16"]').fill("Sweep TV");
   await d.locator('input[placeholder="0"]').first().fill("9000");
   await preset(d, 3);
@@ -667,7 +668,8 @@ scenario("le-sweep-receive-more", "Loan & EMI sweep: 'Receive More Money' writes
   await page.waitForTimeout(1200);
   let r = topDialog(page);
   await r.locator('input[placeholder="0"]').first().fill("1000").catch(async () => { await r.getByRole("spinbutton").first().fill("1000"); });
-  await pickNative(r, /QA Bank/);
+  await r.getByRole("combobox", { name: "Payment account" }).click();
+  await page.getByRole("option", { name: /QA Bank/ }).click();
   await h.shot(page, "le-sweep-receive-filled");
   await page.evaluate(() => window.__reset());
   await r.getByRole("button", { name: /^Receive ₹1,000/ }).evaluate((b) => { b.click(); b.click(); });

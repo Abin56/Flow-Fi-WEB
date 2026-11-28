@@ -9,6 +9,8 @@ import { reimbursementLineKey, type BalanceTreatment, type ReceivedChoice } from
 import { PAYMENT_EPSILON, round2 } from "@/lib/engines/person-payment";
 import { formatCurrency, formatCurrencyExact } from "@/lib/format";
 import type { Account } from "@/lib/models/account";
+import { cn } from "@/lib/utils";
+import styles from "./payment-contributions.module.css";
 
 /**
  * The compact "They paid" form (People side only) shared by the inline panel and the sheet. One block per person:
@@ -62,7 +64,7 @@ export function TheyPaidForm({ state, accounts, locked, personId, inlineAmount =
   const todayText = toText(new Date());
 
   return (
-    <div className="flex flex-col gap-2" data-testid="they-paid-form">
+    <div className={cn("flex flex-col gap-2", inlineAmount && "gap-2.5")} data-testid="they-paid-form">
       {lines.map((l) => {
         const key = reimbursementLineKey(l);
         const d = draft[key];
@@ -100,12 +102,13 @@ export function TheyPaidForm({ state, accounts, locked, personId, inlineAmount =
               onChange={(v) => state.setLine(key, { choice: v, ...(v === "none" ? { amount: "" } : {}) })}
             />}
             {(personId || choice !== "none") && (
-              <div className={inlineAmount ? "grid grid-cols-[minmax(7.5rem,1fr)_minmax(0,2fr)] items-end gap-1.5" : "flex flex-wrap items-center gap-1.5"}>
+              <div className={inlineAmount ? "grid min-w-0 items-end gap-2 @min-[21rem]:grid-cols-[minmax(7.25rem,1fr)_minmax(0,1.9fr)]" : "flex flex-wrap items-center gap-1.5"}>
                 {!inlineAmount && (personId || choice === "some") && (
                   <input
                     type="number"
                     inputMode="decimal"
                     aria-label={`Amount received from ${name}`}
+                    autoFocus={Boolean(personId)}
                     placeholder={`Amount (max ${formatCurrency(l.remaining)})`}
                     disabled={locked}
                     className="h-9 w-40 max-w-full rounded-md border border-border bg-card px-2 text-xs tabular-nums"
@@ -118,13 +121,13 @@ export function TheyPaidForm({ state, accounts, locked, personId, inlineAmount =
                     Use remaining {formatCurrencyExact(l.remaining)}
                   </button>
                 )}
-                {projected != null && <p className="basis-full text-xs text-muted-foreground">Left after this receipt <strong className="text-foreground">{formatCurrencyExact(projected)}</strong></p>}
+                {!locked && projected != null && <p className="basis-full text-xs text-muted-foreground">Left after this receipt <strong className="text-foreground">{formatCurrencyExact(projected)}</strong></p>}
                 <div className="min-w-0">
-                  {inlineAmount && <span className="mb-0.5 block text-[11px] font-medium text-muted-foreground">Received on</span>}
+                  {inlineAmount && <span className="mb-1 block text-[11px] font-semibold text-foreground/80">Received on</span>}
                   <DateInput
                     aria-label={`Date received from ${name}`}
                     title="Leave blank if you don't know the date"
-                    className={inlineAmount ? "h-8 rounded-[6px] border border-border bg-card px-2 text-xs" : "h-8 w-36 rounded-[6px] border border-border bg-card px-2 text-xs"}
+                    className={inlineAmount ? "h-8 rounded-[8px] border border-border-strong/80 bg-card px-2 text-xs tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring" : "h-8 w-36 rounded-[6px] border border-border bg-card px-2 text-xs"}
                     value={d?.date ?? ""}
                     max={todayText}
                     calendar={inlineAmount ? { dueDate: l.dueDate } : undefined}
@@ -132,7 +135,10 @@ export function TheyPaidForm({ state, accounts, locked, personId, inlineAmount =
                     onChange={(e) => state.setLine(key, { date: e.target.value })}
                   />
                 </div>
-                <Segmented name={`Where is ${name}'s money`} value={d?.treatment ?? null} disabled={locked} wrap options={TREATMENTS} onChange={(v) => state.setLine(key, { treatment: v })} />
+                <div className={inlineAmount ? styles.receiptTreatment : "contents"}>
+                  {inlineAmount && <span className="mb-1 block text-[11px] font-semibold text-foreground/80">Where is the money?</span>}
+                  <Segmented name={`Where is ${name}'s money`} value={d?.treatment ?? null} disabled={locked} wrap options={TREATMENTS} onChange={(v) => state.setLine(key, { treatment: v })} />
+                </div>
               </div>
             )}
             {choice !== "none" && errors[key] && (
@@ -150,14 +156,14 @@ export function TheyPaidForm({ state, accounts, locked, personId, inlineAmount =
       })}
 
       {anyReceived && (
-        <label className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="shrink-0 font-medium text-muted-foreground">Account</span>
-          <AccountSelect className="h-9 min-w-0 flex-1 basis-36 rounded-md border border-border bg-card px-2 text-xs" accounts={accounts as Account[]} value={state.accountId} onChange={state.setAccountId} ariaLabel="Received into account" />
+        <label className={cn("flex flex-wrap items-center gap-2 text-xs", inlineAmount && "grid grid-cols-[auto_minmax(0,1fr)] gap-x-3")}>
+          <span className={cn("shrink-0 font-medium text-muted-foreground", inlineAmount && "text-[11px] font-semibold text-foreground/80")}>Account</span>
+          <AccountSelect className={cn("h-9 min-w-0 flex-1 basis-36 rounded-md border border-border bg-card px-2 text-xs", inlineAmount && "h-8 rounded-[8px] border-border-strong/80")} accounts={accounts as Account[]} value={state.accountId} onChange={state.setAccountId} ariaLabel="Received into account" />
         </label>
       )}
 
       {summary && summary.total > PAYMENT_EPSILON && (
-        <p className="text-[11.5px] text-muted-foreground" data-testid="reconcile-summary">
+        <p className={cn("text-[11.5px] text-muted-foreground", inlineAmount && "rounded-[8px] bg-secondary/55 px-2 py-1.5")} data-testid="reconcile-summary">
           Recording <span className="font-semibold text-foreground tabular-nums">{formatCurrency(summary.total)}</span> ·{" "}
           {summary.balanceChange > PAYMENT_EPSILON ? `account +${formatCurrency(summary.balanceChange)}` : "account balance unchanged"}
           {!personId && pendingTotal > PAYMENT_EPSILON ? ` · ${formatCurrency(pendingTotal)} still owed` : ""}

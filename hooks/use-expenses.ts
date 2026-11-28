@@ -86,7 +86,7 @@ export function useExpenseInstallmentsBySchedule(): {
       if (!uid || scheduleIds.length === 0) return () => {};
       const byScheduleId = new Map<string, Installment[]>();
       let erroredOnce = false;
-      const publish = () => onData(Object.fromEntries(byScheduleId));
+      const publish = () => onData(Object.fromEntries(byScheduleId), byScheduleId.size === scheduleIds.length);
 
       const unsubscribes = scheduleIds.map((scheduleId) => {
         const repository = createInstallmentRepositoryFor(uid, scheduleId);

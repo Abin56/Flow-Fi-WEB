@@ -999,6 +999,16 @@ function existingTransaction(overrides: Partial<Transaction> = {}): Transaction 
 }
 
 describe("detectFreshDuplicatesForCommit — catches duplicates the static server-side flag missed", () => {
+  it("requires more than amount and day against recorded Loan and People movements", () => {
+    const rows = [row({ amount: 2000, counterpartyNormalized: null, counterpartyRaw: "" })];
+    const recorded = [
+      existingTransaction({ id: "borrow", amount: 2000, type: "income", isPersonLedgerMovement: true }),
+      existingTransaction({ id: "repay", amount: 2000, loanId: "loan-1" }),
+    ];
+    expect(detectFreshDuplicatesForCommit(rows, recorded, "acc-1")).toEqual([]);
+    expect(detectFreshDuplicatesForCommit([row({ amount: 2000 })], recorded, "acc-1")[0]?.result.bestMatch?.transactionId).toBe("repay");
+  });
+
   it("flags a row whose description/amount/date matches an existing transaction, even with no duplicateOfTransactionId/duplicateCandidateOf set", () => {
     const warnings = detectFreshDuplicatesForCommit([row()], [existingTransaction()], "acc-1");
     expect(warnings).toHaveLength(1);
@@ -1087,6 +1097,17 @@ describe("detectFreshDuplicatesForCommit — catches duplicates the static serve
 });
 
 describe("detectFreshDuplicatesForCommit — same-batch duplicates (UAT: 'PDF batch' scenario)", () => {
+  it("distinguishes repeated borrowing and repayment rows by direction and bank reference", () => {
+    const borrow = row({ id: "borrow", amount: 2000, counterpartyNormalized: "Anu", direction: "credit", referenceNumber: "628323405861" });
+    const repay = row({ ...borrow, id: "repay", direction: "debit", referenceNumber: "628323405862" });
+    const borrowAgain = row({ ...borrow, id: "borrow-again", referenceNumber: "628323405863" });
+    const duplicate = row({ ...repay, id: "repay-copy" });
+
+    const warnings = detectFreshDuplicatesForCommit([borrow, repay, borrowAgain, duplicate], [], "acc-1");
+    expect(warnings.map((warning) => warning.recordId)).toEqual(["repay-copy"]);
+    expect(warnings[0]?.result.bestMatch?.transactionId).toBe("pending-row-repay");
+  });
+
   it("flags row B as a duplicate of row A when both are in the same commit batch and neither was flagged server-side, since committing A would create the transaction B then duplicates", () => {
     const rowA = row({ id: "rA", counterpartyNormalized: "Amazon", amount: 499, date: new Date("2026-07-15T00:00:00.000Z") });
     const rowB = row({ id: "rB", counterpartyNormalized: "Amazon", amount: 499, date: new Date("2026-07-15T00:00:00.000Z") });

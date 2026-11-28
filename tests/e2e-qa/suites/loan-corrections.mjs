@@ -97,10 +97,8 @@ scenario("lcor-disbursement", "Receive More Money (additional disbursement): cas
   await page.getByRole("button", { name: "Receive More Money" }).click();
   const dlg = page.locator("main");
   await dlg.getByLabel("Additional amount").fill("10000");
-  await dlg.getByLabel("Payment account").selectOption({ label: /QA Bank/ }).catch(async () => {
-    const opt = await dlg.getByLabel("Payment account").locator("option").allInnerTexts();
-    await dlg.getByLabel("Payment account").selectOption({ label: opt.find((o) => /QA Bank/.test(o)) });
-  });
+  await page.getByRole("combobox", { name: "Payment account" }).click();
+  await page.getByRole("option", { name: /QA Bank/ }).click();
   await page.waitForTimeout(600);
   const previewText = (await dlg.innerText()).replace(/\s+/g, " ");
   chk("dialog previews remaining principal before → after", new RegExp(`Remaining principal.*${Math.round(before.outstanding).toLocaleString("en-IN")}`).test(previewText), previewText.slice(0, 300));

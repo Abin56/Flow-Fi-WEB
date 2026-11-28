@@ -32,26 +32,11 @@
  * scored higher than a cross-account one, rather than the two being treated
  * identically.
  *
- * Amount+date fallback (SMS/PDF only, on top of everything above): even when
- * none of the anchored rules above fire — no description text to compare, a
- * completely different merchant, a different account, even a different
- * direction (debit vs credit) — an EXACT amount match (within the same
- * epsilon) on the EXACT same calendar day is, by itself, still treated as
- * worth a warning, for `source: "sms"` and `source: "pdf"` candidates. This
- * is deliberately a strict product requirement, not a byproduct of the
- * anchored logic: a same-amount, same-day coincidence is common enough to be
- * worth a human's confirmation even with zero other corroborating signal,
- * and SMS/PDF candidates frequently arrive with no parsed merchant text at
- * all (see `checkCandidateForDuplicates` in
- * `features/transaction-candidates/lib/import-candidate.ts` and
- * `detectFreshDuplicatesForCommit` in
- * `features/transaction-studio/lib/commit-review-import.ts` for the two
- * places this matters most — the credit-card PDF review flow shares the
- * latter, so it inherits this for free). It never widens the ±1-day
- * near-duplicate window or the amount epsilon — "exact date" here really
- * does mean `dayGap === 0` — and it only adds a match for a transaction the
- * anchored pass above didn't already catch, so the anchored pass's stronger,
- * more-specific confidence and reason always win when both apply.
+ * Amount+date fallback (SMS/PDF only): an exact same-day amount is enough to
+ * warn about ordinary imports, including rows without parsed merchant text.
+ * Loan/EMI and People movements regularly share the same day and amount.
+ * A match involving one of these also needs the same direction and a
+ * matching description or bank reference.
  *
  * Deliberately excludes `source: "manual"`: manual entry already has its own
  * unconditional amount+direction+exact-date rule via
@@ -67,6 +52,8 @@
  * (SMS) and `detectFreshDuplicatesForCommit` (PDF) for the two existing
  * adapters — the matching core itself never needs to change.
  */
+
+import { isLoanOrPeopleTransaction, type LoanOrPeopleTransactionFields } from "@/lib/models/transaction";
 
 const NEAR_DUPLICATE_MAX_DAY_GAP = 1;
 const AMOUNT_EPSILON = 0.01;
@@ -91,6 +78,8 @@ export interface DuplicateCandidateInput {
   /** Bank/UPI/statement reference number, when available. */
   referenceNumber: string | null;
   source: DuplicateDetectionSource;
+  /** The reviewer explicitly classified the incoming row as a loan or installment movement. */
+  isDebtMovement?: boolean;
   /**
    * SMS/PDF imports don't carry a reliable per-transaction identity beyond merchant text,
    * so they default (`true`) to requiring the candidate's description to be found within the
@@ -114,13 +103,16 @@ export interface DuplicateCandidateInput {
   ignoreAccountIds?: string[];
 }
 
-export interface ExistingTransactionForDuplicateCheck {
+export interface ExistingTransactionForDuplicateCheck extends LoanOrPeopleTransactionFields {
   id: string;
   description: string;
   amount: number;
   dateTime: Date;
   accountId: string;
   type: "income" | "expense";
+  notes?: string;
+  /** Set when the existing side represents a pending import row. */
+  isDebtMovement?: boolean;
 }
 
 export type DuplicateDetectionStatus = "unique" | "duplicate_candidate";
@@ -190,42 +182,40 @@ function directionMatchesType(direction: DuplicateCandidateInput["direction"], t
  * near-duplicate tier never fires since there's no description anchor to make
  * a same-amount-different-day coincidence meaningful.
  *
- * On top of all of the above, an unconditional amount+date-only fallback
- * (this module's doc comment, "Amount+date fallback") always runs last and
- * adds any exact-amount/exact-same-day existing transaction the anchored
- * pass above didn't already catch, at `AMOUNT_DATE_FALLBACK_CONFIDENCE` —
- * regardless of description, account, reference number, or even direction.
+ * SMS and PDF imports also warn about exact-amount, same-day ordinary rows
+ * with no supporting evidence.
  */
 export function checkForDuplicates(candidate: DuplicateCandidateInput, allExistingTransactions: ExistingTransactionForDuplicateCheck[]): DuplicateDetectionResult {
   const ignored = candidate.ignoreAccountIds;
   const existingTransactions = ignored?.length ? allExistingTransactions.filter((t) => !ignored.includes(t.accountId)) : allExistingTransactions;
   const requireDescriptionMatch = candidate.requireDescriptionMatch ?? true;
   const candidateText = normalizeText(candidate.description);
+  const reference = normalizeText(candidate.referenceNumber ?? "");
+  const maxDayGap = requireDescriptionMatch ? NEAR_DUPLICATE_MAX_DAY_GAP : 0;
+  const importing = candidate.source !== "manual";
 
   const matches: DuplicateMatch[] = [];
 
-  // Anchored matching (unchanged from before the amount+date fallback below existed) — skipped
-  // entirely when there's no description text to compare against and one is required, since
-  // `"".includes(...)` would otherwise trivially "match" every existing transaction's description.
-  if (!requireDescriptionMatch || candidateText.length > 0) {
-    const sameDirectionAndAmount = existingTransactions.filter(
-      (existing) =>
-        directionMatchesType(candidate.direction, existing.type) &&
-        amountsMatch(existing.amount, candidate.amount) &&
-        (!requireDescriptionMatch || normalizeText(existing.description).includes(candidateText)),
-    );
+  for (const existing of existingTransactions) {
+    if (!amountsMatch(existing.amount, candidate.amount)) continue;
+    const dayGap = daysBetween(existing.dateTime, candidate.date);
+    if (dayGap > maxDayGap) continue;
 
-    const maxDayGap = requireDescriptionMatch ? NEAR_DUPLICATE_MAX_DAY_GAP : 0;
-    /** Leading clause for each match's `reason` text — folds in the description when it was part of the match, omits it when matching was description-independent (manual entry). */
-    const describedAs = requireDescriptionMatch ? `description ("${candidateText}"), amount` : "amount";
+    const debtRelated = importing && (candidate.isDebtMovement === true || existing.isDebtMovement === true || isLoanOrPeopleTransaction(existing));
+    const existingText = normalizeText(existing.description);
+    const descriptionMatches = candidateText.length > 0 && existingText.includes(candidateText);
+    const referenceConfirmed = (reference.length > 0 && existingText.includes(reference)) ||
+      (debtRelated && reference.length >= 4 && normalizeText(existing.notes ?? "").includes(reference));
+    const anchored = directionMatchesType(candidate.direction, existing.type) &&
+      (debtRelated ? descriptionMatches || (reference.length >= 4 && referenceConfirmed) : !requireDescriptionMatch || descriptionMatches);
+    if (!anchored && (!importing || debtRelated || dayGap !== 0)) continue;
 
-    for (const existing of sameDirectionAndAmount) {
-      const dayGap = daysBetween(existing.dateTime, candidate.date);
-      if (dayGap > maxDayGap) continue;
+    const sameAccount = candidate.accountId == null || candidate.accountId === existing.accountId;
+    const accountFactor = sameAccount ? 1 : DIFFERENT_ACCOUNT_CONFIDENCE_FACTOR;
+    const accountNote = sameAccount ? "" : " (a different account, so this is a weaker signal)";
 
-      const sameAccount = candidate.accountId == null || candidate.accountId === existing.accountId;
-      const accountFactor = sameAccount ? 1 : DIFFERENT_ACCOUNT_CONFIDENCE_FACTOR;
-      const accountNote = sameAccount ? "" : " (a different account, so this is a weaker signal)";
+    if (anchored) {
+      const describedAs = requireDescriptionMatch && descriptionMatches ? `description ("${candidateText}"), amount` : "amount";
 
       if (dayGap === 0) {
         if (candidate.referenceNumber == null) {
@@ -238,14 +228,13 @@ export function checkForDuplicates(candidate: DuplicateCandidateInput, allExisti
           });
           continue;
         }
-        const referenceConfirmed = normalizeText(existing.description).includes(normalizeText(candidate.referenceNumber));
         matches.push({
           transactionId: existing.id,
           confidence: (referenceConfirmed ? 0.98 : 0.75) * accountFactor,
           sameAccount,
           dayGap,
           reason: referenceConfirmed
-            ? `Same ${describedAs}, and date as an existing transaction (${existing.id}), and its reference number ("${candidate.referenceNumber}") was found in that record's description — strong match${accountNote}.`
+            ? `Same ${describedAs}, and date as an existing transaction (${existing.id}), and its reference number ("${candidate.referenceNumber}") was found in that record — strong match${accountNote}.`
             : `Same ${describedAs}, and date as an existing transaction (${existing.id}), but its reference number could not be confirmed against that record's description${accountNote}.`,
         });
         continue;
@@ -258,32 +247,16 @@ export function checkForDuplicates(candidate: DuplicateCandidateInput, allExisti
         dayGap,
         reason: `Same ${describedAs} (${candidate.amount}) as an existing transaction (${existing.id}), but the date differs by ${dayGap} day(s) — a near match, not confirmed as identical${accountNote}.`,
       });
+      continue;
     }
-  }
 
-  // Amount+date fallback — see this module's doc comment. Runs for `source: "sms"`/`"pdf"` only
-  // (never `"manual"`, which keeps its own existing direction-required rule), regardless of
-  // `requireDescriptionMatch`, direction, account, or reference number, and regardless of whether
-  // the anchored pass above found anything. Only adds a match for a transaction not already matched
-  // above, so the anchored pass's stronger, more-specific confidence/reason always takes priority.
-  if (candidate.source !== "manual") {
-    const matchedIds = new Set(matches.map((m) => m.transactionId));
-    for (const existing of existingTransactions) {
-      if (matchedIds.has(existing.id)) continue;
-      if (!amountsMatch(existing.amount, candidate.amount)) continue;
-      if (daysBetween(existing.dateTime, candidate.date) !== 0) continue;
-
-      const sameAccount = candidate.accountId == null || candidate.accountId === existing.accountId;
-      const accountFactor = sameAccount ? 1 : DIFFERENT_ACCOUNT_CONFIDENCE_FACTOR;
-      const accountNote = sameAccount ? "" : " (a different account, so this is a weaker signal)";
-      matches.push({
-        transactionId: existing.id,
-        confidence: AMOUNT_DATE_FALLBACK_CONFIDENCE * accountFactor,
-        sameAccount,
-        dayGap: 0,
-        reason: `Same amount (${candidate.amount}) and exact date (${dayKey(candidate.date)}) as an existing transaction (${existing.id}), even though description, account, and/or direction don't confirm it — flagged anyway since amount and date alone are treated as a strong enough signal to warrant review${accountNote}.`,
-      });
-    }
+    matches.push({
+      transactionId: existing.id,
+      confidence: AMOUNT_DATE_FALLBACK_CONFIDENCE * accountFactor,
+      sameAccount,
+      dayGap: 0,
+      reason: `Same amount (${candidate.amount}) and exact date (${dayKey(candidate.date)}) as an existing transaction (${existing.id}), even though description, account, and/or direction don't confirm it — flagged anyway since amount and date alone are treated as a strong enough signal to warrant review${accountNote}.`,
+    });
   }
 
   if (matches.length === 0) return NO_DUPLICATES;

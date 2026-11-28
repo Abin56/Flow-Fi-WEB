@@ -1,6 +1,6 @@
 "use client";
 
-import { Check } from "lucide-react";
+import { Check, ChevronDown, ReceiptText } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -121,14 +121,17 @@ export function TheyPaidPanel({
   const amountError = saved == null && line && amount !== "" && !validAmount ? `Enter a receipt up to ${formatCurrencyExact(line.remaining)}.` : null;
   const savedIntoAccount = saved?.some((item) => !item.recordedEarlier);
   const panel = (
-    <section aria-label="Their payment" data-testid="they-paid-panel" className={cn("flex flex-col gap-2", !editor && "mt-2 rounded-[8px] border border-border bg-secondary/30 p-2.5")}>
-      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-        <p className="text-xs font-semibold text-foreground">
-          {editor ? `Receipt from ${editor.personName}` : personId ? "Record receipt" : sourceKind === "loan" ? "Record or link a People receipt" : "They paid"}
-          {installment && (editor || !personId) && ` · #${installment.sequenceNumber}`}
-        </p>
+    <section aria-label="Their payment" data-testid="they-paid-panel" className={cn("flex flex-col gap-2", editor ? "@container gap-2.5" : "mt-2 rounded-[8px] border border-border bg-secondary/30 p-2.5")}>
+      <div className={cn("flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5", editor && "border-b border-border pb-2.5")}>
+        <div className="flex min-w-0 items-center gap-2">
+          {editor && <span className="grid size-7 shrink-0 place-items-center rounded-[8px] bg-settle-receivable-tint text-settle-receivable-text"><ReceiptText className="size-4" aria-hidden /></span>}
+          <p className={cn("min-w-0 font-semibold break-words text-foreground", editor ? "text-sm leading-tight" : "text-xs")}>
+            {editor ? `Receipt from ${editor.personName}` : personId ? "Record receipt" : sourceKind === "loan" ? "Record or link a People receipt" : "They paid"}
+            {installment && (editor || !personId) && <span className={cn(editor && "text-xs whitespace-nowrap text-muted-foreground")}>{` · #${installment.sequenceNumber}`}</span>}
+          </p>
+        </div>
         {editor && line && key && saved == null && (
-          <button type="button" disabled={busy} className="rounded text-xs font-semibold text-foreground underline underline-offset-2 focus-visible:ring-2 focus-visible:ring-ring" onClick={() => reconcile.setLine(key, { choice: "some", amount: String(line.remaining) })}>
+          <button type="button" disabled={busy} className={cn(BTN, "min-h-7 h-auto rounded-[7px] border-settle-receivable-edge/30 bg-settle-receivable-tint/70 px-2 py-1 text-settle-receivable-text tabular-nums hover:bg-settle-receivable-tint")} onClick={() => reconcile.setLine(key, { choice: "some", amount: String(line.remaining) })}>
             Use remaining {formatCurrencyExact(line.remaining)}
           </button>
         )}
@@ -146,7 +149,7 @@ export function TheyPaidPanel({
           <span className="min-w-0 text-foreground">
             <span className="font-semibold">{h.line.personName}</span> has {formatCurrency(h.usable)} held in People — link it, no new transaction.
           </span>
-          <button type="button" className={cn(BTN, "border-border-strong bg-card text-foreground hover:bg-secondary")} disabled={linking != null || !actions} onClick={() => void link(h.line.personId, h.line.obligationKey)}>
+          <button type="button" className={cn(BTN, "border-border-strong bg-card text-foreground hover:bg-secondary")} disabled={busy || !actions} onClick={() => void link(h.line.personId, h.line.obligationKey)}>
             {linking === h.line.personId ? "Linking…" : `Already received · link ${formatCurrency(h.usable)}`}
           </button>
         </div>
@@ -157,7 +160,7 @@ export function TheyPaidPanel({
         </p>
       ))}
 
-      <TheyPaidForm state={reconcile} accounts={accounts} locked={saving || saved != null} personId={personId} inlineAmount={Boolean(editor)} />
+      <TheyPaidForm state={reconcile} accounts={accounts} locked={busy || saved != null} personId={personId} inlineAmount={Boolean(editor)} />
       {success && (
         <PaymentSavedMotion
           kind={savedIntoAccount ? "receive" : "recorded"}
@@ -170,12 +173,12 @@ export function TheyPaidPanel({
         </p>
       )}
 
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <button type="button" className={cn(BTN, "shrink-0 border-border-strong bg-card whitespace-nowrap text-foreground hover:bg-secondary")} onClick={onClose} disabled={saving || linking != null || (editor != null && success)}>
+      <div className={cn("flex flex-wrap items-center justify-end gap-2", editor && "border-t border-border pt-2.5")}>
+        <button type="button" className={cn(BTN, "shrink-0 border-border-strong bg-card whitespace-nowrap text-foreground hover:bg-secondary", editor && "border-transparent bg-transparent text-muted-foreground hover:text-foreground")} onClick={onClose} disabled={saving || linking != null || (editor != null && success)}>
           {success || openLines.length === 0 ? "Close" : editor ? "Discard draft" : "Cancel"}
         </button>
         {(openLines.length > 0 || retrying) && !success && (
-          <button type="button" className={cn(BTN, "h-auto min-h-8 max-w-full border-primary-accent-text bg-primary py-1 text-center leading-tight text-primary-foreground hover:bg-primary/85")} disabled={confirmDisabled} onClick={() => void submit()} data-testid="they-paid-save">
+          <button type="button" className={cn(BTN, "h-auto min-h-8 max-w-full border-primary-accent-text bg-primary py-1 text-center leading-tight text-primary-foreground hover:bg-primary/85", editor && "rounded-[8px] disabled:border-border disabled:bg-secondary disabled:text-muted-foreground disabled:opacity-100")} disabled={confirmDisabled || linking != null} onClick={() => void submit()} data-testid="they-paid-save">
             {success ? "Saved" : confirmLabel}
           </button>
         )}
@@ -188,7 +191,7 @@ export function TheyPaidPanel({
     <>
       {editor.amount && createPortal(
         <div className="grid grid-cols-[minmax(0,6rem)_auto] items-center justify-start gap-x-1.5 gap-y-0.5" data-enter-skip>
-          <label className="flex h-7 min-w-0 items-center gap-1 rounded-md border border-border-strong bg-card px-1.5 focus-within:ring-2 focus-within:ring-ring">
+          <label className={cn("flex h-8 min-w-0 items-center gap-1 rounded-[8px] border border-border-strong/80 bg-card px-2 focus-within:ring-2 focus-within:ring-ring", amountError && "border-expense")}>
             <span aria-hidden className="text-muted-foreground">₹</span>
             <input
               type="number"
@@ -206,17 +209,18 @@ export function TheyPaidPanel({
           </label>
           <Popover open={detailsOpen} onOpenChange={(next) => { if (!busy) setDetailsOpen(next); }}>
             <PopoverTrigger asChild>
-              <button type="button" className={cn(BTN, "h-7 px-2 border-border-strong bg-card hover:bg-secondary")} aria-label={`Receipt details for ${editor.personName}`} disabled={busy}>
+              <button type="button" className={cn(BTN, "gap-1 rounded-[8px] border-border-strong/80 bg-card px-2 text-foreground hover:bg-secondary data-[state=open]:border-settle-receivable-edge/55 data-[state=open]:bg-settle-receivable-tint data-[state=open]:text-settle-receivable-text")} aria-label={`Receipt details for ${editor.personName}`} disabled={busy}>
                 Details
+                <ChevronDown className="size-3 shrink-0" aria-hidden />
               </button>
             </PopoverTrigger>
             <PopoverContent
               aria-label={`Receipt details for ${editor.personName}`}
               align="end"
               side="top"
-              sideOffset={5}
+              sideOffset={8}
               collisionPadding={12}
-              className="w-[min(26rem,calc(100vw-1.5rem))] max-h-(--radix-popover-content-available-height) overflow-y-auto rounded-lg border border-border p-3"
+              className="w-[min(25.5rem,calc(100vw-1.5rem))] max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain rounded-[14px] border border-border-strong/55 p-3"
               onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }}
               data-enter-skip
             >
@@ -226,7 +230,8 @@ export function TheyPaidPanel({
           {amountError ? (
             <span role="alert" className="col-span-full text-[11px] leading-tight text-expense">{amountError}</span>
           ) : (
-            <span role="status" className="col-span-full text-[11px] leading-tight text-muted-foreground">
+            <span role="status" className="col-span-full flex items-center gap-1.5 text-[11px] leading-tight text-muted-foreground">
+              <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", success ? "bg-success" : "bg-settle-receivable-edge")} />
               {success ? "Receipt saved" : saving ? "Saving receipt…" : retrying ? "Retry receipt" : "Editing · unsaved"}
             </span>
           )}

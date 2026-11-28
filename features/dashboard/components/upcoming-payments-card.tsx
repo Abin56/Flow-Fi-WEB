@@ -35,23 +35,25 @@ export interface UpcomingPaymentsCardProps {
  */
 export function UpcomingPaymentsCard({ payments, isLoading }: UpcomingPaymentsCardProps) {
   return (
-    <DashPanel label="Upcoming payments">
+    <DashPanel label="Upcoming payments" className="h-auto">
       <DashPanelHeader
         icon={CalendarClock}
         title="Upcoming payments"
         href="/bills"
+        compact
         aside={!isLoading && payments.length > 0 ? <span className="rounded-[4px] bg-secondary px-1.5 text-[11px] font-bold text-foreground/75 tabular-nums">{payments.length}</span> : undefined}
       />
       {isLoading ? (
-        <div className="flex flex-col gap-2 p-4">
+        <div className="flex flex-col gap-1.5 p-2">
           {Array.from({ length: 4 }, (_, i) => (
-            <Skeleton key={i} className="h-8 w-full rounded-[6px]" />
+            <Skeleton key={i} className="h-7 w-full rounded" />
           ))}
         </div>
       ) : payments.length === 0 ? (
         <DashEmpty
           title="Nothing due soon"
           description="Upcoming bills and card statements will appear here."
+          compact
           action={
             <Link href="/loans" className="text-xs font-semibold text-primary-accent-text hover:underline">
               Track a loan or EMI
@@ -59,27 +61,27 @@ export function UpcomingPaymentsCard({ payments, isLoading }: UpcomingPaymentsCa
           }
         />
       ) : (
-        <div className="max-h-[17.5rem] divide-y divide-border-strong/35 overflow-y-auto py-0.5">
+        <div className="max-h-40 divide-y divide-border-strong/35 overflow-y-auto">
           {payments.map((payment) => {
             const Icon = payment.type === "statement" ? CreditCard : Receipt;
             return (
               <div key={payment.id} className={cn(DASH_ROW, "group")}>
                 <span
                   className={cn(
-                    "flex size-7 shrink-0 items-center justify-center rounded-[7px] transition-transform duration-200 group-hover:scale-105",
+                    "flex size-6 shrink-0 items-center justify-center rounded-md transition-transform duration-200 group-hover:scale-105",
                     payment.type === "statement" ? "bg-purple/12 text-purple" : "bg-primary/20 text-foreground dark:text-primary-accent-text",
                   )}
                 >
-                  <Icon className="size-3.5" strokeWidth={1.9} />
+                  <Icon className="size-3" strokeWidth={1.9} />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] leading-snug font-semibold text-foreground">{payment.title}</p>
-                  <p className="truncate text-[11.5px] leading-snug text-muted-foreground">
+                  <p className="truncate text-xs leading-4 font-semibold text-foreground">{payment.title}</p>
+                  <p className="truncate text-[11px] leading-3.5 text-muted-foreground">
                     {payment.subtitle} · {payment.date}
                   </p>
                 </div>
-                <div className="flex shrink-0 flex-col items-end gap-0.5">
-                  <p className="text-sm leading-tight font-bold text-foreground tabular-nums">{formatCurrency(payment.amount)}</p>
+                <div className="flex shrink-0 flex-col items-end">
+                  <p className="text-xs leading-4 font-bold text-foreground tabular-nums">{formatCurrency(payment.amount)}</p>
                   <span className={cn("rounded-[4px] px-1.5 text-[10.5px] leading-[1.45] font-semibold", payment.overdue ? "bg-expense/12 text-expense" : chipClass(payment.daysLeft))}>
                     {payment.overdue ? `${Math.abs(payment.daysLeft)}d overdue` : payment.daysLeft <= 0 ? "Due today" : `${payment.daysLeft}d left`}
                   </span>

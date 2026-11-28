@@ -168,7 +168,7 @@ export function PaymentPeopleTable({
       </p>
     ) : null;
   }
-  const th = "px-2 py-1.5 text-[10.5px] font-bold tracking-[0.06em] text-muted-foreground uppercase";
+  const th = "px-2 py-1.5 text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground uppercase";
   const range = breakdown?.covered ?? null;
   const sequenceNumber = range ? range.last : installments.find((i) => i.id === installmentId)?.sequenceNumber;
   // A fully received earlier share can remove its person from the breakdown during the save refresh.
@@ -232,10 +232,10 @@ export function PaymentPeopleTable({
   };
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-1.5">
       <div className={styles.container}>
-        <table ref={table} tabIndex={-1} role="table" className={cn(styles.table, "text-xs")} aria-label="Who shares this installment">
-          <thead role="rowgroup">
+        <table ref={table} tabIndex={-1} role="table" className={cn(styles.table, styles.peopleTable, "text-xs")} aria-label="Who shares this installment">
+          <thead role="rowgroup" className="bg-secondary/45">
             <tr role="row" className="border-b border-border">
               <th scope="col" className={cn(th, "text-left")}>Person</th>
               <th scope="col" className={cn(th, styles.share, "text-right")}>Share</th>
@@ -246,7 +246,7 @@ export function PaymentPeopleTable({
             </tr>
           </thead>
           {breakdown && breakdown.yourShare > PAYMENT_EPSILON && (
-            <tbody role="rowgroup" className="border-b border-border/70">
+            <tbody role="rowgroup" className="border-b border-border/70 bg-secondary/15">
               <tr role="row" className={styles.row} data-testid="share-row-me" title="Your part of this installment — your cost, not money anyone owes you.">
                 <th role="rowheader" scope="row" className="px-2 py-1.5 text-left font-semibold text-foreground">
                   Me
@@ -312,7 +312,7 @@ export function PaymentPeopleTable({
       )}
 
       {breakdown && (
-        <dl className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border pt-2" aria-label="People summary" data-testid="people-summary">
+        <dl className="grid grid-cols-[minmax(0,1.45fr)_repeat(2,minmax(0,1fr))] divide-x divide-border/80 rounded-[10px] border border-border/80 bg-secondary/30" aria-label="People summary" data-testid="people-summary">
           <Figure
             label="People owe"
             value={formatCurrency(breakdown.othersOwe)}
@@ -322,15 +322,15 @@ export function PaymentPeopleTable({
           <Figure label="Postponed" value={timingLoading ? "…" : formatCurrency(round2(split.postponed))} />
         </dl>
       )}
-      <p className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-        <span title="Includes dated receipts linked to each installment">Cycle receipts · {selectedCycle}</span>
+      <p className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-0.5 text-[11px] leading-snug text-muted-foreground">
+        <span className="font-medium text-foreground/80" title="Includes dated receipts linked to each installment">Cycle receipts · {selectedCycle}</span>
         <span>People receipts save separately and stay saved if you cancel {cardEmi ? "this EMI" : "the lender payment"}.</span>
       </p>
     </div>
   );
 }
 
-const ACTION = "inline-flex h-7 items-center gap-1 rounded-[6px] border px-2 text-xs font-semibold whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
+const ACTION = "inline-flex min-h-7 items-center justify-center gap-1 rounded-[7px] border px-2 py-1 text-xs leading-tight font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
 const NOTE = "text-[11px] leading-snug font-normal";
 
 /** Short status under the amount: where the open share is expected now. */
@@ -360,10 +360,10 @@ interface LineState {
 
 function Figure({ label, value, note }: { label: string; value: string; note?: string }) {
   return (
-    <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+    <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5 px-2 py-1 sm:px-2.5">
       <dt className="text-[11px] font-medium text-muted-foreground">{label}</dt>
-      <dd className="text-xs font-semibold text-foreground tabular-nums">{value}</dd>
-      {note && <dd className="text-[11px] text-muted-foreground">· {note}</dd>}
+      <dd className="min-w-0 text-xs font-semibold break-words text-foreground tabular-nums">{value}</dd>
+      {note && <dd className="text-[11px] leading-tight text-muted-foreground">{note}</dd>}
     </div>
   );
 }
@@ -412,7 +412,7 @@ function Actions({ personName, line, state }: { personName: string; line: ShareL
     <>
       <td role="cell" className="px-2 py-1.5">
         {line && state && (owing || state.receivingOpen) ? (
-          <div className="inline-flex gap-1" role="group" aria-label={`Has ${personName} paid you?`}>
+          <div className="inline-flex gap-0.5 rounded-[9px] border border-border/80 bg-secondary/45 p-px" role="group" aria-label={`Has ${personName} paid you?`}>
             <button
               type="button"
               disabled={state.receiptBusy || state.postponing}
@@ -425,7 +425,7 @@ function Actions({ personName, line, state }: { personName: string; line: ShareL
                 setPostponeTarget(null);
                 state.onReceive(state.receivingOpen);
               }}
-              className={cn(ACTION, state.receivingOpen ? "border-settle-receivable-text/50 bg-settle-receivable-tint text-settle-receivable-text" : "border-border bg-card text-foreground hover:bg-settle-receivable-tint")}
+              className={cn(ACTION, "min-h-6 px-1.5 whitespace-nowrap", state.receivingOpen ? "border-settle-receivable-edge/45 bg-settle-receivable-tint text-settle-receivable-text" : "border-transparent text-foreground hover:bg-card")}
             >
               Yes
             </button>
@@ -434,7 +434,7 @@ function Actions({ personName, line, state }: { personName: string; line: ShareL
               aria-label={`No, no new receipt from ${personName} for installment ${line.sequenceNumber}`}
               aria-pressed={pendingAnswer}
               disabled={state.receiptBusy || state.postponing || !owing}
-              className={cn(ACTION, pendingAnswer ? "border-border-strong bg-secondary text-foreground" : "border-border bg-card text-foreground hover:bg-secondary")}
+              className={cn(ACTION, "min-h-6 px-1.5 whitespace-nowrap", pendingAnswer ? "border-border-strong/75 bg-card text-foreground" : "border-transparent text-foreground hover:bg-card")}
               onClick={() => {
                 if (state.receivingOpen) state.onReceive(true);
                 setPendingAnswer(!pendingAnswer || keptPending);
@@ -454,13 +454,13 @@ function Actions({ personName, line, state }: { personName: string; line: ShareL
       <td role="cell" className="px-2 py-1.5">
         {state?.receivingOpen && <div ref={attachAmount} />}
         {owing && line && state && pendingAnswer && (
-          <div className="flex flex-col gap-1">
-            <span className="text-[11px] text-muted-foreground">₹0 received for this answer</span>
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <span className="text-[11px] leading-tight text-muted-foreground">₹0 received for this answer</span>
             {keptPending ? (
               <span role="status" className="text-xs text-muted-foreground">{state.quick.allowed ? "Kept pending" : "Existing postponement kept"}</span>
             ) : (
               <div className="flex flex-wrap gap-1.5">
-                <button type="button" disabled={state.postponing || state.receiptBusy} className={cn(ACTION, "border-border bg-card text-foreground")} onClick={() => { setKeptPending(true); setPostponeTarget(null); }}>
+                <button type="button" disabled={state.postponing || state.receiptBusy} className={cn(ACTION, "border-border-strong/70 bg-card text-foreground hover:bg-secondary/60")} onClick={() => { setKeptPending(true); setPostponeTarget(null); }}>
                   {state.quick.allowed ? "Keep pending" : "Keep as scheduled"}
                 </button>
                 <button
@@ -478,7 +478,7 @@ function Actions({ personName, line, state }: { personName: string; line: ShareL
                       : `Already expected in the ${cycleName(state.quick.cycle)} cycle. You can postpone again once that cycle starts.`
                   }
                   onClick={() => { if (state.quick.allowed) setPostponeTarget(state.quick.target.start.getTime()); }}
-                  className={cn(ACTION, "border-border-strong bg-card text-foreground hover:bg-secondary")}
+                  className={cn(ACTION, "border-settle-receivable-edge/40 bg-settle-receivable-tint/65 text-settle-receivable-text hover:bg-settle-receivable-tint")}
                 >
                   {state.postponing ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <CalendarClock className="size-3.5" aria-hidden />}
                   {!state.quick.allowed || state.postponementSaved ? "Postponed" : "Postpone"}
@@ -486,10 +486,13 @@ function Actions({ personName, line, state }: { personName: string; line: ShareL
               </div>
             )}
             {state.quick.allowed && !state.postponementSaved && postponeTarget === state.quick.target.start.getTime() && (
-              <div className="flex flex-wrap items-center gap-1.5 text-xs text-foreground">
-                <span className="basis-full">{formatCurrencyExact(line.remaining)} · {formatCycleLabel(state.quick.target)}</span>
-                <button type="button" disabled={state.timingLoading || state.postponing || state.receiptBusy} className={cn(ACTION, "border-border bg-secondary text-foreground")} onClick={state.onPostpone}>Confirm postponement</button>
-                <button type="button" disabled={state.postponing} onClick={() => setPostponeTarget(null)} className="min-h-7 px-1 text-muted-foreground">Cancel</button>
+              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1.5 rounded-[9px] border border-settle-receivable-edge/30 bg-settle-receivable-tint/60 p-2 text-xs">
+                <p className="flex basis-full flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                  <strong className="font-semibold text-foreground tabular-nums">{formatCurrencyExact(line.remaining)}</strong>
+                  <span className="text-[11px] text-settle-receivable-text">{formatCycleLabel(state.quick.target)}</span>
+                </p>
+                <button type="button" disabled={state.timingLoading || state.postponing || state.receiptBusy} className={cn(ACTION, "border-settle-receivable-edge/55 bg-settle-receivable-badge/70 text-settle-receivable-text hover:bg-settle-receivable-badge")} onClick={state.onPostpone}>Confirm postponement</button>
+                <button type="button" disabled={state.postponing} onClick={() => setPostponeTarget(null)} className={cn(ACTION, "border-transparent text-muted-foreground hover:text-foreground")}>Cancel</button>
               </div>
             )}
           </div>
@@ -517,7 +520,7 @@ function PersonRow({ participant: p, state, unfolded, postponedEarlier, onToggle
   // Several covered installments: this row only totals them; each has its own line and actions beneath.
   const total = p.covered ? p.covered.reduce((t, l) => ({ share: t.share + l.share, received: t.received + l.received, remaining: t.remaining + l.remaining }), { share: 0, received: 0, remaining: 0 }) : null;
   return (
-    <tr role="row" tabIndex={-1} className={cn(styles.row, "align-top")} data-testid={`share-row-${p.personId}`}>
+    <tr role="row" tabIndex={-1} className={cn(styles.row, "align-top", state?.receivingOpen && "bg-settle-receivable-tint/55")} data-testid={`share-row-${p.personId}`}>
       <th role="rowheader" scope="row" className="px-2 py-1.5 text-left font-semibold text-foreground">
         {p.personName}
         {p.carried.length > 0 && (
@@ -572,7 +575,7 @@ function PersonRow({ participant: p, state, unfolded, postponedEarlier, onToggle
 /** One installment's share — the same figures and actions, against its own People item. */
 function InstallmentRow({ personName, line, state, inPayment = false }: { personName: string; line: ShareLine; state: LineState; inPayment?: boolean }) {
   return (
-    <tr role="row" tabIndex={-1} className={cn(styles.row, "border-t border-border/70 bg-secondary/40 align-top")} data-testid={`earlier-row-${line.key}`}>
+    <tr role="row" tabIndex={-1} className={cn(styles.row, "border-t border-border/70 align-top", state.receivingOpen ? "bg-settle-receivable-tint/55" : "bg-secondary/25")} data-testid={`earlier-row-${line.key}`}>
       <th role="rowheader" scope="row" className="py-1.5 pr-2 pl-5 text-left font-medium text-foreground/80">
         #{line.sequenceNumber}
         <span className={cn(NOTE, "block text-muted-foreground")}>

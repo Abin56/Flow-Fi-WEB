@@ -2,11 +2,10 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownLeft, ArrowUpRight, BarChart3 } from "lucide-react";
-import { AnimatedNumber } from "@/components/foundation/animated-number";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DASH_LABEL, DashPanel, DashPanelHeader } from "@/features/dashboard/components/dash-ui";
 import { cashFlowWeekLabel } from "@/lib/engines/cycle-transaction-mapping";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrencyExact } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export interface CashFlowCardProps {
@@ -25,9 +24,12 @@ type Week = { label: string; net: number; in: number; out: number; cum: number; 
 const COMPACT = new Intl.NumberFormat("en-IN", { notation: "compact", maximumFractionDigits: 1 });
 const MONTH = new Intl.DateTimeFormat("en-IN", { month: "short" });
 
+function formatFlowAmount(amount: number) {
+  return formatCurrencyExact(Math.abs(amount) < 0.005 ? 0 : amount);
+}
+
 /**
- * `cashFlow` comes from `cashFlowThisMonth` (lib/engines/cash-flow.ts) via `useDashboardData`; the weekly split from
- * `weeklyCashFlowTotals` ("in" / "out" / "net" — one row set, so in − out is the week's net). The card only presents:
+ * The monthly summary and its weekly buckets come from `useDashboardData`. The card only presents:
  * a headline with the share of income kept, money-in / money-out tiles, and a mirrored chart — money in rising above
  * the line, money out falling below, the month's running net as a curve on the same scale, this week banded and
  * weeks still ahead as dashed slots.
@@ -38,13 +40,15 @@ export function CashFlowCard({ cashFlow, isLoading }: CashFlowCardProps) {
     const nowIdx = cashFlow.weeks.findIndex((w) => w.label === nowLabel);
     const out: Week[] = [];
     for (const [i, w] of cashFlow.weeks.entries()) {
-      const future = nowIdx >= 0 && i > nowIdx;
+      const moneyIn = w.moneyIn ?? Math.max(w.value, 0);
+      const moneyOut = w.moneyOut ?? Math.max(-w.value, 0);
+      const future = nowIdx >= 0 && i > nowIdx && moneyIn === 0 && moneyOut === 0;
       const prev = out.length ? out[out.length - 1].cum : 0;
       out.push({
         label: w.label,
         net: w.value,
-        in: w.moneyIn ?? Math.max(w.value, 0),
-        out: w.moneyOut ?? Math.max(-w.value, 0),
+        in: moneyIn,
+        out: moneyOut,
         cum: future ? prev : prev + w.value,
         current: i === nowIdx,
         future,
@@ -72,7 +76,7 @@ export function CashFlowCard({ cashFlow, isLoading }: CashFlowCardProps) {
               <p className={DASH_LABEL}>Net cash flow</p>
               <div className="mt-0.5 flex items-center gap-2">
                 <p className={cn("truncate text-[26px] leading-none font-bold tracking-tight tabular-nums", cashFlow.net < 0 ? "text-expense" : "text-foreground")}>
-                  <AnimatedNumber value={cashFlow.net} format={formatCurrency} />
+                  {formatFlowAmount(cashFlow.net)}
                 </p>
                 {keptPct != null && (
                   <span
@@ -135,7 +139,7 @@ function FlowTile({ icon: Icon, label, value, ink, note }: { icon: typeof ArrowD
         </span>
         {label}
       </p>
-      <p className="mt-0.5 text-[16px] leading-tight font-bold text-foreground tabular-nums">{formatCurrency(value)}</p>
+      <p className="mt-0.5 text-[16px] leading-tight font-bold text-foreground tabular-nums">{formatFlowAmount(value)}</p>
       <p className="truncate text-[10px] text-muted-foreground">{note}</p>
     </div>
   );
@@ -167,7 +171,13 @@ function MirrorChart({ weeks }: { weeks: Week[] }) {
     return () => cancelAnimationFrame(id);
   }, []);
 
-  const month = MONTH.format(new Date());
+  const now = new Date();
+  const month = MONTH.format(now);
+  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const weekDates = (label: string) => {
+    const [first, last] = label.split("-").map(Number);
+    return `${first}–${Math.min(last, lastDay)}`;
+  };
   const past = weeks.filter((w) => !w.future);
   const maxUp = Math.max(1, ...past.map((w) => Math.max(w.in, w.cum)));
   const maxDown = Math.max(0, ...past.map((w) => Math.max(w.out, -w.cum)));
@@ -177,13 +187,14 @@ function MirrorChart({ weeks }: { weeks: Week[] }) {
   const top = 30; // room for the legend row and the value labels above the bars
   const bottom = 34; // x labels
   const plotH = Math.max(h - top - bottom, 40);
-  // Split the height between up and down by magnitude, but keep at least 26% for "out" so it always reads.
-  const downShare = Math.min(Math.max(maxDown / (maxUp + maxDown || 1), 0.26), 0.5);
-  const base = top + plotH * (1 - downShare);
-  const upPx = (v: number) => (Math.max(v, 0) / maxUp) * (base - top);
-  // Leave 18px under the deepest "out" bar for its value label so it never runs into the x labels.
-  const downPx = (v: number) => (maxDown > 0 ? (Math.max(v, 0) / maxDown) * Math.max(top + plotH - base - 18, 8) : 0);
-  const yOf = (v: number) => (v >= 0 ? base - upPx(v) : base + downPx(-v));
+  // Reserve room for the outflow labels, then use one scale for both bars and the running net.
+  const valueHeight = plotH - 18;
+  const downShare = Math.min(Math.max(maxDown / (maxUp + maxDown), 0.26), 0.74);
+  const downHeight = valueHeight * downShare;
+  const upHeight = valueHeight - downHeight;
+  const base = top + upHeight;
+  const pixelsPerRupee = Math.min(upHeight / maxUp, maxDown > 0 ? downHeight / maxDown : Infinity);
+  const yOf = (v: number) => base - v * pixelsPerRupee;
 
   const colW = (w - padX * 2) / Math.max(weeks.length, 1);
   const cx = (i: number) => padX + colW * i + colW / 2;
@@ -199,14 +210,14 @@ function MirrorChart({ weeks }: { weeks: Week[] }) {
       <div className="absolute top-0 right-0 z-10 flex items-center gap-3 text-[10px] text-muted-foreground" aria-hidden>
         <Legend swatch={<span className="size-2 rounded-[2px] bg-success" />} label="In" />
         <Legend swatch={<span className="size-2 rounded-[2px] bg-expense" />} label="Out" />
-        <Legend swatch={<span className="h-[2px] w-3 rounded-full bg-primary-accent-text" />} label="Month so far" />
+        <Legend swatch={<span className="h-[2px] w-3 rounded-full bg-primary-accent-text" />} label="Running net" />
       </div>
 
       <div
         ref={wrapRef}
         className="absolute inset-0"
         role="img"
-        aria-label={`Weekly cash flow: ${weeks.map((wk) => (wk.future ? `days ${wk.label} ahead` : `days ${wk.label} in ${formatCurrency(wk.in)}, out ${formatCurrency(wk.out)}`)).join("; ")}`}
+        aria-label={`Weekly cash flow: ${weeks.map((wk) => (wk.future ? `days ${weekDates(wk.label)} ahead` : `days ${weekDates(wk.label)} in ${formatFlowAmount(wk.in)}, out ${formatFlowAmount(wk.out)}`)).join("; ")}`}
         onMouseLeave={() => setHover(null)}
       >
         {w > 0 && (
@@ -264,8 +275,8 @@ function MirrorChart({ weeks }: { weeks: Week[] }) {
                   </g>
                 );
               }
-              const upH = upPx(wk.in);
-              const dnH = downPx(wk.out);
+              const upH = wk.in * pixelsPerRupee;
+              const dnH = wk.out * pixelsPerRupee;
               const r = Math.min(barW / 2.6, 8);
               return (
                 <g key={wk.label} className="transition-opacity duration-200" opacity={dim ? 0.4 : 1}>
@@ -335,7 +346,7 @@ function MirrorChart({ weeks }: { weeks: Week[] }) {
                   fontWeight={wk.current ? 700 : 500}
                   fill={wk.current ? "var(--foreground)" : wk.future ? "color-mix(in srgb, var(--muted-foreground) 60%, transparent)" : "var(--muted-foreground)"}
                 >
-                  {`${month} ${wk.label.replace("-", "–")}`}
+                  {`${month} ${weekDates(wk.label)}`}
                 </text>
                 {wk.current && (
                   <text x={cx(i)} y={h - 3} textAnchor="middle" fontSize={9} fontWeight={700} letterSpacing="0.06em" fill="var(--primary-accent-text)">
@@ -358,18 +369,18 @@ function MirrorChart({ weeks }: { weeks: Week[] }) {
             style={{ left: Math.min(Math.max(cx(hover) - 75, 0), w - 150), top: 0 }}
           >
             <p className="mb-1.5 font-semibold text-foreground">
-              {month} {hw.label.replace("-", "–")}
+              {month} {weekDates(hw.label)}
               <span className="ml-1 font-normal text-muted-foreground">{hw.current ? "· this week" : hw.future ? "· ahead" : ""}</span>
             </p>
             {hw.future ? (
               <p className="text-muted-foreground">Not started yet</p>
             ) : (
               <div className="space-y-0.5">
-                <TipRow swatch="var(--success)" label="In" value={`+${formatCurrency(hw.in)}`} />
-                <TipRow swatch="var(--expense)" label="Out" value={`−${formatCurrency(hw.out)}`} />
+                <TipRow swatch="var(--success)" label="In" value={`+${formatFlowAmount(hw.in)}`} />
+                <TipRow swatch="var(--expense)" label="Out" value={`−${formatFlowAmount(hw.out)}`} />
                 <div className="my-1 border-t border-border/70" />
-                <TipRow label="Week net" value={`${hw.net > 0 ? "+" : ""}${formatCurrency(hw.net)}`} strong />
-                <TipRow swatch="var(--primary-accent-text)" label="Month so far" value={formatCurrency(hw.cum)} />
+                <TipRow label="Week net" value={`${hw.net >= 0.005 ? "+" : ""}${formatFlowAmount(hw.net)}`} strong />
+                <TipRow swatch="var(--primary-accent-text)" label="Running net" value={formatFlowAmount(hw.cum)} />
               </div>
             )}
           </div>

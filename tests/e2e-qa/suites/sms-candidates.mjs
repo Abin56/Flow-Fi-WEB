@@ -19,7 +19,7 @@ const nul = { nullValue: null };
 /** Writes one synthetic candidate document in Android's shape to the emulator. */
 async function putCandidate(
   uid,
-  { id, amount, merchant, accountId, daysAgo, minutesAgo, dateIso, direction = "debit", eventType = "upiPayment", rawLastFour = null, confidenceLevel = "high", needsReview = false, reasons = [] },
+  { id, amount, merchant, accountId, daysAgo, minutesAgo, dateIso, direction = "debit", eventType = "upiPayment", rawLastFour = null, confidenceLevel = "high", needsReview = false, reasons = [], originalMessage },
 ) {
   // The Inbox is browsed one day at a time. `minutesAgo` puts a row on yesterday (all on one day, so every row is on screen); `daysAgo` spreads rows over days.
   const when = dateIso ?? (minutesAgo != null ? sameDayIso(minutesAgo) : new Date(Date.now() - daysAgo * DAY).toISOString());
@@ -41,6 +41,7 @@ async function putCandidate(
     source: s("sms"),
     createdAt: { timestampValue: new Date().toISOString() },
     deletedAt: nul,
+    ...(originalMessage && { originalMessage: s(originalMessage) }),
   };
   const r = await fetch(`${FIRESTORE_DOCS}/users/${uid}/smsTransactionCandidates/${id}`, { method: "PATCH", headers: OWNER, body: JSON.stringify({ fields }) });
   if (!r.ok) throw new Error(`seed candidate ${id}: ${r.status} ${await r.text()}`);
@@ -102,6 +103,83 @@ async function qaBank() {
   const acc = await h.accountBalance("QA Bank");
   return acc;
 }
+
+scenario("sms-dismissed-recovery", "Dismissed suggestions persist across reload, restore to the inbox, and can be cleared on mobile", async ({ page }, check) => {
+  const uid = await h.authUid();
+  const bank = await qaBank();
+  const originalMessage = "Sent INR 475 to QA Bookshop from account XX4321.";
+  await putCandidate(uid, { id: "qa-recover", amount: 475, merchant: "QA Bookshop", accountId: bank.id, minutesAgo: 0, rawLastFour: "4321", originalMessage });
+  await openCandidates(page);
+  const row = page.locator('[data-candidate-id="qa-recover"]');
+  const dismissedButton = page.getByRole("button", { name: "Dismissed", exact: true });
+  const dismissed = page.getByRole("dialog", { name: "Dismissed candidates", exact: true });
+  const restore = dismissed.getByRole("button", { name: "Restore QA Bookshop" });
+
+  await row.getByTestId("candidate-dismiss").click();
+  await dismissedButton.click();
+  await restore.waitFor({ timeout: 20000 });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await dismissedButton.click();
+  await restore.waitFor();
+  const desktopPanel = await dismissed.boundingBox();
+  check("the desktop drawer is at most 480 pixels wide", desktopPanel !== null && desktopPanel.width <= 480);
+  await dismissed.getByRole("button", { name: "Show details for QA Bookshop" }).click();
+  check("the archived SMS and expiry are visible after reload", await dismissed.getByText(originalMessage, { exact: true }).isVisible() && await dismissed.getByText(/Expires /).isVisible());
+  await restore.click();
+  await dismissed.getByText("No dismissed candidates", { exact: true }).waitFor();
+  await dismissed.getByRole("button", { name: "Close", exact: true }).click();
+  await row.waitFor();
+  check("restore returns the suggestion to review", await row.isVisible());
+
+  const yesterday = sameDayIso(0);
+  const archived = await fetch(`${FIRESTORE_DOCS}/users/${uid}/dismissedSmsCandidates/qa-older`, {
+    method: "PATCH",
+    headers: OWNER,
+    body: JSON.stringify({ fields: {
+      dismissedAt: { timestampValue: yesterday },
+      expiresAt: { timestampValue: new Date(new Date(yesterday).getTime() + 30 * DAY).toISOString() },
+      candidate: { mapValue: { fields: {
+        amount: n(45.25), direction: s("credit"), merchant: s("QA Grocer"), bankName: s("QA Bank"),
+        transactionDate: { timestampValue: yesterday }, createdAt: { timestampValue: yesterday },
+      } } },
+    } }),
+  });
+  if (!archived.ok) throw new Error(`seed dismissed candidate: ${archived.status}`);
+
+  await page.setViewportSize({ width: 375, height: 760 });
+  await row.getByTestId("candidate-dismiss").click();
+  await dismissedButton.click();
+  await restore.waitFor({ timeout: 20000 });
+  const panel = await dismissed.boundingBox();
+  check("the mobile drawer fits the viewport", panel !== null && panel.x >= 0 && panel.x + panel.width <= 375);
+  const compactRow = await dismissed.getByRole("listitem").filter({ has: page.getByRole("button", { name: "Restore QA Bookshop" }) }).boundingBox();
+  check("collapsed rows fit in 48 pixels on mobile", compactRow !== null && compactRow.height <= 48);
+  check("dismissals are grouped by day newest first", (await dismissed.getByRole("heading", { level: 3 }).allTextContents()).map((heading) => heading.match(/Today|Yesterday/)?.[0]).join(",") === "Today,Yesterday");
+  const search = dismissed.getByRole("searchbox", { name: "Search dismissed candidates" });
+  const older = dismissed.getByRole("button", { name: "Restore QA Grocer" });
+  await search.fill("account XX4321");
+  check("search matches the original SMS and filters the groups", await restore.isVisible() && await older.count() === 0 && await dismissed.getByText("1 of 2 shown").isVisible());
+  await dismissed.getByRole("button", { name: "Clear search" }).click();
+  await dismissed.getByRole("button", { name: "Amount", exact: true }).click();
+  await dismissed.getByRole("spinbutton", { name: "Min amount (₹)" }).fill("40.50");
+  await dismissed.getByRole("spinbutton", { name: "Max amount (₹)" }).fill("50.25");
+  check("decimal amount limits filter both credits and debits by magnitude", await older.isVisible() && await restore.count() === 0);
+  await dismissed.getByRole("spinbutton", { name: "Max amount (₹)" }).fill("30");
+  check("an inverted range shows an error", await dismissed.getByText("Minimum must be less than or equal to maximum.").isVisible());
+  await dismissed.getByRole("button", { name: "Reset filters" }).click();
+  await restore.waitFor();
+  await search.fill("QA Bookshop");
+  await dismissed.getByRole("button", { name: "Clear all" }).click();
+  const confirm = page.getByRole("dialog", { name: "Clear dismissed candidates?" });
+  check("Clear all confirms every candidate, including filtered rows", await confirm.getByText(/all 2 dismissed candidates/).isVisible());
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await restore.waitFor();
+  check("cancel keeps the candidate in Dismissed", await restore.isVisible());
+  await dismissed.getByRole("button", { name: "Clear all" }).click();
+  await confirm.getByRole("button", { name: "Clear all" }).click();
+  await dismissed.getByText("No dismissed candidates", { exact: true }).waitFor();
+  check("clear empties the list without restoring the suggestion", await row.count() === 0);
+});
 
 scenario("sms-1-loading", "Initial loading skeleton, then rows (no empty-state flash); then a genuinely empty inbox", async ({ page }, check) => {
   const uid = await h.authUid();

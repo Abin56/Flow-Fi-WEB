@@ -4,16 +4,16 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { formatCurrency } from "@/lib/format";
 
 const UTILITY =
-  "flex h-9 items-center gap-1.5 rounded-[6px] px-2.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent [&_svg]:text-muted-foreground";
+  "flex h-8 items-center gap-1 rounded-md px-2 text-xs font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent [&_svg]:text-muted-foreground";
 const SOON = "rounded-[4px] bg-secondary px-1 py-px text-[10px] font-semibold tracking-wide text-muted-foreground uppercase";
 
 /** Title, the (not yet built) Refresh / Groups utilities — marked as such — and the primary Add Account. */
 export function AccountsHeader({ onAdd, titleRef }: { onAdd?: () => void; /** Callback ref on the title block — what the compact bar watches. */ titleRef?: (el: HTMLDivElement | null) => void }) {
   return (
-    <header className="flex flex-wrap items-start justify-between gap-3">
+    <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
       <div ref={titleRef} className="min-w-0">
-        <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">Accounts</h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">Your banks, cards, wallets and cash — balances in one place.</p>
+        <h1 className="font-heading text-[22px] leading-tight font-bold tracking-tight text-foreground">Accounts</h1>
+        <p className="mt-0.5 text-xs text-muted-foreground">Your banks, cards, wallets and cash — balances in one place.</p>
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
@@ -33,7 +33,7 @@ export function AccountsHeader({ onAdd, titleRef }: { onAdd?: () => void; /** Ca
             <button
               type="button"
               onClick={onAdd}
-              className="flex h-9 items-center gap-1.5 rounded-[6px] border border-primary-accent-text bg-primary px-3.5 text-sm font-semibold text-primary-foreground outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring"
+              className="flex h-8 items-center gap-1.5 rounded-md border border-primary-accent-text bg-primary px-2.5 text-xs font-semibold text-primary-foreground outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring"
             >
               <Plus className="size-4" strokeWidth={2.25} />
               Add Account

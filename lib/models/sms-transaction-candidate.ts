@@ -3,12 +3,12 @@
  * `Finance_App/lib/features/sms_inbox/domain/sms_transaction_candidate_cloud.dart`
  * (`SmsTransactionCandidateCloud`). Field names and Firestore document shape
  * must stay byte-identical to the Flutter app's model — this collection is
- * written entirely by Android; the web app only reads it and deletes
- * documents once their candidate has been successfully imported.
+ * populated by Android. The web app reads and removes candidates and can
+ * restore an exact copy of a dismissed document during its recovery window.
  *
  * IMPORTANT — do not add fields here that aren't in the Dart source, and do
- * not write anything back to this document from the web app except a full
- * delete. `SmsCandidateCloudSync.sync()` (Android) does a full-document
+ * not partially update this document from the web app.
+ * `SmsCandidateCloudSync.sync()` (Android) does a full-document
  * `.set()` overwrite (`FirestoreCrudRepository.add`), not a merge, every time
  * the user opens the SMS Inbox screen while the source SMS is still locally
  * pending — any extra field the web app wrote would simply be clobbered on
@@ -207,10 +207,12 @@ const VALID_DIRECTIONS: SmsCandidateDirection[] = ["debit", "credit"];
 
 export function smsTransactionCandidateFromFirestore(
   snapshot: QueryDocumentSnapshot<DocumentData>,
-  _options?: SnapshotOptions,
+  options?: SnapshotOptions,
 ): SmsTransactionCandidate {
-  const data = snapshot.data();
+  return smsTransactionCandidateFromData(snapshot.id, snapshot.data(options));
+}
 
+export function smsTransactionCandidateFromData(id: string, data: DocumentData): SmsTransactionCandidate {
   // Mirrors `SmsTransactionCandidateCloud.fromFirestore`'s own guard
   // (`sms_transaction_candidate_cloud.dart`): every other field has a safe,
   // conservative fallback (unknown/low/needsReview=true), but a wrong guess
@@ -220,11 +222,11 @@ export function smsTransactionCandidateFromFirestore(
   // rather than defaulting to "debit".
   const direction = data.direction as SmsCandidateDirection | undefined;
   if (!direction || !VALID_DIRECTIONS.includes(direction)) {
-    throw new Error(`smsTransactionCandidates/${snapshot.id} has no valid direction`);
+    throw new Error(`smsTransactionCandidates/${id} has no valid direction`);
   }
 
   return {
-    id: snapshot.id,
+    id,
     amount: (data.amount as number) ?? 0,
     direction,
     eventType: parseEventType(data.eventType),

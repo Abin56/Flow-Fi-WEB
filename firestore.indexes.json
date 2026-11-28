@@ -27,6 +27,17 @@
   ],
   "fieldOverrides": [
     {
+      "collectionGroup": "dismissedSmsCandidates",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "dismissedSmsCandidates",
+      "fieldPath": "candidate",
+      "indexes": []
+    },
+    {
       "collectionGroup": "statements",
       "fieldPath": "deletedAt",
       "indexes": [

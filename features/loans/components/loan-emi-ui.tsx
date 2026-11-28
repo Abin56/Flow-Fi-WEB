@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarClock, Check, ChevronDown, Landmark, Loader2, ShoppingBag, Users, X, type LucideIcon } from "lucide-react";
+import { CalendarClock, Check, ChevronDown, ChevronRight, Landmark, Loader2, ShoppingBag, Users, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ClayButton } from "@/components/clay/clay-button";
 import { OperationProgressView } from "@/components/feedback/operation-progress";
@@ -328,22 +328,22 @@ export function DebtCard({
         }}
         className={cn(
           LE_RADIUS.card,
-          "@container flex cursor-pointer flex-col gap-2.5 border border-border bg-card p-3.5 shadow-e1 outline-none",
+          "flex min-w-0 cursor-pointer flex-col gap-2 border border-border bg-card px-3 py-2.5 shadow-e1 outline-none",
           "transition-[border-color,box-shadow] duration-150 ease-out hover:border-border-strong hover:shadow-e2",
           "focus-visible:border-primary-accent-text focus-visible:ring-2 focus-visible:ring-ring",
           muted && "bg-secondary",
         )}
       >
         {/* Header — name and status, with the record type and source beneath. */}
-        <div className="flex items-start gap-2.5">
-          <span className={cn(LE_RADIUS.control, "flex size-8 shrink-0 items-center justify-center border border-border bg-secondary text-foreground")}>
-            <Icon className="size-4" strokeWidth={1.75} />
+        <div className="flex items-start gap-2">
+          <span className={cn(LE_RADIUS.control, "flex size-7 shrink-0 items-center justify-center bg-secondary text-muted-foreground")}>
+            <Icon aria-hidden className="size-3.5" strokeWidth={1.75} />
           </span>
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <div className="flex min-w-0 items-center gap-1.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
               <h3
                 title={name}
-                className={cn("min-w-0 flex-1 truncate font-heading text-[15px] leading-tight font-semibold", muted ? "text-muted-foreground" : "text-foreground")}
+                className={cn("min-w-0 flex-1 basis-24 truncate font-heading text-sm leading-tight font-semibold", muted ? "text-muted-foreground" : "text-foreground")}
               >
                 {name}
               </h3>
@@ -388,11 +388,12 @@ export function DebtCard({
               )}
             </p>
           </div>
+          <ChevronRight aria-hidden className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.75} />
         </div>
 
         {/* People Ledger assignments and linked records, next to the agreement name. */}
         {links.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5 border-b border-border pb-2">
+          <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
             {people.length > 0 && (
               <span className="mr-0.5 text-xs font-medium text-muted-foreground">
                 {people.length > 1 ? "Split between" : people[0].person!.role}
@@ -405,20 +406,20 @@ export function DebtCard({
                   key={label}
                   title={label}
                   className={cn(
-                    "inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border py-0.5 pr-2 pl-0.5 text-xs",
+                    "inline-flex max-w-full min-w-0 items-center gap-1 rounded-full border pr-1.5 pl-0.5 text-xs leading-[18px]",
                     isYou ? "border-border bg-secondary text-muted-foreground" : "border-success/40 bg-success/10 text-foreground",
                   )}
                 >
                   <span
                     aria-hidden
                     className={cn(
-                      "flex size-[18px] shrink-0 items-center justify-center rounded-full text-[10px] font-bold uppercase",
+                      "flex size-3.5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold uppercase",
                       isYou ? "bg-border text-foreground" : "bg-success text-white",
                     )}
                   >
                     {person!.name.trim().charAt(0) || "?"}
                   </span>
-                  <span className="max-w-[9rem] truncate font-semibold uppercase">{person!.name}</span>
+                  <span className="max-w-36 truncate font-medium">{person!.name}</span>
                   {person!.amount && <span className={cn("shrink-0 font-semibold tabular-nums", !isYou && "text-success")}>{person!.amount}</span>}
                 </span>
               );
@@ -427,7 +428,7 @@ export function DebtCard({
               <span
                 key={label}
                 title={label}
-                className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-full border border-border bg-secondary px-2 py-0.5 text-xs font-medium text-foreground"
+                className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-full border border-border bg-secondary px-1.5 text-xs leading-[18px] font-medium text-foreground"
               >
                 <LinkIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" strokeWidth={1.75} />
                 <span className="truncate">{label}</span>
@@ -437,29 +438,29 @@ export function DebtCard({
         )}
 
         {/* Primary metrics — two columns split by a hairline. Amount and its secondary fact share a line, wrapping only when narrow. */}
-        <dl className={cn("grid gap-x-3.5", hasNext ? "grid-cols-2" : "grid-cols-1")}>
+        <dl className={cn("grid gap-x-2.5 border-t border-border pt-1.5", hasNext ? "grid-cols-2" : "grid-cols-1")}>
           <div className="flex min-w-0 flex-col gap-0.5">
             <dt>
               <MetricLabel>{outstandingLabel}</MetricLabel>
             </dt>
-            <dd className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-              <Money amount={outstanding} className={cn("text-xl leading-tight", muted ? "text-muted-foreground" : "text-foreground")} />
+            <dd className="min-w-0 text-xs leading-snug">
+              <Money amount={outstanding} className={cn("block text-lg leading-tight", muted ? "text-muted-foreground" : "text-foreground")} />
               {hasTotal && (
-                <span className="text-xs whitespace-nowrap text-muted-foreground">
+                <span className="text-muted-foreground">
                   {totalLabel} <span className="font-semibold text-foreground tabular-nums">{formatCurrency(totalAmount!)}</span>
                 </span>
               )}
             </dd>
           </div>
           {hasNext && (
-            <div className="flex min-w-0 flex-col gap-0.5 border-l border-border pl-3.5">
+            <div className="flex min-w-0 flex-col gap-0.5 border-l border-border pl-2.5">
               <dt>
                 <MetricLabel className={cn(late && "text-expense")}>{cadence ? "Next EMI" : "Next payment"}</MetricLabel>
               </dt>
-              <dd className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <Money amount={nextAmount!} className={cn("text-xl leading-tight", late ? "text-expense" : "text-foreground")} />
+              <dd className="min-w-0 text-xs leading-snug">
+                <Money amount={nextAmount!} className={cn("block text-lg leading-tight", late ? "text-expense" : "text-foreground")} />
                 {/* Date, then how near it is — same line when it fits. */}
-                <span className="flex min-w-0 flex-wrap items-center gap-x-1 text-xs">
+                <span className="flex min-w-0 flex-wrap items-center gap-x-1">
                   <span className="flex items-center gap-1">
                     <CalendarClock aria-hidden className={cn("size-3 shrink-0", late ? "text-expense" : "text-muted-foreground")} strokeWidth={1.75} />
                     <span className={cn("font-semibold whitespace-nowrap", late ? "text-expense" : "text-foreground")}>{formatDueDate(nextDate!)}</span>
@@ -477,7 +478,7 @@ export function DebtCard({
                   )}
                 </span>
                 {hasNext && ownership?.myShare != null && (
-                  <span className="text-xs whitespace-nowrap text-muted-foreground">
+                  <span className="block text-muted-foreground">
                     My share <span className="font-semibold text-foreground tabular-nums">{formatCurrency(ownership.myShare)}</span>
                   </span>
                 )}
@@ -488,10 +489,10 @@ export function DebtCard({
 
         {/* Installment completion — one line: label, bar, count. A count of installments, deliberately not a share of principal repaid. */}
         {total > 1 && (
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-t border-border pt-1.5 text-xs leading-tight">
             <span className="font-medium text-muted-foreground">Installments paid</span>
             <div
-              className="flex h-1.5 min-w-16 flex-1 overflow-hidden rounded-full bg-border"
+              className="flex h-1 min-w-6 flex-1 overflow-hidden rounded-full bg-border"
               role="progressbar"
               aria-valuemin={0}
               aria-valuemax={total}

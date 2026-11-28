@@ -31,6 +31,7 @@
  */
 
 import { accountPaletteFor } from "@/features/accounts/lib/account-colors";
+import { useDashboardSnapshotStates, type DashboardPanelState } from "@/features/dashboard/hooks/use-dashboard-snapshots-pending";
 import { useSavingsPosition } from "@/features/savings/hooks/use-savings-data";
 import { goalAttention } from "@/lib/engines/savings-goals";
 import { formatCurrency } from "@/lib/format";
@@ -64,12 +65,11 @@ import { useExpenses } from "@/hooks/use-expenses";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import { useMySpendContext } from "@/hooks/use-my-spend-context";
 import { useLenderCharges } from "@/hooks/use-lender-charges";
-import { useSpendTransactions, withBuiltInChargeCategory } from "@/hooks/use-lender-charge-spend";
-import { lenderChargeNetWorthEvents } from "@/lib/engines/lender-charge-accounting";
+import { withBuiltInChargeCategory } from "@/hooks/use-lender-charge-spend";
+import { lenderChargeNetWorthEvents, withLenderChargeBilling } from "@/lib/engines/lender-charge-accounting";
 import { netWorthAtCutoffs } from "@/lib/engines/net-worth-trend";
 import { myConsumptionAmount } from "@/lib/engines/my-spend";
 
-import { CASH_FLOW_WEEK_LABELS, weeklyCashFlowTotals } from "@/lib/engines/cycle-transaction-mapping";
 import { compareTransactionsNewestFirst, effectiveMonth, signedAmount, type Transaction } from "@/lib/models/transaction";
 import { cardBillsForCard } from "@/lib/engines/card-cycle-bills";
 
@@ -115,6 +115,7 @@ export interface DashboardNeedsAttentionItem {
 }
 
 export function useDashboardData() {
+  const snapshots = useDashboardSnapshotStates();
   const { data: accounts = [], isLoading: accountsLoading } = useAccounts();
   const { data: transactions = [], isLoading: transactionsLoading } = useTransactions();
   // Bills come from the stored billing cycles (every outstanding cycle, an older one reopened by a cancel included) —
@@ -126,33 +127,22 @@ export function useDashboardData() {
   const { isLoading: sharedLimitsLoading } = useSharedCreditLimits();
   const { data: statements = [], isLoading: statementsLoading } = useAllCreditCardStatements();
   const { isLoading: emisLoading } = useEmis();
+  const { data: dashboardLoans = [], isLoading: loansLoading } = useLoans();
   const { isLoading: emiBreakdownsLoading } = useAllEmiPaymentBreakdowns();
-  const { isLoading: cardEmisLoading } = useCardUtilizationEmis();
+  const { isLoading: cardEmisLoading, isPlaceholderData: cardEmisPlaceholder } = useCardUtilizationEmis();
   const { standings: cardStandings, isLoading: cardStandingsLoading } = useCreditCardStandings();
 
   // Net Worth adds loan principal to account balances (Decision 6 — see `netWorthWithLoans`).
-  const { netWorth: netWorthAmount, sheet: balanceSheet, peoplePayable, peopleAdvanceHeld, peopleReceivable, assignedReceivable, emiDueReceivable, assignedDebt, unpaidLenderCharges, isLoading: balanceSheetLoading } = useLoanBalanceSheet();
+  const { netWorth: netWorthAmount, sheet: balanceSheet, peoplePayable, peopleAdvanceHeld, peopleReceivable, assignedReceivable, emiDueReceivable, assignedDebt, unpaidLenderCharges, isLoading: balanceSheetLoading, lenderChargesLoading: balanceSheetChargesLoading } = useLoanBalanceSheet();
   // Billed lender charges: dated Net Worth events for the trend, and one-time expenses on their billed date for spend.
-  const { charges: lenderCharges } = useLenderCharges();
+  const { charges: lenderCharges, isLoading: lenderChargesLoading } = useLenderCharges();
   const lenderChargeEvents = useMemo(() => lenderChargeNetWorthEvents(lenderCharges), [lenderCharges]);
-  const spendTransactions = useSpendTransactions(transactions as Transaction[]);
+  const spendTransactions = useMemo(() => withLenderChargeBilling(transactions as Transaction[], lenderCharges), [transactions, lenderCharges]);
   const spendCategories = useMemo(() => withBuiltInChargeCategory(categories as Category[], spendTransactions), [categories, spendTransactions]);
   const cashFlowSummary = useCashFlowThisMonth();
 
-  const isLoading =
-    accountsLoading ||
-    transactionsLoading ||
-    billsLoading ||
-    categoriesLoading ||
-    expensesLoading ||
-    creditCardsLoading ||
-    sharedLimitsLoading ||
-    statementsLoading ||
-    emisLoading ||
-    emiBreakdownsLoading ||
-    cardEmisLoading ||
-    cardStandingsLoading ||
-    balanceSheetLoading;
+  const withLoading = (state: DashboardPanelState, loading: boolean): DashboardPanelState => state === "ready" && loading ? "loading" : state;
+  const creditLoading = sharedLimitsLoading || statementsLoading || emiBreakdownsLoading || cardEmisLoading || cardEmisPlaceholder || cardStandingsLoading;
 
   const now = useMemo(() => new Date(), []);
 
@@ -211,26 +201,12 @@ export function useDashboardData() {
   }, [netWorthAmount, balanceSheet, peoplePayable, peopleAdvanceHeld, peopleReceivable, assignedReceivable, emiDueReceivable, assignedDebt, unpaidLenderCharges, lenderChargeEvents, accounts, creditCards, transactions, now]);
 
   // --- Cash Flow (lib/engines/cash-flow.ts:cashFlowThisMonth via useCashFlowThisMonth) ---
-  const cashFlow = useMemo(() => {
-    // Same "does this row count" rule and cash boundary as `cashFlowThisMonth` — see `weeklyCashFlowTotals`.
-    const cardAccountIds = new Set((creditCards as CreditCardProfile[]).map((c) => c.accountId));
-    const weekTotals = weeklyCashFlowTotals(transactions as Transaction[], cardAccountIds, now, "net");
-    // Money in / out per week: the same rows as `net`, split by sign — so in − out is exactly the week's net.
-    const weekIn = weeklyCashFlowTotals(transactions as Transaction[], cardAccountIds, now, "in");
-    const weekOut = weeklyCashFlowTotals(transactions as Transaction[], cardAccountIds, now, "out");
-    const weeks = CASH_FLOW_WEEK_LABELS.map((label) => ({
-      label,
-      value: weekTotals.get(label) ?? 0,
-      moneyIn: weekIn.get(label) ?? 0,
-      moneyOut: weekOut.get(label) ?? 0,
-    }));
-    return {
-      income: cashFlowSummary.moneyIn,
-      expenses: cashFlowSummary.moneyOut,
-      net: cashFlowSummary.net,
-      weeks,
-    };
-  }, [transactions, creditCards, now, cashFlowSummary]);
+  const cashFlow = {
+    income: cashFlowSummary.moneyIn,
+    expenses: cashFlowSummary.moneyOut,
+    net: cashFlowSummary.net,
+    weeks: cashFlowSummary.weeks,
+  };
 
   // --- Accounts Overview (direct Account field reads + calculateNetWorth) ---
   const accountsOverview = useMemo(() => {
@@ -302,7 +278,6 @@ export function useDashboardData() {
         .slice(0, 5),
     [transactions],
   );
-  const { data: dashboardLoans = [] } = useLoans();
   // Structured "already paid earlier" flag of the payment each recent Loan transaction settled (see historical-payment.ts).
   const isHistoricalPayment = useHistoricalPaymentFlags(recentRaw, dashboardLoans);
   const recentTransactions = useMemo(() => {
@@ -421,7 +396,7 @@ export function useDashboardData() {
   // --- Needs Your Attention (bill alerts only — see gap note above): the overdue total and the next upcoming bill ---
   // Savings: at most one goal that needs a nudge (overdue / due soon / behind pace / nearly there), read from the same
   // derived position the Savings page shows, so the two can never disagree.
-  const { position: savingsPosition } = useSavingsPosition();
+  const { position: savingsPosition, isLoading: savingsLoading } = useSavingsPosition();
   const needsAttention = useMemo(() => {
     const items = dashboardBillAttention(billItems, outstandingBills, now, formatLongDate) as DashboardNeedsAttentionItem[];
     const goal = goalAttention(savingsPosition);
@@ -440,7 +415,16 @@ export function useDashboardData() {
   }, [billItems, outstandingBills, now, savingsPosition]);
 
   return {
-    isLoading,
+    panelStates: {
+      netWorth: withLoading(snapshots.netWorth, accountsLoading || balanceSheetLoading || creditLoading || balanceSheetChargesLoading || lenderChargesLoading),
+      cashFlow: withLoading(snapshots.cashFlow, transactionsLoading || creditCardsLoading || expensesLoading || cashFlowSummary.isLoading),
+      attention: withLoading(snapshots.attention, billsLoading || savingsLoading),
+      recent: withLoading(snapshots.recent, transactionsLoading || categoriesLoading || loansLoading),
+      upcoming: withLoading(snapshots.upcoming, billsLoading || creditCardsLoading || statementsLoading),
+      accounts: withLoading(snapshots.accounts, accountsLoading || creditCardsLoading),
+      expenses: withLoading(snapshots.expenses, transactionsLoading || categoriesLoading || expensesLoading || loansLoading || emisLoading || lenderChargesLoading),
+      credit: withLoading(snapshots.credit, creditLoading),
+    },
     netWorth,
     cashFlow,
     accountsOverview,

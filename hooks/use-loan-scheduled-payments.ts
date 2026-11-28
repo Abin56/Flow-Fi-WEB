@@ -21,7 +21,7 @@ import { useAllLoanInstallments, useLoans } from "./use-loans";
 import { useTransactions } from "./use-transactions";
 import { paymentRowsKey } from "@/lib/engines/payment-rows-key";
 
-export function useLoanScheduledPayments(): { payments: LoanScheduledPayment[]; isLoading: boolean } {
+export function useLoanScheduledPayments(): { payments: LoanScheduledPayment[]; isLoading: boolean; isPlaceholderData: boolean } {
   const uid = useAuthStore((s) => s.user?.uid);
   const { data: loans = [] } = useLoans();
   const { data: installments = [] } = useAllLoanInstallments();
@@ -79,5 +79,5 @@ export function useLoanScheduledPayments(): { payments: LoanScheduledPayment[]; 
     },
   });
 
-  return { payments: paid.length === 0 ? [] : (query.data ?? []), isLoading: paid.length > 0 && query.isLoading };
+  return { payments: paid.length === 0 ? [] : (query.data ?? []), isLoading: paid.length > 0 && query.isLoading, isPlaceholderData: paid.length > 0 && query.isPlaceholderData };
 }

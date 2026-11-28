@@ -191,6 +191,14 @@ export function isPersonFunded(transaction: Pick<Transaction, "fundedByPersonId"
   return transaction.fundedByPersonId != null;
 }
 
+export type LoanOrPeopleTransactionFields = Partial<Pick<Transaction, "loanId" | "emiId" | "earlierPaymentLink" | "isPersonLedgerMovement" | "fundedByPersonId">>;
+
+/** Structured links to a loan, installment or People ledger movement. A person tag alone is unrelated. */
+export function isLoanOrPeopleTransaction(transaction: LoanOrPeopleTransactionFields): boolean {
+  return transaction.loanId != null || transaction.emiId != null || transaction.earlierPaymentLink != null ||
+    transaction.isPersonLedgerMovement === true || isPersonFunded(transaction);
+}
+
 /** Whether this transaction has an account cash leg at all — false only for a person-funded expense. */
 export function hasAccountLeg(transaction: Pick<Transaction, "fundedByPersonId" | "accountId">): boolean {
   return !isPersonFunded(transaction) && transaction.accountId !== PERSON_FUNDED_ACCOUNT_ID;

@@ -70,6 +70,7 @@ export const FirestoreCollections = {
   // document id as the candidate it replaces. Web-written only; immutable
   // once created (firestore.rules denies update outright).
   smsCandidateTombstones: "smsCandidateTombstones",
+  dismissedSmsCandidates: "dismissedSmsCandidates",
 
   // Operator-written runtime switch for Android background SMS upload (the
   // `backgroundUpload` document). Clients may only READ it (firestore.rules);

@@ -10,14 +10,18 @@
  * NOW, and the row preview says so whenever the row is from another day.
  */
 
-import { ArrowUpRight, ChevronDown, ChevronLeft, ChevronRight, CreditCard, Filter } from "lucide-react";
+import { ArrowUpRight, ChevronDown, CreditCard, Filter, Search, Wallet } from "lucide-react";
 import Link from "next/link";
 import { HoverCard as HoverCardPrimitive } from "radix-ui";
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
-import { AccountMark, accountKind, groupAccountsByKind, type AccountKind } from "@/components/finance/account-label";
+import { useRef, useState, type ReactNode } from "react";
+import { accountLast4 } from "@/components/finance/account-chip";
+import { AccountMark, AccountPickerMark, accountKind, groupAccountsByKind, type AccountKind } from "@/components/finance/account-label";
+import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { CreditCardStandingView } from "@/features/credit-cards/hooks/use-credit-cards-data";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatCurrencyExact } from "@/lib/format";
 import type { Account } from "@/lib/models/account";
 import { cn } from "@/lib/utils";
 
@@ -33,6 +37,8 @@ export type AccountBalanceView =
       sharedLimitName: string | null;
       /** Credit Cards deep link id (`?card=`). */
       cardId: string;
+      lastFourDigits: string | null;
+      loading: boolean;
     }
   /** A credit card whose standing isn't available (no profile / still loading): owed from its stored balance, as the Accounts page shows it. */
   | { kind: "creditFallback"; outstanding: number; loading: boolean }
@@ -48,8 +54,10 @@ export function accountBalanceViewFor(account: Account, standingByAccountId: Rea
       limit: standing.effectiveCreditLimit,
       utilizationPercent: standing.utilizationPercent,
       lockedEmiPrincipal: standing.lockedEmiPrincipal,
-      sharedLimitName: standing.sharedLimit?.name ?? null,
+      sharedLimitName: standing.sharedLimit?.name.trim() ?? null,
       cardId: standing.card.id,
+      lastFourDigits: standing.card.lastFourDigits,
+      loading: standingsLoading,
     };
   }
   if (accountKind(account) === "credit") return { kind: "creditFallback", outstanding: Math.max(0, -account.currentBalance), loading: standingsLoading };
@@ -63,8 +71,6 @@ const signed = (n: number) => (n < 0 ? `−${formatCurrency(Math.abs(n))}` : for
 /** The last four digits only when the account's own name doesn't already carry them (e.g. a card named "SBI •••• 0282"). */
 const needsLast4 = (a: Account) => !!a.accountNumberLast4 && !a.name.includes(a.accountNumberLast4);
 const accountTitle = (a: Account) => (needsLast4(a) ? `${a.name} •••• ${a.accountNumberLast4}` : a.name);
-/** Short chip label: the name without a trailing "Savings Account"-style suffix; the full name stays in the tooltip. */
-const shortName = (a: Account) => a.name.replace(/\s+(savings|current|salary)?\s*account$/i, "").trim() || a.name;
 function accountTypeText(a: Account): string {
   if (a.type === "card") return KIND_LABEL[accountKind(a)];
   return `${a.type[0].toUpperCase()}${a.type.slice(1)} account`;
@@ -114,7 +120,7 @@ export function AccountFilterMenu({
       <DropdownMenuTrigger asChild>
         <button type="button" className={cn(triggerClassName, active && activeTriggerClassName)}>
           <span className={cn(active && "text-muted-foreground")}>Account</span>
-          {active && <AccountMark account={active} size={18} />}
+          {active && <AccountPickerMark account={active} size={18} />}
           {active && <span className="max-w-32 truncate font-semibold">{accountTitle(active)}</span>}
           <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={2} />
         </button>
@@ -127,18 +133,13 @@ export function AccountFilterMenu({
         {groups.map((g) => (
           <div key={g.kind}>
             <DropdownMenuSeparator />
-            <DropdownMenuLabel
-              className={cn(
-                "flex items-center gap-1.5 px-2 pt-1.5 pb-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase",
-                g.kind === "credit" && "text-violet-700 dark:text-violet-300",
-              )}
-            >
+            <DropdownMenuLabel className="flex items-center gap-1.5 px-2 pt-1.5 pb-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
               {g.kind === "credit" && <CreditCard className="size-3" strokeWidth={2.4} />}
               {KIND_HEADING[g.kind]}
             </DropdownMenuLabel>
             {g.accounts.map((a) => (
               <DropdownMenuItem key={a.id} onSelect={() => onChange(a.id)} className={cn("gap-2.5 py-1.5", a.id === value && "bg-primary/15 font-semibold")}>
-                <AccountMark account={a} size={20} />
+                <AccountPickerMark account={a} />
                 <span className="min-w-0 flex-1 truncate">{accountTitle(a)}</span>
                 <OptionBalance view={balanceFor(a)} />
               </DropdownMenuItem>
@@ -169,70 +170,21 @@ function OptionBalance({ view }: { view: AccountBalanceView }) {
         {formatCurrency(view.outstanding)} <span className="font-normal text-muted-foreground">owed</span>
       </span>
       <span className={cn("text-[10px] font-normal tabular-nums", view.available < 0 ? "text-expense" : "text-muted-foreground")}>
-        {view.available < 0 ? `Over limit ${formatCurrency(-view.available)}` : `${formatCurrency(view.available)} available`}
+        {view.available < 0 ? `Over limit ${formatCurrency(-view.available)}` : `${formatCurrency(view.available)} ${view.sharedLimitName != null ? "shared available credit" : "available credit"}`}
       </span>
     </span>
   );
 }
 
-/* ───────────────────────── Selected account: one inline balance line ───────────────────────── */
-
-/**
- * When the list is filtered to one account, its balance sits on the filter-chip line (right side) — the place the
- * eye already goes to see what's filtered. One quiet line, not another card.
- */
-export function SelectedAccountBalance({ account, view }: { account: Account; view: AccountBalanceView }) {
+export function SelectedAccountLink({ account, view }: { account: Account; view: AccountBalanceView }) {
   return (
-    <div
-      className="ml-auto flex min-w-0 items-center gap-3 text-xs animate-in fade-in-0 slide-in-from-right-1 duration-300 motion-reduce:animate-none"
-      data-testid="selected-account-balance"
-      title="Balance as of now — not affected by the date or other filters"
+    <Link
+      href={openHrefFor(account, view)}
+      aria-label={`Open ${accountTitle(account)}`}
+      className="ml-auto inline-flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/15"
     >
-      <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-        <AccountMark account={account} size={16} />
-        <span className="truncate">{accountTitle(account)}</span>
-      </span>
-      <span className="h-4 w-px shrink-0 bg-border-strong/70" aria-hidden />
-      {view.kind === "balance" && (
-        <span className="flex items-baseline gap-1.5 whitespace-nowrap">
-          <span className="text-[10px] font-semibold tracking-[0.06em] text-foreground/60 uppercase">Current balance</span>
-          <span className={cn("text-sm font-bold tabular-nums", view.balance < 0 ? "text-expense" : "text-foreground")}>{signed(view.balance)}</span>
-          {view.minimumBalance != null && view.minimumBalance > 0 && (
-            <span className={cn("tabular-nums", view.balance < view.minimumBalance ? "font-semibold text-warning-foreground dark:text-warning" : "text-muted-foreground")}>
-              · min {formatCurrency(view.minimumBalance)}
-            </span>
-          )}
-        </span>
-      )}
-      {view.kind === "creditFallback" && (
-        <span className="flex items-baseline gap-1.5 whitespace-nowrap">
-          <span className="text-[10px] font-semibold tracking-[0.06em] text-foreground/60 uppercase">Outstanding</span>
-          <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(view.outstanding)}</span>
-        </span>
-      )}
-      {view.kind === "credit" && (
-        <span className="flex items-center gap-2.5 whitespace-nowrap">
-          <span className="flex items-baseline gap-1.5">
-            <span className="text-[10px] font-semibold tracking-[0.06em] text-foreground/60 uppercase">Outstanding</span>
-            <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(view.outstanding)}</span>
-          </span>
-          <span className="flex items-center gap-2">
-            <UtilBar percent={view.utilizationPercent} className="w-14" />
-            <span className={cn("tabular-nums", view.available < 0 ? "font-semibold text-expense" : "text-muted-foreground")}>
-              {view.available < 0 ? `Over limit by ${formatCurrency(-view.available)}` : `${formatCurrency(view.available)} available`}
-              <span className="text-muted-foreground"> of {formatCurrency(view.limit)}</span>
-            </span>
-          </span>
-        </span>
-      )}
-      <Link
-        href={openHrefFor(account, view)}
-        className="inline-flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 font-semibold text-primary-accent-text transition-colors hover:bg-primary/15"
-      >
-        {view.kind === "credit" ? "Open card" : "Open"}
-        <ArrowUpRight className="size-3" strokeWidth={2.25} />
-      </Link>
-    </div>
+      Open <ArrowUpRight aria-hidden className="size-3" strokeWidth={2.25} />
+    </Link>
   );
 }
 
@@ -294,7 +246,7 @@ export function AccountBalanceHover({
               <p className="truncate text-sm font-semibold text-foreground">{accountTitle(account)}</p>
               <p className="text-[11px] text-muted-foreground">
                 {accountTypeText(account)}
-                {view.kind === "credit" && view.sharedLimitName ? ` · shared limit “${view.sharedLimitName}”` : ""}
+                {view.kind === "credit" && view.sharedLimitName != null && (view.sharedLimitName ? ` · shared limit “${view.sharedLimitName}”` : " · shared limit")}
               </p>
             </div>
           </div>
@@ -327,7 +279,7 @@ export function AccountBalanceHover({
                     <p className="text-xl leading-tight font-bold text-foreground tabular-nums">{formatCurrency(view.outstanding)}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-[10px] font-semibold tracking-[0.06em] text-foreground/60 uppercase">Available</p>
+                    <p className="text-[10px] font-semibold tracking-[0.06em] text-foreground/60 uppercase">Available credit</p>
                     <p className={cn("text-sm leading-tight font-semibold tabular-nums", view.available < 0 ? "text-expense" : "text-success")}>
                       {view.available < 0 ? `−${formatCurrency(-view.available)}` : formatCurrency(view.available)}
                     </p>
@@ -378,164 +330,178 @@ export function AccountBalanceHover({
   );
 }
 
-/* ───────────────────────── Always-visible balances rail ───────────────────────── */
-
-/**
- * One slim line of every account's CURRENT balance (bank & cash, then cards, then credit cards), always visible
- * above the list. A chip is the Account filter's shortcut: click to show only that account, click the active chip
- * again to show all. Many accounts stay on one line — the rail scrolls sideways, with arrows only when it overflows.
- */
-export function AccountBalanceRail({
+/** One row of balances with a searchable list anchored to the wallet button. */
+export function AccountBalanceOverview({
   accounts,
   balanceFor,
   activeId,
   onSelect,
 }: {
   accounts: Account[];
-  balanceFor: (a: Account) => AccountBalanceView;
+  balanceFor: (account: Account) => AccountBalanceView;
   activeId: string | null;
   onSelect: (id: string | null) => void;
 }) {
-  const scrollerRef = useRef<HTMLDivElement>(null);
-  const [edges, setEdges] = useState({ left: false, right: false });
-
-  useEffect(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    const measure = () => setEdges({ left: el.scrollLeft > 1, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1 });
-    measure();
-    el.addEventListener("scroll", measure, { passive: true });
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => {
-      el.removeEventListener("scroll", measure);
-      ro.disconnect();
-    };
-  }, [accounts.length]);
-
-  // Keep the filtered account's chip in view (e.g. after picking it from the Account filter).
-  useEffect(() => {
-    if (!activeId) return;
-    const chip = scrollerRef.current?.querySelector<HTMLElement>(`[data-account-chip="${CSS.escape(activeId)}"]`);
-    chip?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
-  }, [activeId]);
+  const directoryHeading = useRef<HTMLHeadingElement>(null);
+  const [directoryOpen, setDirectoryOpen] = useState(false);
 
   if (accounts.length === 0) return null;
+
   const groups = groupAccountsByKind(accounts);
-  const page = (dir: 1 | -1) => {
-    const el = scrollerRef.current;
-    if (el) el.scrollBy({ left: dir * Math.max(200, el.clientWidth * 0.7), behavior: "smooth" });
-  };
-  const mask =
-    edges.left && edges.right
-      ? "linear-gradient(to right, transparent, #000 40px, #000 calc(100% - 40px), transparent)"
-      : edges.left
-        ? "linear-gradient(to right, transparent, #000 40px)"
-        : edges.right
-          ? "linear-gradient(to right, #000 calc(100% - 40px), transparent)"
-          : undefined;
+  const active = accounts.find((account) => account.id === activeId);
+  const firstCreditCard = groups.find((group) => group.kind === "credit")?.accounts[0];
+  const preview = [...new Set([active ?? groups[0].accounts[0], firstCreditCard, ...groups.map((group) => group.accounts[0]), ...accounts])]
+    .filter((account): account is Account => account != null)
+    .slice(0, 4);
 
   return (
-    <div role="group" aria-label="Current balances" className="flex min-w-0 items-center gap-2.5" data-testid="account-balance-rail">
-      <span
-        className="shrink-0 cursor-help text-[10px] font-semibold tracking-[0.08em] whitespace-nowrap text-foreground/55 uppercase"
-        title="Current balances as of now — they don't change with the date or other filters. Click an account to show only its transactions."
-      >
-        Balances now
-      </span>
-      <div className="relative min-w-0 flex-1">
-        <div
-          ref={scrollerRef}
-          className="flex items-center gap-1.5 overflow-x-auto py-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          style={mask ? { maskImage: mask, WebkitMaskImage: mask } : undefined}
-        >
-          {groups.map((g, gi) => (
-            <Fragment key={g.kind}>
-              {gi > 0 && <span className="mx-0.5 h-5 w-px shrink-0 bg-border-strong/60" aria-hidden />}
-              {g.accounts.map((a) => (
-                <BalanceChip key={a.id} account={a} view={balanceFor(a)} active={a.id === activeId} onClick={() => onSelect(a.id === activeId ? null : a.id)} />
-              ))}
-            </Fragment>
+    <section aria-label="Balances now" className="@container min-w-0 rounded-xl border border-border-strong/60 bg-card px-1 py-0.5">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <Popover open={directoryOpen} onOpenChange={setDirectoryOpen}>
+          <PopoverTrigger asChild>
+            <Button variant="ghost" size="sm" aria-label="View all balances" title="View all balances" className="gap-1 px-1.5 text-xs">
+              <Wallet aria-hidden className="size-4 text-muted-foreground" strokeWidth={1.75} />
+              <span className="hidden @lg:inline">Balances</span>
+              <ChevronDown aria-hidden className="size-3 text-muted-foreground" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            aria-label="All balances"
+            align="start"
+            sideOffset={6}
+            collisionPadding={12}
+            className="flex max-h-[min(20rem,var(--radix-popover-content-available-height))] w-[min(26rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-xl border border-border-strong/60 p-0"
+            onOpenAutoFocus={(event) => {
+              event.preventDefault();
+              directoryHeading.current?.focus();
+            }}
+          >
+            <h2 ref={directoryHeading} tabIndex={-1} className="sr-only">All balances</h2>
+            <BalanceDirectory
+              accounts={accounts}
+              balanceFor={balanceFor}
+              activeId={activeId}
+              onSelect={(id) => {
+                setDirectoryOpen(false);
+                onSelect(id);
+              }}
+            />
+          </PopoverContent>
+        </Popover>
+        <ul className="flex min-w-0 flex-1">
+          {preview.map((account, index) => (
+            <li key={account.id} className={cn("min-w-0 flex-1 px-0.5", index > 0 && "border-l border-border", index === 1 && "hidden @2xl:block", index > 1 && "hidden @6xl:block")}>
+              <BalanceChoice account={account} view={balanceFor(account)} active={account.id === activeId} onSelect={onSelect} />
+            </li>
           ))}
-        </div>
-        {edges.left && (
-          <button
-            type="button"
-            aria-label="Scroll balances left"
-            onClick={() => page(-1)}
-            className="absolute top-1/2 left-0 flex size-6 -translate-y-1/2 items-center justify-center rounded-full border border-border-strong bg-card text-foreground/70 shadow-e1 transition-colors hover:text-foreground"
-          >
-            <ChevronLeft className="size-3.5" strokeWidth={2.25} />
-          </button>
-        )}
-        {edges.right && (
-          <button
-            type="button"
-            aria-label="Scroll balances right"
-            onClick={() => page(1)}
-            className="absolute top-1/2 right-0 flex size-6 -translate-y-1/2 items-center justify-center rounded-full border border-border-strong bg-card text-foreground/70 shadow-e1 transition-colors hover:text-foreground"
-          >
-            <ChevronRight className="size-3.5" strokeWidth={2.25} />
-          </button>
-        )}
+        </ul>
       </div>
-    </div>
+    </section>
   );
 }
 
-function BalanceChip({ account, view, active, onClick }: { account: Account; view: AccountBalanceView; active: boolean; onClick: () => void }) {
-  const credit = view.kind !== "balance";
-  const belowMin = view.kind === "balance" && view.minimumBalance != null && view.minimumBalance > 0 && view.balance < view.minimumBalance;
-  const tip =
-    view.kind === "balance"
-      ? `${accountTitle(account)} · current balance ${signed(view.balance)}${belowMin ? ` · below minimum ${formatCurrency(view.minimumBalance!)}` : ""}`
-      : view.kind === "credit"
-        ? `${accountTitle(account)} · outstanding ${formatCurrency(view.outstanding)} · available ${signed(view.available)} of ${formatCurrency(view.limit)} limit (${Math.round(view.utilizationPercent)}% used)`
-        : `${accountTitle(account)} · outstanding ${formatCurrency(view.outstanding)}`;
-  const pct = view.kind === "credit" ? Math.max(0, Math.min(100, view.utilizationPercent)) : 0;
-  const barTone = view.kind === "credit" ? (view.utilizationPercent >= 90 ? "bg-expense" : view.utilizationPercent >= 50 ? "bg-warning" : "bg-violet-500 dark:bg-violet-400") : "";
+function balanceLast4(account: Account, view: AccountBalanceView): string | null {
+  if (view.kind === "credit" && view.lastFourDigits && /^\d{4}$/.test(view.lastFourDigits)) return view.lastFourDigits;
+  return accountLast4(account);
+}
+
+function BalanceDirectory({
+  accounts,
+  balanceFor,
+  activeId,
+  onSelect,
+}: {
+  accounts: Account[];
+  balanceFor: (account: Account) => AccountBalanceView;
+  activeId: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const query = search.trim().toLowerCase();
+  const matches = accounts.filter((account) => {
+    return account.name.toLowerCase().includes(query) || balanceLast4(account, balanceFor(account))?.includes(query);
+  });
+  const groups = groupAccountsByKind(matches);
+
+  return (
+    <>
+      <div className="relative m-2 shrink-0">
+        <Search aria-hidden className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          type="search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          aria-label="Search balances"
+          placeholder="Name or last 4 digits"
+          className="h-8 pl-8"
+        />
+      </div>
+      <div className="min-h-0 space-y-1 overflow-y-auto overscroll-contain px-2 pb-2">
+        {groups.length === 0 && <p role="status" className="py-3 text-center text-xs text-muted-foreground">No matches</p>}
+        {groups.map(({ kind, accounts }) => (
+          <div key={kind}>
+            <h3 className="border-b border-border px-1.5 py-1 text-[11px] font-semibold text-muted-foreground">{KIND_HEADING[kind]}</h3>
+            <ul className="divide-y divide-border">
+              {accounts.map((account) => (
+                <li key={account.id} className="min-w-0">
+                  <BalanceChoice account={account} view={balanceFor(account)} active={account.id === activeId} onSelect={onSelect} />
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function BalanceChoice({
+  account,
+  view,
+  active,
+  onSelect,
+}: {
+  account: Account;
+  view: AccountBalanceView;
+  active: boolean;
+  onSelect: (id: string | null) => void;
+}) {
+  const last4 = balanceLast4(account, view);
+  const name = last4 && account.name.trimEnd().endsWith(last4)
+    ? account.name.trimEnd().slice(0, -4).trimEnd().replace(/(?:[•*]+|\s+xx|\s+-)$/i, "").trimEnd() || account.name
+    : account.name;
+  const shared = view.kind === "credit" ? view.sharedLimitName : null;
+  const caption = view.kind === "balance" ? "Balance" : view.kind === "creditFallback" ? "Owed" : shared != null ? "Shared available" : "Available";
+  const amount = view.kind === "balance" ? view.balance : view.kind === "credit" ? view.available : view.outstanding;
+  const loading = view.kind !== "balance" && view.loading;
+  const belowMinimum = view.kind === "balance" && view.minimumBalance != null && view.minimumBalance > 0 && amount < view.minimumBalance;
+  const overLimit = view.kind === "credit" && view.limit > 0 && view.utilizationPercent > 100;
+
   return (
     <button
       type="button"
-      data-account-chip={account.id}
       aria-pressed={active}
-      onClick={onClick}
-      title={`${tip}
-${active ? "Click to show all accounts" : "Click to show only this account"}`}
+      onClick={() => onSelect(active ? null : account.id)}
       className={cn(
-        "relative flex h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border pr-3 pl-1.5 text-left transition-[background-color,border-color,box-shadow] duration-150 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none motion-reduce:transition-none",
-        active
-          ? "border-primary-accent-text/70 bg-primary/20 shadow-e1"
-          : credit
-            ? "border-violet-500/25 bg-violet-500/[0.05] hover:border-violet-500/50 hover:bg-violet-500/[0.09] dark:border-violet-400/25 dark:bg-violet-400/[0.07]"
-            : "border-border-strong/70 bg-card hover:border-border-strong hover:bg-secondary/60",
+        "flex min-h-9 w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none",
+        active ? "bg-primary/15" : "hover:bg-secondary/65",
       )}
     >
-      <AccountMark account={account} size={18} />
-      <span className="max-w-[8rem] truncate text-xs text-muted-foreground">{shortName(account)}</span>
-      {view.kind === "balance" && (
-        <span className={cn("flex items-center gap-1 text-[13px] leading-none font-bold whitespace-nowrap tabular-nums", view.balance < 0 ? "text-expense" : "text-foreground")}>
-          {belowMin && <span className="size-1.5 rounded-full bg-warning" title="Below minimum balance" aria-label="Below minimum balance" />}
-          {signed(view.balance)}
+      <AccountPickerMark account={account} />
+      <span className="flex min-w-0 flex-1 items-baseline gap-1">
+        <span title={account.name} className="min-w-0 truncate font-semibold text-foreground">{name}</span>
+        {last4 && <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">••{last4}</span>}
+      </span>
+      <span title={shared ? `Shared credit limit · ${shared}` : undefined} className="shrink-0 text-right">
+        <span className={cn("block text-[10px] leading-3 text-muted-foreground", view.kind === "balance" && "sr-only")}>
+          {caption}{view.kind === "credit" && <span className="sr-only"> credit</span>}
         </span>
-      )}
-      {view.kind === "creditFallback" && (
-        <span className="text-[13px] leading-none font-bold whitespace-nowrap text-foreground tabular-nums">{formatCurrency(view.outstanding)}</span>
-      )}
-      {view.kind === "credit" && (
-        <>
-          <span className="text-[13px] leading-none font-bold whitespace-nowrap text-foreground tabular-nums">{formatCurrency(view.outstanding)}</span>
-          <span className={cn("text-[11px] leading-none font-semibold whitespace-nowrap tabular-nums", view.available < 0 ? "text-expense" : "text-success")}>
-            {view.available < 0 ? `−${formatCurrency(-view.available)}` : `${formatCurrency(view.available)} left`}
-          </span>
-        </>
-      )}
-      {/* Credit usage: a hairline along the bottom edge, filled to the % of the limit in use. */}
-      {view.kind === "credit" && (
-        <span aria-hidden className="absolute inset-x-3 bottom-0 h-[2px] overflow-hidden rounded-full bg-violet-500/15 dark:bg-violet-400/20">
-          <span className={cn("block h-full rounded-full transition-[width] duration-500 ease-out motion-reduce:transition-none", barTone)} style={{ width: `${pct}%` }} />
+        <span className={cn("block leading-4 font-semibold tabular-nums", !loading && (amount < 0 || belowMinimum || overLimit) && "text-expense")}>
+          {loading ? <span aria-label="Loading balance">…</span> : formatCurrencyExact(amount)}
         </span>
-      )}
+        {belowMinimum && <span className="sr-only">Below minimum balance</span>}
+        {overLimit && !loading && <span className="sr-only">Over credit limit</span>}
+      </span>
     </button>
   );
 }

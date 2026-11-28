@@ -1,6 +1,6 @@
 "use client";
 
-import { AccountSelect } from "@/components/finance/account-label";
+import { AccountSelect, creditCardOption } from "@/components/finance/account-label";
 import {
   Building2,
   CalendarClock,
@@ -60,7 +60,6 @@ import { useAccounts } from "@/hooks/use-accounts";
 import { useCreditCards } from "@/hooks/use-credit-cards";
 import { useLoanPersons } from "@/hooks/use-loans";
 import type { InterestType } from "@/lib/engines/interest-calculator";
-import type { CreditCardProfile } from "@/lib/models/credit-card";
 import type { EmiLoanType } from "@/lib/models/emi";
 import type { LoanCategory } from "@/lib/models/loan";
 import type { ScheduleType } from "@/lib/models/payment-schedule";
@@ -162,12 +161,9 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null, editR
 
   const cardOptions = useMemo(
     () =>
-      (cards as CreditCardProfile[])
+      cards
         .filter((c) => c.status !== "closed" && c.status !== "cancelled")
-        .map((c) => {
-          const accountName = accounts.find((a) => a.id === c.accountId)?.name ?? "Credit Card";
-          return { id: c.id, label: c.lastFourDigits ? `${accountName} ••${c.lastFourDigits}` : accountName };
-        }),
+        .map((card) => creditCardOption(card, accounts.find((account) => account.id === card.accountId))),
     [cards, accounts],
   );
   const movementAccounts = accounts.filter((a) => a.type !== "card" && a.deletedAt == null);
@@ -337,14 +333,16 @@ export function LoanEmiAddDialog({ open, onOpenChange, initialKind = null, editR
                       No credit cards yet — add one in Credit Cards.
                     </p>
                   ) : (
-                    <select className={LOAN_EMI_INPUT} value={form.cardId} disabled={isEdit} onChange={(e) => set({ cardId: e.target.value })}>
-                      <option value="">Select a card</option>
-                      {cardOptions.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.label}
-                        </option>
-                      ))}
-                    </select>
+                    <AccountSelect
+                      accounts={cardOptions}
+                      value={form.cardId}
+                      onChange={(cardId) => set({ cardId })}
+                      className={LOAN_EMI_INPUT}
+                      placeholder="Select a card"
+                      ariaLabel="Credit card"
+                      disabled={isEdit}
+                      clearable
+                    />
                   )}
                 </div>
                 {!isEdit && (

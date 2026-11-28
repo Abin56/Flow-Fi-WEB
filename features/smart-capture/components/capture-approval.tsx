@@ -16,7 +16,7 @@ import { AlertTriangle, CheckCircle2, ChevronLeft, CreditCard, Loader2, ShieldCh
 import { cn } from "@/lib/utils";
 import { formatDisplayDate } from "@/components/forms/date-input";
 import { ClayButton } from "@/components/clay/clay-button";
-import { AccountMark, AccountOptions } from "@/components/finance/account-label";
+import { AccountSelect } from "@/components/finance/account-label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrencyPrecise } from "@/lib/format";
 import { useAccounts } from "@/hooks/use-accounts";
@@ -220,25 +220,15 @@ export function CaptureApproval({
             <p className="text-xs text-muted-foreground">Every approved row is recorded on this account.</p>
           </div>
         </div>
-        <Select value={accountId ?? undefined} onValueChange={onAccountChange} disabled={committing || rows.some((r) => r.committedTransactionId)}>
-          <SelectTrigger className="w-full rounded-2xl sm:ml-auto sm:w-72" aria-label="Card or account">
-            <SelectValue placeholder="Choose card or account" />
-          </SelectTrigger>
-          <SelectContent>
-            <AccountOptions
-              accounts={accountOptions}
-              label={(a) => (
-                <span className="inline-flex min-w-0 items-center gap-2">
-                  <AccountMark account={a} size={18} />
-                  <span className="truncate">
-                    {a.name}
-                    {a.type === "card" ? " · Card" : ""}
-                  </span>
-                </span>
-              )}
-            />
-          </SelectContent>
-        </Select>
+        <AccountSelect
+          accounts={accountOptions}
+          value={accountId ?? ""}
+          onChange={onAccountChange}
+          disabled={committing || rows.some((r) => r.committedTransactionId)}
+          className="rounded-2xl sm:ml-auto sm:w-72"
+          ariaLabel="Card or account"
+          placeholder="Choose card or account"
+        />
       </section>
 
       <BulkCategoryBar rows={rows} categories={categories} onApply={applyCategoryToAll} />

@@ -1,0 +1,41 @@
+.summaryLead {
+  background: radial-gradient(ellipse at 100% 0%, color-mix(in oklab, var(--primary) 16%, transparent), transparent 76%);
+}
+
+.summaryLead::before {
+  position: absolute;
+  z-index: -1;
+  inset-block-start: -5rem;
+  inset-inline-end: -1.5rem;
+  inline-size: 11rem;
+  block-size: 11rem;
+  border: 1px solid color-mix(in oklab, var(--primary-accent-text) 16%, transparent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 14px color-mix(in oklab, var(--primary) 9%, transparent);
+  pointer-events: none;
+  content: "";
+}
+
+.tile {
+  background-image: radial-gradient(ellipse 12rem 5.5rem at 100% 0%, color-mix(in oklab, var(--account-accent) 8%, transparent), transparent);
+}
+
+.mark {
+  background: color-mix(in oklab, var(--account-accent) 14%, var(--card));
+}
+
+.overviewIdentity {
+  background: linear-gradient(125deg, color-mix(in oklab, var(--account-accent) 8%, var(--card)), var(--card) 88%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .tile {
+    transition: translate 180ms ease-out, border-color 180ms ease-out, box-shadow 180ms ease-out;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .tile:hover {
+      translate: 0 -2px;
+    }
+  }
+}

@@ -24,10 +24,8 @@ import {
   AlertTriangle,
   CalendarDays,
   Check,
-  CreditCard,
   ChevronDown,
   ChevronRight,
-  Landmark,
   Loader2,
   MessageSquareText,
   Lock,
@@ -72,7 +70,7 @@ import type { CategoryHistory } from "@/lib/services/category-intelligence";
 import { autoFillCategory, autoFillDescription, suggestCandidateDescription } from "../lib/description-suggestion";
 import { TxnFieldRow, type TxnFormKind } from "@/features/transactions/components/transaction-form-ui";
 import { focusInvalidField, type TxnFormField } from "@/features/transactions/lib/focus-invalid-field";
-import { BankLogo } from "@/components/finance/bank-logo";
+import { CandidateDestinationSelect } from "./candidate-destination-select";
 import { categoryIconFor } from "@/features/transactions/hooks/use-transactions-data";
 import { cn } from "@/lib/utils";
 import { formatCurrencyExact, formatCurrencyPrecise } from "@/lib/format";
@@ -663,7 +661,9 @@ export function CandidateDetailsModal({
       alreadyRecorded ? "Marked as already recorded" : "Candidate dismissed",
       alreadyRecorded
         ? `${dismissedCandidateLabel(currentCandidate)} — your existing transaction is unchanged and nothing was imported.`
-        : `${dismissedCandidateLabel(currentCandidate)} won't show in the review queue.`,
+        : committed
+          ? `${dismissedCandidateLabel(currentCandidate)} was removed from the review queue.`
+          : `${dismissedCandidateLabel(currentCandidate)} will be available in Dismissed for 30 days.`,
       undoToastAction(cancel),
       UNDO_TOAST_OPTIONS,
     );
@@ -789,18 +789,6 @@ export function CandidateDetailsModal({
   const categoryPickerOptions: SheetPickerOption[] = categoryOptions.map((category) => {
     const CategoryIcon = categoryIconFor(category.iconKey);
     return { value: category.id, label: category.name, icon: <CategoryIcon className="size-4" strokeWidth={2} /> };
-  });
-  const accountPickerOptions: SheetPickerOption[] = destinationOptions.map((opt) => {
-    const [destKind, destId] = opt.key.split(":");
-    const account = destKind === "account" ? accounts.find((a) => a.id === destId) : undefined;
-    return {
-      value: opt.key,
-      label: opt.label,
-      detail: destKind === "card" ? "Credit card" : "Account",
-      section: destKind === "card" ? "Credit cards" : "Accounts & debit cards",
-      credit: destKind === "card",
-      icon: account?.bankId ? <BankLogo bankId={account.bankId} size={36} shape="square" className="rounded-[inherit]" /> : destKind === "card" ? <CreditCard className="size-4" /> : <Landmark className="size-4" />,
-    };
   });
   const personPickerOptions: SheetPickerOption[] = people.map((p) => ({
     value: p.id,
@@ -1170,13 +1158,13 @@ export function CandidateDetailsModal({
               </div>
               <div className="flex min-w-0 flex-col gap-1.5">
                 <TxnFieldRow label={isExpense ? "Paid from" : "Received in"} field="account" error={errors.account}>
-                  <SheetPicker
-                    compact
+                  <CandidateDestinationSelect
                     value={currentDraft.destinationKey}
-                    onValueChange={chooseDestination}
-                    options={accountPickerOptions}
-                    placeholder="Select an account or card"
-                    emptyIcon={<Wallet className="size-4" />}
+                    onChange={chooseDestination}
+                    options={destinationOptions}
+                    accounts={accounts}
+                    cards={creditCards}
+                    className="h-10 rounded-xl border-border-strong bg-card px-3 shadow-e1 hover:border-muted-foreground dark:bg-card"
                     invalid={!!errors.account}
                   />
                 </TxnFieldRow>
@@ -1509,8 +1497,9 @@ export function CandidateDetailsModal({
             <DialogTitle>Dismiss this candidate?</DialogTitle>
             <DialogDescription>
               &ldquo;{currentCandidate.merchant ?? currentCandidate.bankName ?? "This SMS transaction"}&rdquo; (
-              {formatCurrencyPrecise(currentCandidate.amount)}) will be removed from the review queue without creating a transaction. You&apos;ll get a
-              few seconds to undo from the confirmation toast.
+              {formatCurrencyPrecise(currentCandidate.amount)}) will {committed
+                ? "be removed from the review queue. You can undo from the confirmation toast."
+                : "move to Dismissed, where you can restore it for 30 days."}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

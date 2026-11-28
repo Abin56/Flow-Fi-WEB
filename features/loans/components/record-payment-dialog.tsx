@@ -3,7 +3,7 @@
 import { AccountSelect } from "@/components/finance/account-label";
 import { PaymentSourceSummary, isUnderfunded } from "@/components/finance/payment-source-summary";
 import { previewFunds } from "@/lib/engines/payment-funding";
-import { ArrowRight, ChevronDown, History, Layers, UserRound, Wallet } from "lucide-react";
+import { ArrowRight, ChevronDown, History, Layers, UserRound, UsersRound, Wallet } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
 import { useEmiActions, type EmiRow } from "@/features/emi/hooks/use-emi-data";
@@ -913,7 +913,12 @@ export function RecordPaymentDialog({
 
   // What PEOPLE owe you: their own tinted card, apart from the payment to the bank. Its totals are the table's one summary.
   const peopleCard = peopleStepShown ? (
-    <PayCard compact tone="people" testId="people-card" title="People">
+    <PayCard compact tone="people" testId="people-card" title={
+      <span className="flex items-center gap-2">
+        <UsersRound className="size-4 text-settle-receivable-text" aria-hidden />
+        People
+      </span>
+    }>
       {breakdownTarget && (
         <PaymentPeopleTable
           {...breakdownTarget}
@@ -1465,7 +1470,7 @@ export function RecordPaymentDialog({
         )}
 
         {next != null && (
-          <div className={cn("grid min-w-0 items-start gap-2", tableParticipants.length > 0 && "lg:@min-[55rem]:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]")}>
+          <div className={cn("grid min-w-0 items-start gap-x-2.5 gap-y-2", tableParticipants.length > 0 && "lg:@min-[55rem]:grid-cols-[minmax(0,1fr)_clamp(14rem,27%,21rem)]")}>
             <div className="flex min-w-0 flex-col gap-2">
               {payCard}
               {!cardLoanBillOnly && linkedFundsNotice}

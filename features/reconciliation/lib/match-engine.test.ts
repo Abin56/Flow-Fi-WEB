@@ -98,6 +98,17 @@ describe("approximate amounts (₹298 vs ₹300) — possible, never exact", () 
     expect(run([reconRow({ id: "r1", amount: 298 })], [record({ id: "t1", amount: 300, direction: "credit" })]).get("r1")!.state).toBe("no_match");
   });
 
+  it("requires supporting evidence to suggest a recorded Loan or People movement", () => {
+    const repayment = reconRow({ id: "repayment", amount: 2000, description: "ANU", referenceNumber: "628323405861" });
+    const records = [
+      record({ id: "borrowed", amount: 2000, description: "Anu", direction: "credit", owner: "people" }),
+      record({ id: "other-loan", amount: 2000, description: "Rahul", owner: "loan" }),
+      record({ id: "repayment", amount: 2000, description: "People repayment", notes: "Ref 628323405861", owner: "people" }),
+    ];
+    expect(run([repayment], records).get(repayment.id)?.candidates.map((candidate) => candidate.recordId)).toEqual(["repayment"]);
+    expect(manualLinkOptions(repayment, records, ACC).map(({ record }) => record.id)).toContain("other-loan");
+  });
+
   it("never crosses accounts, even with an approx amount on the same day", () => {
     const m = run([reconRow({ id: "r1", amount: 298 })], [record({ id: "t1", amount: 300, accountId: "acc-bank" })]);
     expect(m.get("r1")!.candidates).toHaveLength(0);

@@ -1,6 +1,6 @@
 "use client";
 
-import { AccountOptions } from "@/components/finance/account-label";
+import { AccountSelect } from "@/components/finance/account-label";
 import { Check, Divide, Percent, Plus, Receipt, SlidersHorizontal, Split, Trash2, UserRound, Users } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { ClayAvatar } from "@/components/clay/clay-avatar";
@@ -395,20 +395,17 @@ export function SplitExpenseMode({
                 </Select>
               </WsField>
               <WsField label="Account" error={errors.account} className="@sm:col-span-2 @xl:col-span-1">
-                <Select
+                <AccountSelect
+                  accounts={accounts}
                   value={accountId}
-                  onValueChange={(v) => {
+                  onChange={(v) => {
                     setAccountId(v);
                     clear("account");
                   }}
-                >
-                  <SelectTrigger className={WS_SELECT_TRIGGER} aria-invalid={!!errors.account || undefined}>
-                    <SelectValue placeholder="Select account" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <AccountOptions accounts={accounts} />
-                  </SelectContent>
-                </Select>
+                  className={WS_SELECT_TRIGGER}
+                  placeholder="Select account"
+                  invalid={!!errors.account}
+                />
               </WsField>
 
               </div>

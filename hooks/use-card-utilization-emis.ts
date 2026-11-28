@@ -33,7 +33,7 @@ import { useAllEmiPaymentBreakdowns, useCreditCards, useEmis } from "./use-credi
 import { useAllEmiInstallments } from "./use-emis";
 import { useTransactions } from "./use-transactions";
 
-export function useCardUtilizationEmis(): { utilizationEmis: UtilizationEmi[]; isLoading: boolean } {
+export function useCardUtilizationEmis(): { utilizationEmis: UtilizationEmi[]; isLoading: boolean; isPlaceholderData: boolean } {
   const uid = useAuthStore((s) => s.user?.uid);
   const { data: emis = [], isLoading: emisLoading } = useEmis();
   const { data: cards = [], isLoading: cardsLoading } = useCreditCards();
@@ -112,5 +112,6 @@ export function useCardUtilizationEmis(): { utilizationEmis: UtilizationEmi[]; i
   return {
     utilizationEmis,
     isLoading: emisLoading || cardsLoading || loansLoading || breakdownsLoading || installmentsLoading || transactionsLoading || (paidLinkedInstallments.length > 0 && paymentsQuery.isLoading),
+    isPlaceholderData: paidLinkedInstallments.length > 0 && paymentsQuery.isPlaceholderData,
   };
 }

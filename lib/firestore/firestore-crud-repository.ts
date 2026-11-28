@@ -105,10 +105,15 @@ export class FirestoreCrudRepository<T extends SoftDeletableEntity> {
   }
 
   /** Drives reactive UI via a Firestore snapshot listener. Returns an unsubscribe function. */
-  watchAll(onData: (items: T[]) => void, onError?: (error: Error) => void): () => void {
+  watchAll(
+    onData: (items: T[], complete?: boolean, fromCache?: boolean) => void,
+    onError?: (error: Error) => void,
+    options: { includeMetadataChanges?: boolean } = {},
+  ): () => void {
     return onSnapshot(
       query(this.collection, where("deletedAt", "==", null)),
-      (snapshot) => onData(safeDocs(snapshot.docs)),
+      options,
+      (snapshot) => onData(safeDocs(snapshot.docs), true, snapshot.metadata.fromCache),
       onError,
     );
   }

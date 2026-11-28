@@ -136,7 +136,7 @@ function matchesNonLaneFilters(candidate: SmsTransactionCandidate, filters: Cand
 /** Extra searchable text per candidate id (e.g. the resolved account label), built by the caller from data this module doesn't see. */
 export type SearchTextById = ReadonlyMap<string, string>;
 
-function matchesSearch(candidate: SmsTransactionCandidate, search: string, extraText?: SearchTextById): boolean {
+export function matchesSearch(candidate: SmsTransactionCandidate, search: string, extraText?: SearchTextById): boolean {
   if (!search.trim()) return true;
   const needle = search.trim().toLowerCase();
   const text = [

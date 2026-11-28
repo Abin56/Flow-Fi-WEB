@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, History } from "lucide-react";
 import { useId, useState } from "react";
 import { usePeopleLedgerEntries } from "@/features/people/hooks/use-people-data";
 import { useMonthCycleStartDay } from "@/features/settings/hooks/use-user-preferences";
@@ -40,35 +40,41 @@ export function ReceivedHistoryPanel({ participants, installments, sourceKind }:
   const cycleAmount = history == null ? "—" : formatCurrencyExact(history.receivedThisCycle);
 
   return (
-    <aside aria-label="Received History" className="hidden min-w-0 rounded-lg border border-border bg-card lg:block" data-testid="received-history">
-      <h3 className="hidden border-b border-border px-3 py-2 text-xs font-semibold text-foreground @min-[55rem]:block">Received History</h3>
+    <aside aria-label="Received History" className="min-w-0 rounded-lg border border-border bg-card" data-testid="received-history">
+      <h3 className="hidden items-center gap-2 rounded-t-lg border-b border-border bg-settle-receivable-tint/35 px-3 py-2 text-xs font-semibold text-foreground lg:@min-[55rem]:flex">
+        <History className="size-4 text-settle-receivable-text" aria-hidden />
+        Received History
+      </h3>
       <button
         type="button"
         aria-expanded={expanded}
         aria-controls={contentId}
         onClick={() => setExpanded((open) => !open)}
-        className="flex w-full min-w-0 items-center gap-2 rounded-lg px-3 py-1.5 text-left text-xs font-semibold text-foreground outline-none hover:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring @min-[55rem]:hidden"
+        className="flex w-full min-w-0 items-center gap-2 rounded-lg px-3 py-1.5 text-left text-xs font-semibold text-foreground outline-none hover:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring lg:@min-[55rem]:hidden"
       >
+        <History className="size-4 shrink-0 text-settle-receivable-text" aria-hidden />
         <span>Received History</span>
-        <span className="ml-auto font-normal text-muted-foreground">{person.personName} · {cycleAmount} this cycle</span>
+        <span className="ml-auto min-w-0 text-right text-[11px] leading-tight font-normal break-words text-muted-foreground">{person.personName} · {cycleAmount} this cycle</span>
         <ChevronDown aria-hidden className={cn("size-3.5 shrink-0", expanded && "rotate-180")} />
       </button>
-      <div id={contentId} className={cn("space-y-2 px-3 py-2", expanded ? "block border-t border-border @min-[55rem]:border-t-0" : "hidden @min-[55rem]:block")}>
+      <div id={contentId} className={cn("space-y-2.5 px-3 py-2.5", expanded ? "block border-t border-border lg:@min-[55rem]:border-t-0" : "hidden lg:@min-[55rem]:block")}>
         {participants.length > 1 ? (
-          <select aria-label="Person for received history" value={person.personId} onChange={(event) => setPickedPerson(event.target.value)} className="h-8 w-full min-w-0 rounded-md border border-border-strong bg-card px-2 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <select aria-label="Person for received history" value={person.personId} onChange={(event) => setPickedPerson(event.target.value)} className="h-8 w-full min-w-0 rounded-[8px] border border-border-strong/80 bg-card px-2 text-xs font-semibold outline-none hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring">
             {participants.map((p) => <option key={p.personId} value={p.personId}>{p.personName}</option>)}
           </select>
         ) : <p className="text-xs font-semibold text-foreground">{person.personName}</p>}
-        <p className="text-[11px] text-muted-foreground">{formatCycleLabel(cycle)}</p>
-        <dl className="space-y-1">
-          <HistoryFigure label="Received this cycle" amount={cycleAmount} />
-          {lines.length > 0 && <>
-            <HistoryFigure label={lines.length === 1 ? `Applied to #${lines[0].sequenceNumber}` : "Applied to selected installments"} amount={formatCurrencyExact(applied)} />
-            <HistoryFigure label="Remaining share" amount={formatCurrencyExact(remaining)} />
-          </>}
-          {(person.advanceHeld ?? 0) > PAYMENT_EPSILON && <HistoryFigure label="Unallocated advance" amount={formatCurrencyExact(person.advanceHeld ?? 0)} />}
-          {(person.generalCredit ?? 0) > PAYMENT_EPSILON && <HistoryFigure label="Toward overall balance" amount={formatCurrencyExact(person.generalCredit ?? 0)} />}
-        </dl>
+        <div className="rounded-[10px] border border-border/80 bg-secondary/30 px-2.5 py-2">
+          <p className="mb-1.5 text-[11px] text-muted-foreground">{formatCycleLabel(cycle)}</p>
+          <dl className="space-y-1">
+            <HistoryFigure label="Received this cycle" amount={cycleAmount} emphasis />
+            {lines.length > 0 && <>
+              <HistoryFigure label={lines.length === 1 ? `Applied to #${lines[0].sequenceNumber}` : "Applied to selected installments"} amount={formatCurrencyExact(applied)} />
+              <HistoryFigure label="Remaining share" amount={formatCurrencyExact(remaining)} />
+            </>}
+            {(person.advanceHeld ?? 0) > PAYMENT_EPSILON && <HistoryFigure label="Unallocated advance" amount={formatCurrencyExact(person.advanceHeld ?? 0)} />}
+            {(person.generalCredit ?? 0) > PAYMENT_EPSILON && <HistoryFigure label="Toward overall balance" amount={formatCurrencyExact(person.generalCredit ?? 0)} />}
+          </dl>
+        </div>
         <div className="border-t border-border pt-1.5">
           <p className="text-xs font-semibold text-foreground">Recent receipts</p>
           {history == null ? (
@@ -100,11 +106,11 @@ export function ReceivedHistoryPanel({ participants, installments, sourceKind }:
   );
 }
 
-function HistoryFigure({ label, amount }: { label: string; amount: string }) {
+function HistoryFigure({ label, amount, emphasis }: { label: string; amount: string; emphasis?: boolean }) {
   return (
-    <div className="flex justify-between gap-2 text-xs">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="shrink-0 text-right font-semibold tabular-nums">{amount}</dd>
+    <div className="flex items-baseline justify-between gap-2 text-xs">
+      <dt className={emphasis ? "font-semibold text-foreground" : "text-muted-foreground"}>{label}</dt>
+      <dd className={cn("shrink-0 text-right font-semibold tabular-nums", emphasis && "text-settle-receivable-text")}>{amount}</dd>
     </div>
   );
 }

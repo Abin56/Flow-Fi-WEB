@@ -12,7 +12,7 @@ import { getApps, initializeApp } from "firebase-admin/app";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { HdfcCreditCardStatementPipeline } from "../src/pipeline/hdfc-credit-card-statement-pipeline";
-import type { PdfDocumentHandle, PdfDocumentProvider, PdfPageText } from "../src/pdf/pdf-document-provider";
+import { PdfDocumentError, type PdfDocumentHandle, type PdfDocumentProvider, type PdfPageText } from "../src/pdf/pdf-document-provider";
 import { loadRealStatementPages } from "./fixtures/real-statements/load-real-statement";
 import hdfcFreedomItems from "./fixtures/real-statements/hdfc-freedom-2026-07.items.json";
 
@@ -98,7 +98,7 @@ describe("HdfcCreditCardStatementPipeline — real HDFC Freedom statement fixtur
   it("openAndClassify reports the same failed/password shape run() has always returned for an open failure", async () => {
     const throwingProvider: PdfDocumentProvider = {
       open: async () => {
-        throw new (await import("../src/pdf/pdf-document-provider")).PdfDocumentError(
+        throw new PdfDocumentError(
           "PDF_ENCRYPTED",
           "This document is password-protected.",
         );

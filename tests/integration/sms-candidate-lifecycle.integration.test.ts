@@ -17,7 +17,7 @@
 
 import { readFileSync } from "node:fs";
 import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing";
-import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, type FirestoreDataConverter } from "firebase/firestore";
+import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, Timestamp, writeBatch, type FirestoreDataConverter } from "firebase/firestore";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { candidateImportKey, importedTransactionId } from "@/features/transaction-candidates/lib/candidate-import-key";
@@ -27,7 +27,7 @@ import { accountFromFirestore, accountToFirestore, type Account } from "@/lib/mo
 import { smsTransactionCandidateFromFirestore, smsTransactionCandidateToFirestore, type SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
 import { transactionFromFirestore, transactionToFirestore, type Transaction } from "@/lib/models/transaction";
 import { AccountRepository } from "@/lib/repositories/account-repository";
-import { SmsTransactionCandidateRepository } from "@/lib/repositories/sms-transaction-candidate-repository";
+import { DISMISSED_CANDIDATE_RETENTION_MS, SmsTransactionCandidateRepository } from "@/lib/repositories/sms-transaction-candidate-repository";
 import { TransactionRepository } from "@/lib/repositories/transaction-repository";
 
 const PROJECT_ID = "flowfi-sms-candidate-lifecycle-test";
@@ -124,9 +124,10 @@ function setup() {
   const transactionsRef = collection(db, FirestoreCollections.users, UID, FirestoreCollections.transactions).withConverter(transactionConverter);
   const candidatesRef = collection(db, FirestoreCollections.users, UID, FirestoreCollections.smsTransactionCandidates).withConverter(candidateConverter);
   const tombstonesRef = collection(db, FirestoreCollections.users, UID, FirestoreCollections.smsCandidateTombstones);
+  const dismissedRef = collection(db, FirestoreCollections.users, UID, FirestoreCollections.dismissedSmsCandidates);
   const accountRepository = new AccountRepository(accountsRef);
   const transactionRepository = new TransactionRepository(transactionsRef, accountRepository);
-  const candidateRepository = new SmsTransactionCandidateRepository(candidatesRef, tombstonesRef);
+  const candidateRepository = new SmsTransactionCandidateRepository(candidatesRef, tombstonesRef, dismissedRef);
   const expenseRepository = {} as never;
 
   return {
@@ -135,11 +136,18 @@ function setup() {
     expenseRepository,
     candidatesRef,
     tombstonesRef,
+    dismissedRef,
     accountsRef,
     seedAccount: (a = account()) => assertSucceeds(setDoc(doc(accountsRef, a.id), a)),
     seedCandidate: (c: SmsTransactionCandidate) => assertSucceeds(setDoc(doc(candidatesRef, c.id), c)),
     candidateExists: async (id: string) => (await getDoc(doc(candidatesRef, id))).exists(),
     tombstone: async (id: string) => (await getDoc(doc(tombstonesRef, id))).data(),
+    dismissal: async (id: string) => (await getDoc(doc(dismissedRef, id))).data(),
+    recoveryEntry: async (id: string) => ({
+      id,
+      dismissedAt: (await getDoc(doc(dismissedRef, id))).data()!.dismissedAt as Timestamp,
+      candidate: null,
+    }),
     transactions: async () => (await getDocs(transactionsRef)).docs.map((d) => d.data()),
     balance: async (id = "acc-1") => (await getDoc(doc(accountsRef, id))).data()!.currentBalance,
     importOne: (c: SmsTransactionCandidate, extra: Partial<Parameters<typeof importCandidate>[0]> = {}) =>
@@ -163,6 +171,7 @@ describe("import lifecycle: tombstone + candidate removal", () => {
     const tombstone = await s.tombstone(c.id);
     expect(tombstone).toMatchObject({ outcome: "imported" });
     expect(tombstone?.transactionId).toBe((result as { transactionId: string }).transactionId);
+    expect(await s.dismissal(c.id)).toBeUndefined();
   });
 
   it("resurrection denied: once imported, Android cannot re-create the same candidate id (server-side rule, not just a UI warning)", async () => {
@@ -243,6 +252,89 @@ describe("dismiss lifecycle: tombstone + candidate removal, no Transaction ever 
     expect(await s.candidateExists(c.id)).toBe(false);
 
     await expect(s.dismissOne(c)).resolves.toEqual({ tombstoneMismatched: false });
+    expect(await s.tombstone(c.id)).toMatchObject({ outcome: "dismissed" });
+  });
+});
+
+describe("dismissed candidate recovery", () => {
+  it("restores the full original payload at the same id, then allows a normal import", async () => {
+    const s = setup();
+    const c = smsCandidate({ originalMessage: "Paid INR 500 to Swiggy from HDFC acct XX1234" });
+    const raw = { ...smsTransactionCandidateToFirestore(c), futureAndroidField: "preserve me" };
+    const ref = doc(s.candidatesRef, c.id).withConverter(null);
+    await s.seedAccount();
+    await setDoc(ref, raw);
+    // Android sends amount as a double even when it has no fractional part.
+    const update = await fetch(`http://127.0.0.1:8080/v1/projects/${PROJECT_ID}/databases/(default)/documents/${ref.path}?updateMask.fieldPaths=amount`, {
+      method: "PATCH",
+      headers: { Authorization: "Bearer owner", "Content-Type": "application/json" },
+      body: JSON.stringify({ fields: { amount: { doubleValue: c.amount } } }),
+    });
+    expect(update.ok).toBe(true);
+    await s.dismissOne(c);
+
+    const archived = (await s.dismissal(c.id))!;
+    expect(archived.candidate).toEqual(raw);
+    expect(archived.expiresAt.toMillis() - archived.dismissedAt.toMillis()).toBeGreaterThanOrEqual(DISMISSED_CANDIDATE_RETENTION_MS);
+    expect(await s.candidateExists(c.id)).toBe(false);
+    expect(await s.balance()).toBe(OPENING);
+    const entry = await s.recoveryEntry(c.id);
+    expect(await s.candidateRepository.restoreDismissed(entry)).toBe(true);
+    expect((await getDoc(ref)).data()).toEqual(raw);
+    expect(await s.dismissal(c.id)).toBeUndefined();
+    expect(await s.tombstone(c.id)).toBeUndefined();
+    expect(await s.candidateRepository.restoreDismissed(entry)).toBe(false);
+    expect((await s.importOne(c)).status).toBe("success");
+    expect(await s.balance()).toBe(OPENING - c.amount);
+  });
+
+  it("clears only the confirmed dismissal version and keeps the Android re-upload guard", async () => {
+    const s = setup();
+    const c = smsCandidate();
+    await s.seedCandidate(c);
+    await s.dismissOne(c);
+    const first = await s.recoveryEntry(c.id);
+    expect(await s.candidateRepository.restoreDismissed(first)).toBe(true);
+    await s.dismissOne(c);
+    const second = await s.recoveryEntry(c.id);
+
+    await s.candidateRepository.clearDismissed([first]);
+    expect(await s.dismissal(c.id)).toBeDefined();
+    await s.candidateRepository.clearDismissed([second]);
+    expect(await s.dismissal(c.id)).toBeUndefined();
+    expect(await s.candidateRepository.restoreDismissed(second)).toBe(false);
+    expect(await s.tombstone(c.id)).toMatchObject({ outcome: "dismissed" });
+    await assertFails(setDoc(doc(s.candidatesRef, c.id), c));
+  });
+
+  it("rejects direct tombstone deletion, modified payloads, expired restores and reads by another user", async () => {
+    const s = setup();
+    const c = smsCandidate();
+    await s.seedCandidate(c);
+    await s.dismissOne(c);
+    const archived = (await s.dismissal(c.id))!;
+    const archive = doc(s.dismissedRef, c.id);
+    const tombstone = doc(s.tombstonesRef, c.id);
+    const candidate = doc(s.candidatesRef, c.id).withConverter(null);
+    const otherDb = testEnv.authenticatedContext("other-user").firestore();
+    await assertFails(getDoc(doc(otherDb, archive.path)));
+    await assertFails(deleteDoc(doc(otherDb, archive.path)));
+    await assertFails(deleteDoc(tombstone));
+
+    const restoreBatch = (payload: typeof archived.candidate) => {
+      const batch = writeBatch(s.dismissedRef.firestore);
+      batch.set(candidate, payload);
+      batch.delete(tombstone);
+      batch.delete(archive);
+      return batch.commit();
+    };
+    await assertFails(restoreBatch({ ...archived.candidate, amount: 1 }));
+    const expired = Timestamp.fromMillis(Date.now() - DISMISSED_CANDIDATE_RETENTION_MS - 60_000);
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), archive.path), { ...archived, dismissedAt: expired });
+    });
+    await assertFails(restoreBatch(archived.candidate));
+    expect(await s.candidateExists(c.id)).toBe(false);
     expect(await s.tombstone(c.id)).toMatchObject({ outcome: "dismissed" });
   });
 });

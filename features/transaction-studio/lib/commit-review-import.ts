@@ -72,7 +72,7 @@ import type { LoanRepository } from "@/lib/repositories/loan-repository";
 import type { InstallmentRepository } from "@/lib/repositories/payment-schedule-repository";
 import { KeyedTransactionDeletedError, transferPairIdsFor, type TransactionRepository } from "@/lib/repositories/transaction-repository";
 import { DuplicateSplitParticipantError, InvalidSplitShareError, KeyedExpenseIncompleteError, KeyedExpenseMismatchError } from "@/lib/repositories/expense-repository";
-import { checkForDuplicates, type DuplicateDetectionResult } from "@/lib/services/duplicate-detection/duplicate-detection-service";
+import { checkForDuplicates, type DuplicateDetectionResult, type ExistingTransactionForDuplicateCheck } from "@/lib/services/duplicate-detection/duplicate-detection-service";
 import { ACTION_META, actionDetailConsistencyError, deriveRecordAction, isCategoryApplicableForFlowType } from "./action-metadata";
 
 export interface CommitBlockingReason {
@@ -758,16 +758,19 @@ export function detectFreshDuplicatesForCommit(
 ): FreshDuplicateWarning[] {
   const paymentLegs = existingTransactions.filter((t) => t.deletedAt == null && t.accountId === accountId && t.type === "income" && t.transferId != null);
   // A soft-deleted transaction is not "already there" — it must never block (or be matched by) an import row.
-  const existing = existingTransactions.filter((t) => t.deletedAt == null).map((t) => ({ id: t.id, description: t.description, amount: t.amount, dateTime: t.dateTime, accountId: t.accountId, type: t.type }));
+  const existing = existingTransactions.filter((t) => t.deletedAt == null);
   const warnings: FreshDuplicateWarning[] = [];
 
   // Rows committed earlier in this same batch — grows as we walk `rows` in the same left-to-right
   // order `commitReviewImport` will actually commit them in, so a later row is checked against
   // everything an earlier row in this batch will have already created by the time it runs.
-  const committedSoFar: typeof existing = [];
+  const committedSoFar: (ExistingTransactionForDuplicateCheck & { referenceNumber: string })[] = [];
 
   for (const row of rows) {
     if (!row.include || deriveRecordAction(row) === "ignore" || row.committedTransactionId) continue;
+    const type = row.direction === "credit" ? "income" : "expense";
+    const referenceNumber = row.referenceNumber?.trim().toUpperCase() ?? "";
+    const isDebtMovement = row.flowType === "debt_movement";
     // Rows the server pipeline already flagged get their own dedicated review UI
     // (`DuplicateCandidateList`) and are hard-blocked from commit until resolved —
     // no need for a second warning on top of that one. Still eligible to be checked
@@ -785,6 +788,8 @@ export function detectFreshDuplicatesForCommit(
       // skip duplicate detection entirely. Mirrors the identical fix in
       // `features/transaction-candidates/lib/import-candidate.ts`'s `checkCandidateForDuplicates`.
       const description = row.counterpartyNormalized ?? row.counterpartyRaw;
+      // Two lines in one statement represent different movements when their direction or stated bank references differ.
+      const comparableRows = committedSoFar.filter((t) => t.type === type && (!referenceNumber || !t.referenceNumber || t.referenceNumber === referenceNumber));
       const result = checkForDuplicates(
         {
           description,
@@ -794,9 +799,10 @@ export function detectFreshDuplicatesForCommit(
           accountId,
           referenceNumber: row.referenceNumber,
           source: "pdf",
+          isDebtMovement,
           requireDescriptionMatch: description.trim().length > 0,
         },
-        [...existing, ...committedSoFar],
+        [...existing, ...comparableRows],
       );
       if (result.status === "duplicate_candidate") warnings.push({ recordId: row.id, result: describeBatchInternalMatches(result) });
       else {
@@ -826,7 +832,9 @@ export function detectFreshDuplicatesForCommit(
       amount: row.amount,
       dateTime: row.date,
       accountId,
-      type: row.direction === "credit" ? "income" : "expense",
+      type,
+      referenceNumber,
+      isDebtMovement,
     });
   }
 

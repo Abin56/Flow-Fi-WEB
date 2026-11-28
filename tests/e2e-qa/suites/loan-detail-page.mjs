@@ -34,6 +34,77 @@ async function selectQaBank(page, field) {
   await page.getByRole("option", { name: /QA Bank/ }).click();
 }
 
+scenario("ldp-people-receipt-allocation", "Apply a People receipt, postpone the remaining share and record it into the selected account", async ({ page }, chk) => {
+  await h.addFixture(page, "shared-emi");
+  const name = "QA Shared EMI";
+  const [first] = await f.scheduleState("emi", name);
+  const people = await h.list("people");
+  const priya = people.find((person) => person.name === "QA Priya");
+  const ravi = people.find((person) => person.name === "QA Ravi");
+  const ledgerPath = `people/${priya.id}/ledger`;
+  await f.openPerson(page, priya.name, { tab: null });
+  await f.openRecord(page, { general: true });
+  await f.amountField(page).fill("600");
+  await f.pickAccountIn(page, "QA Bank");
+  await page.getByRole("button", { name: /^Record ₹600/ }).first().click();
+  await page.getByText("Payment recorded", { exact: true }).first().waitFor();
+  const original = (await h.list(ledgerPath)).find((e) => !e.deletedAt && e.type === "receivedBack" && e.amount === 600 && !e.obligationRef);
+  if (!original) throw new Error("The People receipt was not recorded");
+  const bank = await f.bal("QA Bank");
+  const beforeTransactions = await h.list("transactions");
+
+  await openFromList(page, name, "emi-page");
+  await page.getByRole("tab", { name: /^People/ }).click();
+  const row = page.getByTestId(`people-line-${priya.id}-1`);
+  await row.getByRole("button", { name: "Use People receipt" }).click();
+  await page.getByLabel("Amount to apply (₹)").fill("400");
+  await page.getByRole("button", { name: "Apply receipt", exact: true }).click();
+  await row.getByText("Partially received", { exact: true }).waitFor();
+  const entries = (await h.list(ledgerPath)).filter((e) => !e.deletedAt && e.transactionRef === original.transactionRef);
+  chk("₹400 applied to the selected installment and ₹200 stays unassigned on the original receipt", entries.some((e) => e.amount === 400 && e.obligationRef === `emi-inst:${first.id}`) && entries.some((e) => e.amount === 200 && !e.obligationRef));
+
+  await row.getByRole("button", { name: "Postpone", exact: true }).click();
+  const expected = new Date();
+  expected.setDate(expected.getDate() + 7);
+  await page.getByLabel("Expected on", { exact: true }).fill(expected.toLocaleDateString("en-GB"));
+  await page.getByRole("button", { name: "Save date", exact: true }).click();
+  await row.getByText("Postponed", { exact: true }).waitFor();
+  chk("the inline actions preserve the receipt transaction, bank balance and lender payment", JSON.stringify(await h.list("transactions")) === JSON.stringify(beforeTransactions) && f.close2(await f.bal("QA Bank"), bank) && (await f.scheduleState("emi", name))[0].amountPaid === first.amountPaid);
+
+  const raviRow = page.getByTestId(`people-line-${ravi.id}-1`);
+  await raviRow.getByRole("button", { name: "Record received", exact: true }).click();
+  const editor = page.getByTestId("they-paid-panel");
+  await editor.getByLabel("Amount received from QA Ravi").fill("250");
+  await selectQaBank(page, editor.getByRole("combobox", { name: "Received into account" }));
+  chk("choosing an account and entering an amount still requires an explicit balance choice", await editor.getByRole("button", { name: "Record Received", exact: true }).isDisabled());
+  await editor.getByRole("radio", { name: "Already in my account", exact: true }).click();
+  await editor.getByRole("button", { name: "Record Received", exact: true }).click();
+  await raviRow.getByText("Partially received", { exact: true }).waitFor();
+  await editor.waitFor({ state: "hidden" });
+  const recorded = (await h.list(`people/${ravi.id}/ledger`)).find((e) => e.obligationRef === `emi-inst:${first.id}` && e.amount === 250 && !e.deletedAt);
+  chk("a newly recorded past receipt updates only the selected share, with no account credit", recorded?.recordedEarlier === true && f.close2(await f.bal("QA Bank"), bank) && await row.getByText("Postponed", { exact: true }).isVisible());
+
+  await row.getByRole("button", { name: "Record another receipt", exact: true }).click();
+  await editor.getByRole("button", { name: "Use remaining ₹600", exact: true }).click();
+  await editor.getByRole("radio", { name: "Add to my account", exact: true }).click();
+  await selectQaBank(page, editor.getByRole("combobox", { name: "Received into account" }));
+  await editor.getByRole("button", { name: "Record Received", exact: true }).click();
+  await row.getByText("Received", { exact: true }).waitFor();
+  await editor.waitFor({ state: "hidden" });
+  const newReceipts = (await h.list(ledgerPath)).filter((e) => !e.deletedAt && e.type === "receivedBack" && e.obligationRef === `emi-inst:${first.id}` && e.transactionRef !== original.transactionRef);
+  const bankAccount = await h.accountBalance("QA Bank");
+  const newTransaction = (await h.list("transactions")).find((t) => t.id === newReceipts[0]?.transactionRef);
+  chk("receiving a postponed share credits the selected bank once and records the linked People receipt",
+    newReceipts.length === 1 && newReceipts[0].amount === 600 && !newReceipts[0].recordedEarlier
+    && newTransaction?.amount === 600 && newTransaction.accountId === bankAccount?.id
+    && newTransaction.isPersonLedgerMovement === true && !newTransaction.excludeFromCalculations
+    && f.close2(bankAccount.currentBalance, bank + 600));
+  chk("the lender payment and Ravi's share stay as they were",
+    (await f.scheduleState("emi", name))[0].amountPaid === first.amountPaid
+    && await raviRow.getByText("Partially received", { exact: true }).isVisible());
+  await h.shot(page, "ldp-people-receipt-allocation");
+}, { viewport: { width: 1440, height: 900 } });
+
 scenario("receipt-workflow-past", "Past Payment posts the selected full receipt to its specific historical share", async ({ page }, chk) => {
   await h.addFixture(page, "shared-emi");
   const name = "QA Shared EMI";
@@ -548,7 +619,15 @@ for (const [id, vp, scheme] of [
     await page.waitForTimeout(400);
     const people = page.locator('[data-testid="agreement-people"]');
     chk("People tab lists the sharing people with plain statuses", (await people.locator("section").count()) >= 1 && /Pending|Received|Partially received|Postponed/.test(await people.innerText()));
-    chk("each person has Record received and Postpone", (await people.getByRole("link", { name: /Record money received/ }).count()) >= 1 && (await people.getByRole("link", { name: /Postpone collecting/ }).count()) >= 1);
+    const openShare = people.getByRole("row").filter({ has: people.getByRole("button", { name: "Record received", exact: true }) }).first();
+    chk("an open share exposes both actions on its row", await openShare.getByRole("button", { name: "Postpone", exact: true }).count() === 1);
+    await openShare.getByRole("button", { name: "Record received", exact: true }).click();
+    await people.getByLabel(/Amount received from/).waitFor();
+    chk("the receipt editor opens in People without a cash treatment switch", await people.getByRole("button", { name: "Add to my account" }).count() === 0);
+    await people.getByTestId("they-paid-panel").getByRole("button", { name: "Cancel", exact: true }).click();
+    await openShare.getByRole("button", { name: "Postpone", exact: true }).click();
+    await people.getByLabel("Expected on").waitFor();
+    await people.getByRole("button", { name: "Cancel", exact: true }).click();
     await h.shot(page, `${id}-4-people`);
     await page.getByRole("tab", { name: /Schedule/ }).click();
     chk("returning to Schedule keeps the selection", (await page.locator('[data-testid="installment-row-2"]').getAttribute("aria-selected")) === "true");

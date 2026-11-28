@@ -159,12 +159,11 @@ service cloud.firestore {
     }
 
     // SMS Transaction Intelligence (Phase 3) — structured candidates built
-    // entirely on-device by Android from the user's own SMS; the raw message
-    // never leaves the device. Plain owner-scoped CRUD like accounts/
+    // on-device by Android from the user's own SMS. Owner-scoped like accounts/
     // transactions above: unlike documentImports, there is no separate
     // server-side worker — the Android app itself both creates and deletes
-    // these documents (`SmsCandidateCloudSync`), and the web app only reads
-    // and deletes (see lib/repositories/sms-transaction-candidate-repository.ts).
+    // these documents (`SmsCandidateCloudSync`). The web app reads, deletes
+    // and can restore archived copies.
     // There is no status/state-machine field on this document at all — an
     // earlier version of this rule invented one; that was never real,
     // corrected once the actual Android-side model was found and audited.
@@ -189,8 +188,7 @@ service cloud.firestore {
     // — the global emergency kill switch (`smsSyncControl/global`) or this
     // account's hold (`smsSyncConfig/operatorHold`). Android's F3 gate checks
     // the same documents first; this is the backstop that holds even for a
-    // modified client. Web never writes candidates, so its read/delete
-    // (import/dismiss) keeps working during an incident.
+    // modified client. Web reads/deletes (import/dismiss) keep working during an incident.
     function smsUploadsSuspended(uid) {
       let globalControl = /databases/$(database)/documents/smsSyncControl/global;
       let hold = /databases/$(database)/documents/users/$(uid)/smsSyncConfig/operatorHold;
@@ -201,42 +199,67 @@ service cloud.firestore {
     // Server-side pairing backstop (SMS Sync lifecycle, 2026-10-25): only the pairing Cloud Functions (or an
     // operator) can switch `backgroundUpload` on, and Auto Sync OFF / Disconnect revokes it. Requiring it here means
     // a queued or retrying upload from a phone that is no longer paired is refused even if its own gate was passed
-    // before the revocation landed. The Web never creates or updates candidates (it only deletes), so it is
-    // unaffected.
+    // before the revocation landed.
     function smsUploadAuthorized(uid) {
       let path = /databases/$(database)/documents/users/$(uid)/smsSyncConfig/backgroundUpload;
       return exists(path) && get(path).data.get('enabled', false) == true;
     }
 
+    // The web SDK can serialize whole-valued Android doubles as integers.
+    function sameSmsCandidate(original, copy) {
+      let differences = original.diff(copy);
+      return differences.addedKeys().size() == 0 && differences.removedKeys().size() == 0 &&
+        differences.changedKeys().hasOnly(['amount', 'confidenceScore', 'classificationVersion']) &&
+        original.get('amount', null) == copy.get('amount', null) &&
+        original.get('confidenceScore', null) == copy.get('confidenceScore', null) &&
+        original.get('classificationVersion', null) == copy.get('classificationVersion', null);
+    }
+
+    // Recovery can only recreate the archived SMS and consume both recovery documents in the same commit.
+    function restoresDismissedSms(uid, candidateId) {
+      let candidate = /databases/$(database)/documents/users/$(uid)/smsTransactionCandidates/$(candidateId);
+      let tombstone = /databases/$(database)/documents/users/$(uid)/smsCandidateTombstones/$(candidateId);
+      let archive = /databases/$(database)/documents/users/$(uid)/dismissedSmsCandidates/$(candidateId);
+      return exists(tombstone) && get(tombstone).data.outcome == 'dismissed' &&
+        !exists(candidate) && !existsAfter(tombstone) && existsAfter(candidate) &&
+        exists(archive) && !existsAfter(archive) &&
+        request.time < get(archive).data.dismissedAt + duration.value(30, 'd') &&
+        sameSmsCandidate(get(archive).data.candidate, getAfter(candidate).data);
+    }
+
     match /users/{uid}/smsTransactionCandidates/{candidateId} {
       allow read, delete: if isOwner(uid);
-      allow create: if isOwner(uid) &&
-        !exists(/databases/$(database)/documents/users/$(uid)/smsCandidateTombstones/$(candidateId)) &&
-        !smsUploadsSuspended(uid) && smsUploadAuthorized(uid);
+      allow create: if isOwner(uid) && (
+        (!exists(/databases/$(database)/documents/users/$(uid)/smsCandidateTombstones/$(candidateId)) &&
+          !smsUploadsSuspended(uid) && smsUploadAuthorized(uid)) ||
+        restoresDismissedSms(uid, candidateId)
+      );
       allow update: if isOwner(uid) && !smsUploadsSuspended(uid) && smsUploadAuthorized(uid);
     }
 
-    // Handled-state record for an imported or dismissed SMS candidate — see
-    // the `smsTransactionCandidates` comment above. Fully immutable once
-    // written: a dismissed candidate can never later be silently rewritten
-    // as imported or vice versa, and nothing can delete the record either.
-    // Same id as the candidate document it replaces.
-    //
-    // `delete` is deliberately NOT granted (Phase B security review,
-    // 2026-10-24): no approved workflow — Web's import/dismiss, nor any
-    // planned Android read — ever deletes a tombstone, and the approved
-    // retention policy is "keep indefinitely, no automatic TTL" (see the
-    // architecture doc, §1). Owner-write delete access here would be a
-    // standing capability with no legitimate caller, and a real risk if a
-    // compromised/buggy client ever used it: deleting a tombstone re-opens
-    // exactly the resurrection window the `!exists()` guard on
-    // `smsTransactionCandidates.create` exists to close. A future admin-side
-    // retention/TTL job (if the "revisit later" decision above ever adds
-    // one) would run via the Admin SDK, which isn't subject to these rules
-    // at all — so it needs no client delete permission either.
+    // Imported and permanently dismissed markers continue to block Android re-uploads.
     match /users/{uid}/smsCandidateTombstones/{candidateId} {
       allow read, create: if isOwner(uid);
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if isOwner(uid) && restoresDismissedSms(uid, candidateId);
+    }
+
+    function archivesDismissedSms(uid, candidateId) {
+      let candidate = /databases/$(database)/documents/users/$(uid)/smsTransactionCandidates/$(candidateId);
+      let tombstone = /databases/$(database)/documents/users/$(uid)/smsCandidateTombstones/$(candidateId);
+      let data = request.resource.data;
+      return data.keys().hasOnly(['candidate', 'dismissedAt', 'expiresAt']) &&
+        data.dismissedAt == request.time &&
+        data.expiresAt >= request.time + duration.value(30, 'd') &&
+        data.expiresAt <= request.time + duration.value(30, 'd') + duration.value(10, 'm') &&
+        exists(candidate) && !existsAfter(candidate) && sameSmsCandidate(get(candidate).data, data.candidate) &&
+        !exists(tombstone) && existsAfter(tombstone) && getAfter(tombstone).data.outcome == 'dismissed';
+    }
+
+    match /users/{uid}/dismissedSmsCandidates/{candidateId} {
+      allow read, delete: if isOwner(uid);
+      allow create: if isOwner(uid) && archivesDismissedSms(uid, candidateId);
+      allow update: if false;
     }
 
     // Runtime switch for Android's background SMS cloud upload (Phase F3,

@@ -1,7 +1,7 @@
 "use client";
 
 import { Landmark, Pencil, Trash2 } from "lucide-react";
-import { AccountMark } from "@/components/finance/account-label";
+import { AccountPickerMark } from "@/components/finance/account-label";
 import type { StatementRow } from "@/features/accounts/lib/account-statement";
 import type { TransactionStatementView } from "@/features/transactions/lib/transaction-statement";
 import type { TransactionRow } from "@/features/transactions/hooks/use-transactions-data";
@@ -46,7 +46,7 @@ export function StatementNeedsAccount({ accounts, onPick }: { accounts: Account[
               onClick={() => onPick(a.id)}
               className="inline-flex h-9 max-w-64 items-center gap-2 rounded-full border border-border-strong bg-card px-3 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <AccountMark account={a} size={18} />
+              <AccountPickerMark account={a} size={18} />
               <span className="truncate">{a.accountNumberLast4 ? `${a.name} •••• ${a.accountNumberLast4}` : a.name}</span>
             </button>
           </li>
@@ -64,7 +64,7 @@ export function StatementHeader({ view }: { view: TransactionStatementView }) {
     <div className="flex flex-col gap-2 border-b border-border-strong/60 bg-secondary/30 px-3 py-3 sm:px-4" data-testid="statement-header">
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
         <div className="flex min-w-0 items-center gap-2.5">
-          <AccountMark account={account} size={28} />
+          <AccountPickerMark account={account} size={28} />
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-foreground">
               {account.name}

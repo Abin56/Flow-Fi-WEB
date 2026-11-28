@@ -4,6 +4,7 @@ import { ArrowUpRight, Building2, CreditCard, History, Layers, Lock, LockOpen, P
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { AgreementPeopleTab } from "@/features/loans/components/agreement-people-tab";
+import { AgreementRecordingResetDialog } from "@/features/loans/components/agreement-recording-reset-dialog";
 import { useState } from "react";
 import { AgreementScheduleTab } from "@/features/loans/components/agreement-schedule-tab";
 import { TheyPaidDialog } from "@/features/loans/components/they-paid-dialog";
@@ -73,6 +74,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
   const { people, cycleBalance } = useAgreementPeople(page && row ? { sourceKind: "emi", source: row.emi, installments: row.installments } : null);
   // "They paid": the installment whose share the person already paid — the dialog mounts fresh per open (one batch id per save).
   const [theyPaid, setTheyPaid] = useState<{ id: string; n: number } | null>(null);
+  const [resetId, setResetId] = useState<string | null>(null);
   const askTheyPaid = (installmentId: string) => setTheyPaid((prev) => ({ id: installmentId, n: (prev?.n ?? 0) + 1 }));
   if (!row) return null;
 
@@ -139,7 +141,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
                   returnTo={pathname || "/loans/"}
                 />
               ),
-              people: <AgreementPeopleTab people={people} returnTo={pathname || "/loans/"} onTheyPaid={askTheyPaid} />,
+              people: <AgreementPeopleTab people={people} agreementName={row.emi.name} target={{ sourceKind: "emi", source: row.emi, installments: row.installments }} />,
               peopleCount: people.length,
               nextPayment: !isClosed && nextPayable ? { amount: remainingAmount(nextPayable), dueDate: nextPayable.dueDate, sequenceNumber: nextPayable.sequenceNumber, overdue: nextOverdue } : null,
             }
@@ -208,6 +210,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
                     ? [{ label: "Record past payments", icon: History, title: "EMIs paid before you used FlowFi — recorded without changing any account or card balance", onSelect: () => onRecordPastPayments(row) }]
                     : []),
                   ...(onPaySeveral && !isClosed && pastDueCount(row.installments) > 1 ? [{ label: "Pay several", icon: Layers, onSelect: () => onPaySeveral(row) }] : []),
+                  { label: "Delete all transactions", icon: Trash2, disabled: statusBusy, onSelect: () => setResetId(row.emi.id) },
                 ]}
               />
               <ClayButton
@@ -242,6 +245,7 @@ export function EmiScheduleDialog({ open, onOpenChange, row, onDelete, onRecordP
         />
       }
     />
+    {open && resetId === row.emi.id && <AgreementRecordingResetDialog kind="emi" id={row.emi.id} name={row.emi.name} onClose={() => setResetId(null)} />}
     {theyPaid && (
       <TheyPaidDialog
         key={theyPaid.n}

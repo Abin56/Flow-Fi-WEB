@@ -88,6 +88,35 @@ async function setRows(page, n) {
 }
 const commits = (page) => page.evaluate(() => window.__ev.filter((e) => e.n === "commitStart").length);
 
+scenario("txn-duplicate-debt", "Transactions ignore same-day Loan and People movements in the duplicate badge", async ({ page }, chk) => {
+  const { txns } = await stored();
+  const { accountId, categoryId } = txns.find((t) => t.type === "expense" && !t.transferId);
+  const dateTime = new Date();
+  const entries = [
+    ["Borrowed", { type: "income", isPersonLedgerMovement: true }],
+    ["Repaid", { isPersonLedgerMovement: true }],
+    ["Borrowed again", { type: "income", isPersonLedgerMovement: true }],
+    ["Loan installment", { loanId: "qa-loan" }],
+    ["Expense A", {}],
+    ["Expense B", {}],
+  ];
+  await Promise.all(entries.map(([description, fields], i) => h.createDocUnderUser(`transactions/qa-duplicate-debt-${i}`, {
+    type: "expense", amount: 2000, dateTime, accountId, categoryId, description: `QA Duplicate ${description}`,
+    createdAt: dateTime, deletedAt: null, ...fields,
+  })));
+
+  await openTx(page);
+  await page.getByLabel("Search transactions").fill("QA Duplicate");
+  for (const [description, fields] of entries) {
+    const title = fields.loanId ? "Money paid" : `QA Duplicate ${description}`;
+    const row = page.locator(`${LEDGER} tbody tr[aria-expanded]`).filter({ has: page.getByText(title, { exact: true }) });
+    await row.waitFor();
+    const hasBadge = await row.getByText("Possible duplicate", { exact: true }).isVisible();
+    const expectBadge = !fields.isPersonLedgerMovement && !fields.loanId;
+    chk(`${description} ${expectBadge ? "shows a" : "has no"} duplicate badge`, hasBadge === expectBadge);
+  }
+});
+
 scenario("txn-sweep-render", "Transactions sweep: the page renders every section, no console errors, no overflow (desktop / laptop / tablet / mobile, light + dark)", async ({ page, logs }, chk) => {
   await openTx(page);
   const main = flat(await page.locator("main").innerText());
@@ -144,6 +173,110 @@ scenario("txn-sweep-render", "Transactions sweep: the page renders every section
   chk("hard reload: summary figures unchanged", flat(await page.locator('section[aria-label="This view"]').innerText()) === before);
   const errs = logs.filter((l) => !IGNORED.test(l));
   chk("no console errors / warnings / page errors while on Transactions", errs.length === 0, errs.slice(0, 5).join(" || "));
+});
+
+scenario("txn-current-balances", "Current balances: a compact searchable list with live bank and card updates", async ({ page }, chk) => {
+  const bank = await h.accountBalance("QA Bank");
+  const bankTransactions = (await stored()).txns.filter((txn) => txn.accountId === bank.id).length;
+  const createdAt = new Date();
+  const emptyAccount = { openingBalance: 0, currentBalance: 0, colorValue: bank.colorValue, createdAt, deletedAt: null };
+  await Promise.all([
+    ...Array.from({ length: 12 }, (_, i) => h.createDocUnderUser(`accounts/qa-extra-bank-${i}`, { ...emptyAccount, type: "bank", name: `QA Extra Bank ${i}` })),
+    h.createDocUnderUser("accounts/qa-unused-card", { ...emptyAccount, name: "QA Unused Card", type: "card", cardSubtype: "credit" }),
+    h.createDocUnderUser("creditCards/qa-unused-card", { accountId: "qa-unused-card", statementDay: 1, paymentDueDay: 20, creditLimit: 0, sharedLimitId: "qa-balances-facility", lastFourDigits: "7318", createdAt, deletedAt: null }),
+    h.createDocUnderUser("sharedCreditLimits/qa-balances-facility", { name: "QA Shared Limit", creditLimit: 25000, createdAt, deletedAt: null }),
+  ]);
+  await openTx(page);
+  const writesBefore = await commits(page);
+  const overview = page.getByRole("region", { name: "Balances now" });
+  const viewAll = overview.getByRole("button", { name: "View all balances" });
+  const directory = page.getByRole("dialog", { name: "All balances" });
+  const balanceSearch = directory.getByRole("searchbox", { name: "Search balances" });
+  const previewCount = () => overview.locator("button[aria-pressed]:visible").count();
+  const previewHeight = () => overview.evaluate((element) => Math.round(element.getBoundingClientRect().height));
+  const desktopCount = await previewCount();
+  const desktopHeight = await previewHeight();
+  chk("desktop preview shows four balances", desktopCount === 4, desktopCount);
+  chk("desktop preview fits in a single compact row", desktopHeight <= 44, `${desktopHeight}px`);
+  await h.shot(page, "txn-current-balances-desktop");
+
+  await viewAll.click();
+  chk("full list uses bank and credit card groups", await directory.getByRole("heading", { name: "Bank & cash" }).isVisible() && await directory.getByRole("heading", { name: "Credit cards" }).isVisible());
+  await balanceSearch.fill("7318");
+  const unusedCard = directory.getByRole("button", { name: /QA Unused Card/ });
+  await unusedCard.getByText("₹25,000", { exact: true }).waitFor();
+  const unusedText = flat(await unusedCard.innerText());
+  chk("the card profile supplies its masked digits and shared available credit", /••7318.*Shared available.*₹25,000/.test(unusedText), unusedText);
+  await balanceSearch.fill("no matches here");
+  chk("search has an empty result state", await directory.getByRole("status").isVisible());
+  await balanceSearch.fill(" QA BANK ");
+  const bankTile = directory.getByRole("button", { name: /QA Bank/ });
+  const bankText = flat(await bankTile.innerText());
+  const displayedBalance = bankText.match(/[−-]?₹[\d,.]+/)?.[0];
+  chk("the displayed bank balance matches Firestore", Boolean(displayedBalance) && num(displayedBalance) === bank.currentBalance, bankText);
+  await bankTile.click();
+  await page.waitForURL((url) => url.searchParams.get("account") === bank.id);
+  const active = overview.getByRole("button", { name: /QA Bank/, pressed: true });
+  await active.waitFor();
+  await directory.waitFor({ state: "hidden" });
+  chk("selection closes the list and filters to the stored account transactions", bankTransactions > 0 && await countText(page) === bankTransactions);
+  const openAccount = page.getByRole("link", { name: "Open QA Bank", exact: true });
+  const destination = new URL(await openAccount.getAttribute("href"), page.url());
+  chk("the selected account retains its details link", /^\/accounts\/?$/.test(destination.pathname) && destination.searchParams.get("account") === bank.id);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.locator("html.dark").waitFor();
+  const mobileCount = await previewCount();
+  const mobileHeight = await previewHeight();
+  const mobileOverflow = await overflow(page);
+  chk("mobile keeps one preview, with the selected balance visible", await active.isVisible() && mobileCount === 1, mobileCount);
+  chk("mobile wallet button and preview fit in one compact row", mobileHeight <= 44, `${mobileHeight}px`);
+  chk("mobile page and main content fit horizontally", mobileOverflow.doc <= 1 && mobileOverflow.main <= 1, JSON.stringify(mobileOverflow));
+  await h.shot(page, "txn-current-balances-mobile-preview-dark");
+  await active.click();
+  await page.waitForURL((url) => !url.searchParams.has("account"));
+  await viewAll.click();
+  await directory.waitFor();
+  await directory.evaluate((element) => Promise.allSettled(element.getAnimations().map((animation) => animation.finished)));
+  const pickerSize = await directory.boundingBox();
+  chk("mobile balance picker stays compact with many accounts", pickerSize.height <= 320 && pickerSize.width <= 366, `${pickerSize.width}×${pickerSize.height}px`);
+  await h.shot(page, "txn-current-balances-mobile-dark");
+  await page.keyboard.press("Escape");
+  await directory.waitFor({ state: "hidden" });
+  chk("clearing and browsing balances makes no transaction or account writes", await commits(page) === writesBefore);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const rupees = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
+  async function waitForBalances(bankAmount, availableCredit) {
+    await viewAll.click();
+    await Promise.all([
+      directory.getByRole("button", { name: /QA Bank/ }).getByText(rupees.format(bankAmount), { exact: true }).waitFor(),
+      directory.getByRole("button", { name: /QA Credit Card/ }).getByText(rupees.format(availableCredit), { exact: true }).waitFor(),
+    ]);
+    await page.keyboard.press("Escape");
+    await directory.waitFor({ state: "hidden" });
+  }
+
+  await waitForBalances(bank.currentBalance, 38000);
+  await openAddDrawer(page, "Transfer to my account");
+  await amountInput(page).fill("500");
+  await descField(page).fill("QA balance transfer");
+  await pickIn(page, /^From Account\s?\*$/, /QA Credit Card/);
+  await pickIn(page, /^To Account\s?\*$/, /QA Bank/);
+  const drawer = drawerOf(page);
+  await drawer.getByRole("button", { name: "Add Transfer", exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector("#txn-amount")?.value);
+  if (await drawer.isVisible()) await drawer.getByRole("button", { name: "Cancel", exact: true }).click();
+  await drawer.waitFor({ state: "hidden" });
+  await waitForBalances(bank.currentBalance + 500, 37500);
+  chk("saving a card-to-bank transfer updates both balances without a reload", (await h.accountBalance("QA Bank")).currentBalance === bank.currentBalance + 500);
+
+  const transferRow = page.locator(`${LEDGER} tbody tr[aria-expanded]`).filter({ hasText: "QA balance transfer" }).first();
+  await transferRow.getByRole("button", { name: "Delete transaction" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete", exact: true }).click();
+  await waitForBalances(bank.currentBalance, 38000);
+  chk("deleting the transfer restores both balances without a reload", (await h.accountBalance("QA Bank")).currentBalance === bank.currentBalance);
 });
 
 scenario("txn-sweep-figures", "Transactions sweep: the list, the tiles and the paging footer all agree with the stored transactions", async ({ page, logs }, chk, notes) => {

@@ -27,7 +27,8 @@ scenario("bills-sweep-render", "Bills sweep: page renders, tiles + cards + dues 
   await page.getByRole("tab", { name: "Payments" }).click();
   chk("no 'NaN' / 'undefined' / 'Infinity' / '[object' text", !/NaN|undefined|Infinity|\[object/.test(main), (main.match(/.{0,30}(NaN|undefined|Infinity|\[object).{0,30}/) || [""])[0]);
   chk("no skeleton left after load", (await page.locator('main [class*="animate-pulse"]').count()) === 0);
-  chk("header count matches cards", /(\d+) bills/.test(main) && Number(/(\d+) bills/.exec(main)[1]) === (await bills()).length, /(\d+) bills/.exec(main)?.[0]);
+  const myBillsTab = await page.getByRole("tab", { name: /^My bills/ }).innerText();
+  chk("My bills count matches cards", Number(/\((\d+)\)/.exec(myBillsTab)?.[1]) === (await bills()).length, myBillsTab);
 
   const overflow = () => page.evaluate(() => ({ doc: document.documentElement.scrollWidth - document.documentElement.clientWidth, main: document.querySelector("main").scrollWidth - document.querySelector("main").clientWidth }));
   for (const [name, vp] of [["desktop", { width: 1920, height: 1080 }], ["laptop", { width: 1366, height: 768 }], ["tablet", { width: 768, height: 1024 }], ["mobile", { width: 390, height: 844 }]]) {

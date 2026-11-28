@@ -9,6 +9,7 @@ import { UpcomingCycleAlert } from "@/features/people/components/upcoming-cycle-
 import { CashFlowCard } from "@/features/dashboard/components/cash-flow-card";
 import { CreditUtilizationCard } from "@/features/dashboard/components/credit-utilization-card";
 import { DashboardHeader } from "@/features/dashboard/components/dashboard-header";
+import { DashboardPanelGate } from "@/features/dashboard/components/dashboard-panel-gate";
 import { ExpensesByCategoryCard } from "@/features/dashboard/components/expenses-by-category-card";
 import { NetWorthHero } from "@/features/dashboard/components/net-worth-hero";
 import { RecentTransactionsCard } from "@/features/dashboard/components/recent-transactions-card";
@@ -27,6 +28,7 @@ import { useUserPreferences } from "@/features/settings/hooks/use-user-preferenc
  */
 export default function DashboardPage() {
   const data = useDashboardData();
+  const states = data.panelStates;
   const { preferences, update } = useUserPreferences();
   const router = useRouter();
 
@@ -38,38 +40,54 @@ export default function DashboardPage() {
 
       <StaggerItem>
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-          <NetWorthHero
-            netWorth={data.netWorth}
-            isLoading={data.isLoading}
-            hideAmount={preferences.hideNetWorth}
-            onToggleHideAmount={() => update("hideNetWorth", !preferences.hideNetWorth)}
-          />
-          <CashFlowCard cashFlow={data.cashFlow} isLoading={data.isLoading} />
+          <DashboardPanelGate label="Net worth" state={states.netWorth}>
+            <NetWorthHero
+              netWorth={data.netWorth}
+              isLoading={states.netWorth === "loading"}
+              hideAmount={preferences.hideNetWorth}
+              onToggleHideAmount={() => update("hideNetWorth", !preferences.hideNetWorth)}
+            />
+          </DashboardPanelGate>
+          <DashboardPanelGate label="Cash flow" state={states.cashFlow}>
+            <CashFlowCard cashFlow={data.cashFlow} isLoading={states.cashFlow === "loading"} />
+          </DashboardPanelGate>
         </div>
       </StaggerItem>
 
       <StaggerItem className="flex flex-col gap-2.5">
         {/* A day before the next cycle: collections postponed into it. Renders nothing otherwise. */}
         <UpcomingCycleAlert onOpen={(personId, key) => router.push(`/people?person=${encodeURIComponent(personId)}&obligation=${encodeURIComponent(key)}&settle=1`)} />
-        <AttentionRow items={data.needsAttention} isLoading={data.isLoading} />
+        <DashboardPanelGate label="Needs your attention" state={states.attention}>
+          <AttentionRow items={data.needsAttention} isLoading={states.attention === "loading"} />
+        </DashboardPanelGate>
         {/* Purpose money people gave me — one quiet line, nothing when there is none */}
         <MoneyToUseSignal />
       </StaggerItem>
 
       <StaggerItem>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <RecentTransactionsCard recentTransactions={data.recentTransactions} isLoading={data.isLoading} />
-          <UpcomingPaymentsCard payments={data.upcomingPayments} isLoading={data.isLoading} />
+        <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.1fr)]">
+          <DashboardPanelGate label="Recent transactions" state={states.recent} compact>
+            <RecentTransactionsCard recentTransactions={data.recentTransactions} isLoading={states.recent === "loading"} />
+          </DashboardPanelGate>
+          <DashboardPanelGate label="Upcoming payments" state={states.upcoming} compact>
+            <UpcomingPaymentsCard payments={data.upcomingPayments} isLoading={states.upcoming === "loading"} />
+          </DashboardPanelGate>
           <div className="md:col-span-2 xl:col-span-1">
-            <AccountsOverviewCard accountsOverview={data.accountsOverview} isLoading={data.isLoading} />
+            <DashboardPanelGate label="Accounts" state={states.accounts} compact>
+              <AccountsOverviewCard accountsOverview={data.accountsOverview} isLoading={states.accounts === "loading"} />
+            </DashboardPanelGate>
           </div>
         </div>
       </StaggerItem>
 
       <StaggerItem>
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <ExpensesByCategoryCard expensesByCategory={data.expensesByCategory} isLoading={data.isLoading} />
-          <CreditUtilizationCard utilization={data.utilization} isLoading={data.isLoading} />
+          <DashboardPanelGate label="Expenses by category" state={states.expenses}>
+            <ExpensesByCategoryCard expensesByCategory={data.expensesByCategory} isLoading={states.expenses === "loading"} />
+          </DashboardPanelGate>
+          <DashboardPanelGate label="Credit card utilization" state={states.credit}>
+            <CreditUtilizationCard utilization={data.utilization} isLoading={states.credit === "loading"} />
+          </DashboardPanelGate>
         </div>
       </StaggerItem>
     </Stagger>

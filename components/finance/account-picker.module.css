@@ -1,0 +1,175 @@
+.menu {
+  width: max(16rem, var(--radix-select-trigger-width));
+  max-width: var(--radix-select-content-available-width);
+  max-height: min(24rem, var(--radix-select-content-available-height));
+}
+
+.option {
+  min-height: 2.5rem;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  color: var(--popover-foreground);
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.option > span:last-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.option[data-highlighted],
+.option[data-state="checked"] {
+  background-color: var(--accent);
+  color: var(--popover-foreground);
+}
+
+.option[data-highlighted] {
+  border-color: var(--ring);
+}
+
+.option[data-account-kind="credit"],
+.cardMark[data-account-kind="credit"] {
+  --account-card-color: var(--primary-accent-text);
+}
+
+.option[data-account-kind="card"],
+.cardMark[data-account-kind="card"] {
+  --account-card-color: var(--muted-foreground);
+}
+
+.option:is([data-account-kind="credit"], [data-account-kind="card"]) {
+  min-height: 2.75rem;
+  border-color: color-mix(in oklab, var(--account-card-color) 26%, var(--border-subtle));
+  background-color: color-mix(in oklab, var(--account-card-color) 8%, var(--popover));
+}
+
+.option:is([data-account-kind="credit"], [data-account-kind="card"]):is([data-highlighted], [data-state="checked"]) {
+  border-color: color-mix(in oklab, var(--account-card-color) 56%, var(--border-strong));
+  background-color: color-mix(in oklab, var(--account-card-color) 16%, var(--popover));
+}
+
+.option:is([data-account-kind="credit"], [data-account-kind="card"])[data-highlighted] {
+  outline: 1px solid var(--ring);
+  outline-offset: -1px;
+}
+
+.option[data-state="checked"] > span:first-child {
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 50%;
+  background: var(--popover);
+}
+
+.option[data-state="checked"] > span:first-child svg {
+  width: 0.75rem;
+  height: 0.75rem;
+  stroke-width: 2.5;
+}
+
+.label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.identity {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  text-align: start;
+}
+
+.name,
+.detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.name {
+  font-weight: 600;
+  line-height: 1rem;
+}
+
+.metadata {
+  display: flex;
+  min-width: 0;
+  gap: 0.2em;
+  color: color-mix(in oklab, currentColor 78%, var(--popover));
+  font-size: 0.6875rem;
+  line-height: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.lastFour {
+  flex-shrink: 0;
+}
+
+.cardKind {
+  flex-shrink: 0;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid color-mix(in oklab, currentColor 17%, transparent);
+  border-radius: 0.375rem;
+  font-size: 0.625rem;
+  font-weight: 650;
+  line-height: 0.75rem;
+}
+
+.cardMark {
+  position: relative;
+  display: flex;
+  width: 2.625rem;
+  height: 1.6875rem;
+  flex: none;
+  align-items: center;
+  padding-inline: 0.25rem;
+  border-radius: 0.375rem;
+  background:
+    linear-gradient(155deg, rgb(255 255 255 / 22%), transparent 58%),
+    linear-gradient(135deg, var(--account-card-color), color-mix(in srgb, var(--account-card-color) 60%, black));
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 21%), 0 1px 2px rgb(0 0 0 / 16%);
+}
+
+.cardMark::after {
+  position: absolute;
+  inset-inline-end: 0.25rem;
+  bottom: 0.3rem;
+  width: 0.55rem;
+  height: 0.14rem;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 75%);
+  content: "";
+}
+
+.cardIcon {
+  display: grid;
+  width: 1rem;
+  height: 1rem;
+  place-items: center;
+  border-radius: 0.25rem;
+  background: rgb(0 0 0 / 65%);
+  color: white;
+}
+
+:global([data-slot="select-value"]):has(> .label) {
+  flex: 1;
+  min-width: 0;
+}
+
+:global([data-slot="select-value"]) .cardMark {
+  height: 1.4375rem;
+  width: 2.25rem;
+}
+
+:global([data-slot="select-value"]) .menuOnly,
+:global([data-slot="select-value"]) .metadata:not(:has(> :not(.menuOnly))) {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .option {
+    transition: none;
+  }
+}

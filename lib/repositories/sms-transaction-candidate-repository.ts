@@ -39,16 +39,43 @@ import {
   type CollectionReference,
   type Firestore,
   type Transaction as FirestoreTransaction,
+  Timestamp,
   deleteDoc,
   doc,
+  onSnapshot,
+  orderBy,
+  query,
   runTransaction,
+  serverTimestamp,
 } from "firebase/firestore";
 import { buildSmsCandidateTombstone, type SmsCandidateTombstoneOutcome } from "@/lib/models/sms-candidate-tombstone";
+import { smsTransactionCandidateFromData, type SmsTransactionCandidate } from "@/lib/models/sms-transaction-candidate";
+
+export const DISMISSED_CANDIDATE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+// TTL can lag the restore deadline, so give its timestamp room for client clock skew.
+const TTL_CLOCK_BUFFER_MS = 5 * 60 * 1000;
+
+export interface DismissedSmsCandidate {
+  id: string;
+  dismissedAt: Timestamp;
+  candidate: SmsTransactionCandidate | null;
+}
+
+async function retryAfterRulesConflict<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    // An atomic rule can reject a stale commit before Firestore reports a transaction conflict.
+    if ((error as { code?: string } | null)?.code !== "permission-denied") throw error;
+    return work();
+  }
+}
 
 export class SmsTransactionCandidateRepository {
   constructor(
     private readonly collection: CollectionReference,
     private readonly tombstoneCollection?: CollectionReference,
+    private readonly dismissedCollection?: CollectionReference,
   ) {}
 
   /** True when {@link importAtomically} can be used (it needs the sibling tombstone collection). */
@@ -102,19 +129,33 @@ export class SmsTransactionCandidateRepository {
 
     const candidateRef = doc(this.collection, candidateId);
     const tombstoneRef = doc(this.tombstoneCollection, candidateId);
+    const dismissedRef = outcome === "dismissed" && this.dismissedCollection
+      ? doc(this.dismissedCollection, candidateId)
+      : null;
     const firestore = this.collection.firestore as Firestore;
 
-    const result = await runTransaction(firestore, async (tx) => {
+    const handle = () => runTransaction(firestore, async (tx) => {
       const existing = await tx.get(tombstoneRef);
       if (existing.exists()) {
         tx.delete(candidateRef);
         const existingOutcome = existing.data()?.outcome as SmsCandidateTombstoneOutcome | undefined;
         return { outcome: existingOutcome ?? outcome, mismatched: existingOutcome !== outcome };
       }
+      if (dismissedRef) {
+        const candidate = await tx.get(candidateRef.withConverter(null));
+        if (candidate.exists()) {
+          tx.set(dismissedRef, {
+            candidate: candidate.data(),
+            dismissedAt: serverTimestamp(),
+            expiresAt: Timestamp.fromMillis(Date.now() + DISMISSED_CANDIDATE_RETENTION_MS + TTL_CLOCK_BUFFER_MS),
+          });
+        }
+      }
       tx.set(tombstoneRef, buildSmsCandidateTombstone(outcome, transactionId));
       tx.delete(candidateRef);
       return { outcome, mismatched: false };
     });
+    const result = await (dismissedRef ? retryAfterRulesConflict(handle) : handle());
 
     if (result.mismatched) {
       console.error(
@@ -125,6 +166,61 @@ export class SmsTransactionCandidateRepository {
       );
     }
     return result;
+  }
+
+  watchDismissed(onData: (entries: DismissedSmsCandidate[]) => void, onError: (error: Error) => void): () => void {
+    const dismissed = this.dismissedCollection;
+    if (!dismissed) throw new Error("Dismissed candidate storage is unavailable");
+    return onSnapshot(query(dismissed, orderBy("dismissedAt", "desc")), (snapshot) => {
+      const entries: DismissedSmsCandidate[] = [];
+      for (const entry of snapshot.docs) {
+        const { candidate: data, dismissedAt } = entry.data();
+        if (!(dismissedAt instanceof Timestamp)) continue;
+        let candidate: SmsTransactionCandidate | null = null;
+        try {
+          candidate = smsTransactionCandidateFromData(entry.id, data);
+        } catch {
+          // Still let the owner restore or clear an entry that the web cannot display.
+        }
+        entries.push({ id: entry.id, dismissedAt, candidate });
+      }
+      onData(entries);
+    }, onError);
+  }
+
+  async restoreDismissed({ id, dismissedAt }: DismissedSmsCandidate): Promise<boolean> {
+    if (!this.dismissedCollection || !this.tombstoneCollection) throw new Error("Dismissed candidate storage is unavailable");
+    const dismissedRef = doc(this.dismissedCollection, id);
+    const tombstoneRef = doc(this.tombstoneCollection, id);
+    const candidateRef = doc(this.collection, id).withConverter(null);
+    return retryAfterRulesConflict(() => runTransaction(this.collection.firestore, async (tx) => {
+      const dismissed = (await tx.get(dismissedRef)).data();
+      if (!(dismissed?.dismissedAt instanceof Timestamp) || !dismissed.dismissedAt.isEqual(dismissedAt)) return false;
+      if (dismissedAt.toMillis() + DISMISSED_CANDIDATE_RETENTION_MS <= Date.now()) return false;
+      const tombstone = await tx.get(tombstoneRef);
+      const candidate = await tx.get(candidateRef);
+      if (tombstone.data()?.outcome !== "dismissed" || candidate.exists()) return false;
+      tx.set(candidateRef, dismissed.candidate);
+      tx.delete(tombstoneRef);
+      tx.delete(dismissedRef);
+      return true;
+    }));
+  }
+
+  async clearDismissed(entries: readonly DismissedSmsCandidate[]): Promise<void> {
+    const dismissed = this.dismissedCollection;
+    if (!dismissed) throw new Error("Dismissed candidate storage is unavailable");
+    // Clear only the dismissals shown in the confirmation, even if another tab restores and dismisses an item again.
+    for (let offset = 0; offset < entries.length; offset += 100) {
+      const page = entries.slice(offset, offset + 100);
+      await runTransaction(this.collection.firestore, async (tx) => {
+        const snapshots = await Promise.all(page.map(({ id }) => tx.get(doc(dismissed, id))));
+        snapshots.forEach((snapshot, index) => {
+          const timestamp = snapshot.data()?.dismissedAt;
+          if (timestamp instanceof Timestamp && timestamp.isEqual(page[index].dismissedAt)) tx.delete(snapshot.ref);
+        });
+      });
+    }
   }
 
   /**

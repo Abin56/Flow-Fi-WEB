@@ -269,8 +269,9 @@ export class PersonPaymentRepository {
    * Edits a payment: reverts it and records the corrected one in the SAME transaction, so account,
    * allocations, obligations, balance and cycle totals all move together. Advance already applied from
    * this payment is re-pointed to the new advance, which therefore can't be smaller than what was applied.
+   * A general receipt can instead keep its original cash leg while assigning part of it to one installment.
    */
-  async editPayment(person: Person, paymentId: string, input: RecordPaymentInput): Promise<string> {
+  async editPayment(person: Person, paymentId: string, input: RecordPaymentInput, options?: { keepReceiptTransactionId: string }): Promise<string> {
     const pre = await this.preloadGroup(paymentId);
     // Purpose money has its own life (uses, edits, releases) — like a separate income part, such a payment is
     // changed by reverting and recording it again, never by re-pointing purposes onto a new payment.
@@ -296,8 +297,9 @@ export class PersonPaymentRepository {
     const owners = await this.liveOwnerSchedules(carried);
     await runTransaction(this.db, async (tx) => {
       const session = new TxSession(tx);
-      await this.revertInSession(session, person, pre);
-      const { advanceEntryId } = await this.recordInSession(session, person, carried, newPaymentId, owners, { paymentId, entries: pre.entries });
+      const receipt = options ? await this.receiptForReallocation(session, person, pre, carried, options.keepReceiptTransactionId) : null;
+      await this.revertInSession(session, person, pre, receipt?.id);
+      const { advanceEntryId } = await this.recordInSession(session, person, carried, newPaymentId, owners, { paymentId, entries: pre.entries }, receipt);
       if (advanceEntryId) {
         for (const a of pre.applications) {
           if (a.deletedAt != null) continue;
@@ -308,6 +310,39 @@ export class PersonPaymentRepository {
       session.flush();
     });
     return newPaymentId;
+  }
+
+  private async receiptForReallocation(session: TxSession, person: Person, pre: PaymentGroup, input: RecordPaymentInput, receiptId: string): Promise<Transaction> {
+    const receipt = await this.deps.transactionRepository.getInTransaction(session.asTransaction(), receiptId);
+    const invalidLine = input.lines.some(({ route, key, amount }) => {
+      if (!Number.isFinite(amount) || amount <= PAYMENT_EPSILON) return true;
+      if (route.kind === "general") return false;
+      if (route.kind !== "derived" || route.obligationRef !== key || !isShareKey(key)) return true;
+      return route.sourceKind !== (key.startsWith("loan-inst:") ? "loanInstallment" : "emiInstallment");
+    });
+    if (!receipt || receipt.deletedAt != null || !receipt.isPersonLedgerMovement || receipt.linkedPersonId !== person.id ||
+      receipt.type !== "income" || receipt.accountId !== input.accountId || receipt.dateTime.getTime() !== input.date.getTime() ||
+      Math.abs(receipt.amount - input.amount) > PAYMENT_EPSILON || input.direction !== "theyPaid" || input.extra ||
+      input.extras?.length || input.purposes?.length || invalidLine ||
+      pre.entries.length === 0 || pre.entries.some((e) => e.type !== "receivedBack" || e.transactionRef !== receiptId ||
+        e.incomeTransactionRef || e.installmentPaymentRef || e.parentEntryId || e.sourceKind === "advance" || isPaidDirectlyEntry(e) ||
+        (e.obligationRef != null && !isShareKey(e.obligationRef))) ||
+      Math.abs(pre.entries.reduce((sum, e) => sum + e.amount, 0) - input.amount) > PAYMENT_EPSILON) {
+      throw new PersonPaymentChangedError();
+    }
+    const previous = new Map<string, number>();
+    const next = new Map<string, number>();
+    for (const { obligationRef, amount } of pre.entries) {
+      if (obligationRef) previous.set(obligationRef, round2((previous.get(obligationRef) ?? 0) + amount));
+    }
+    for (const { route, amount } of input.lines) {
+      if (route.kind === "derived") next.set(route.obligationRef, round2((next.get(route.obligationRef) ?? 0) + amount));
+    }
+    if (![...previous].every(([key, amount]) => (next.get(key) ?? 0) >= amount - PAYMENT_EPSILON) ||
+      [...next].filter(([key, amount]) => amount > (previous.get(key) ?? 0) + PAYMENT_EPSILON).length !== 1) {
+      throw new Error("Choose one installment to apply an unassigned amount to.");
+    }
+    return receipt;
   }
 
   /**
@@ -522,6 +557,7 @@ export class PersonPaymentRepository {
     paymentId: string,
     owners: readonly string[] | null = null,
     replacing: { paymentId: string; entries: readonly LedgerEntry[] } | null = null,
+    existingReceipt: Transaction | null = null,
   ): Promise<{ advanceEntryId: string | null }> {
     const { direction, date, accountId } = input;
     const note = input.note?.trim() ?? "";
@@ -604,8 +640,8 @@ export class PersonPaymentRepository {
     const cashIn = direction === "theyPaid";
     // Purpose money rides in the same cash leg: received once, never income, never a second deposit.
     const settledCash = round2(allocated + (advancePart?.amount ?? 0) + purposeTotal);
-    let cashLeg: Transaction | null = null;
-    if (settledCash > PAYMENT_EPSILON) {
+    let cashLeg = existingReceipt;
+    if (!cashLeg && settledCash > PAYMENT_EPSILON) {
       cashLeg = await this.deps.transactionRepository.createTransactionInTransaction(tx, {
         type: cashIn ? "income" : "expense",
         amount: settledCash,
@@ -647,7 +683,7 @@ export class PersonPaymentRepository {
       receivedStatus: "received" as const,
       ...(earlier ? { recordedEarlier: true } : {}),
       ...(input.dateKnown === false ? { receivedDateKnown: false } : {}),
-      createdAt: new Date(),
+      createdAt: existingReceipt && replacing ? replacing.entries[0].createdAt : new Date(),
       deletedAt: null,
       lastEditedAt: null,
       editHistory: [],
@@ -681,7 +717,10 @@ export class PersonPaymentRepository {
     }
 
     const delta = round2(entries.reduce((s, e) => s + signedAmount(e), 0));
-    if (delta !== 0) session.set(personRef, this.deps.personRepository.applyBalanceDelta(personSnap.data(), delta));
+    if (existingReceipt) {
+      // Serialize against concurrent People settlements without recording a balance change.
+      session.set(personRef, { ...personSnap.data(), lastEditedAt: new Date() });
+    } else if (delta !== 0) session.set(personRef, this.deps.personRepository.applyBalanceDelta(personSnap.data(), delta));
     for (const e of entries) session.set(this.deps.ledgerRepository.docRef(e.id), e);
     // Purposes: notes on money already in the cash leg — no cash, no balance, no ledger entry.
     for (const p of purposes) {
@@ -755,7 +794,7 @@ export class PersonPaymentRepository {
     session.set(ref, { ...recordEdit(expense, "participants", JSON.stringify(expense.participants), JSON.stringify(participants)), participants });
   }
 
-  private async revertInSession(session: TxSession, person: Person, pre: PaymentGroup): Promise<void> {
+  private async revertInSession(session: TxSession, person: Person, pre: PaymentGroup, keepReceiptId?: string): Promise<void> {
     const personRef = this.deps.personRepository.docRef(person.id);
     const personSnap = await session.get(personRef);
     if (!personSnap.exists()) throw new Error("Person not found");
@@ -763,6 +802,7 @@ export class PersonPaymentRepository {
     const fresh: LedgerEntry[] = [];
     for (const e of pre.entries) {
       const snap = await session.get(this.deps.ledgerRepository.docRef(e.id));
+      if (keepReceiptId && (!snap.exists() || snap.data().deletedAt != null || snap.data().lastEditedAt?.getTime() !== e.lastEditedAt?.getTime())) throw new PersonPaymentChangedError();
       if (snap.exists() && snap.data().deletedAt == null) fresh.push(snap.data());
     }
     const tx = session.asTransaction();
@@ -788,6 +828,7 @@ export class PersonPaymentRepository {
 
     // Cash: the People cash leg and any separate income — each reversed out of its account.
     const cashIds = new Set([...fresh.flatMap((e) => (e.transactionRef ? [e.transactionRef] : [])), ...freshFunds.map((f) => f.receiptTransactionRef)]);
+    if (keepReceiptId) cashIds.delete(keepReceiptId);
     const incomeIds = new Set([
       ...fresh.flatMap((e) => (e.incomeTransactionRef ? [e.incomeTransactionRef] : [])),
       ...freshFunds.flatMap((f) => (f.incomeTransactionRef ? [f.incomeTransactionRef] : [])),
@@ -828,7 +869,7 @@ export class PersonPaymentRepository {
     }
 
     const delta = round2(-fresh.reduce((s, e) => s + signedAmount(e), 0));
-    if (delta !== 0) session.set(personRef, this.deps.personRepository.applyBalanceDelta(personSnap.data(), delta));
+    if (!keepReceiptId && delta !== 0) session.set(personRef, this.deps.personRepository.applyBalanceDelta(personSnap.data(), delta));
     for (const e of fresh) session.set(this.deps.ledgerRepository.docRef(e.id), { ...e, deletedAt: now });
     // The purposes go with the receipt (the advance / income they were released to is reverted above).
     for (const f of freshFunds) session.set(doc(this.deps.purposeFunds!, f.id), { ...f, deletedAt: now });

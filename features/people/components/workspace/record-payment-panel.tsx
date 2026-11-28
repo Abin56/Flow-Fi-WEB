@@ -2455,6 +2455,9 @@ export function paymentInitialFor(
     else if (e.obligationRef == null && e.parentEntryId == null) lines[GENERAL_PAYMENT_KEY] = round2((lines[GENERAL_PAYMENT_KEY] ?? 0) + e.amount);
     else lines[e.obligationRef ?? `ledger:${e.parentEntryId}`] = e.amount;
   }
+  // This editor replaces the allocation with either overall balance or specific items. Mixed receipts
+  // keep their allocations and can still be applied to another installment from Loan & EMI.
+  if (GENERAL_PAYMENT_KEY in lines && Object.keys(lines).length > 1) return null;
   return {
     paymentId,
     direction: group[0].type === "repaid" ? "iPaid" : "theyPaid",

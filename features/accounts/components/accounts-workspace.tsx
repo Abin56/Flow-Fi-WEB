@@ -57,7 +57,6 @@ import { useLinkedFunds } from "@/features/people/hooks/use-linked-funds";
 import { linkedPendingForAccount } from "@/lib/engines/linked-funds";
 import { bankById, GENERIC_BANK } from "@/lib/data/bank-registry";
 import type { Account, AccountType, BankAccountSubtype, CardSubtype } from "@/lib/models/account";
-import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { startOperation } from "@/store/operation-progress-store";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -114,6 +113,8 @@ const AC_COMBOBOX =
   "h-9 rounded-[6px] border-border-strong bg-card transition-[border-color,box-shadow] duration-150 hover:border-muted-foreground focus:border-primary-accent-text focus:ring-2 focus:ring-ring dark:bg-input";
 
 const CURRENCY_OPTIONS = ["USD", "EUR", "GBP", "AED", "SGD", "AUD", "JPY"];
+const TILE_GRID = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,15.75rem),1fr))] gap-2.5";
+const TILE_LIST = "@container flex flex-col divide-y divide-border-strong/40 overflow-hidden rounded-[10px] border border-border-strong/60 bg-card";
 
 interface AccountFormState {
   name: string;
@@ -224,7 +225,7 @@ export function AccountsWorkspace() {
 
   const { items: accountsOverviewList, isLoading } = useAccountsOverview();
   const { data: rawAccounts = [] } = useAccounts();
-  const { data: creditCards = [] } = useCreditCards();
+  const { data: creditCards = [], isLoading: creditCardsLoading } = useCreditCards();
   const actions = useAccountActions();
   const cardActions = useCreditCardActions();
   const { funds: linkedFunds } = useLinkedFunds();
@@ -391,9 +392,7 @@ export function AccountsWorkspace() {
   const holderRequired = form.type === "card" || form.type === "bank";
   const linkableBankAccounts = (rawAccounts as Account[]).filter((a) => a.type === "bank");
 
-  // Credit-card accounts are managed in the Credit Cards section (statements, limits, payments).
-  // Here they're split out of the money-you-have list into a compact strip so the bank/cash grid,
-  // its count and the Total balance (which already excludes cards) all describe the same thing.
+  // The linked account provides the balance and transaction ID for each credit card.
   const cardAccountIds = useMemo(() => new Set(creditCards.map((c) => c.accountId)), [creditCards]);
   const moneyAccounts = useMemo(
     () => accountsOverviewList.filter((a) => !cardAccountIds.has(a.id)),
@@ -425,15 +424,29 @@ export function AccountsWorkspace() {
   const defaultId = accountsOverviewList.find((a) => a.isPrimary)?.id ?? accountsOverviewList[0]?.id;
   const effectiveId = selectedId ?? defaultId;
   const selected = accountsOverviewList.find((a) => a.id === effectiveId);
+  const collectionClass = view === "grid" ? TILE_GRID : TILE_LIST;
 
-  if (isLoading) {
+  function selectAccount(accountId: string) {
+    setSelectedId(accountId);
+    setOverviewOpen(true);
+  }
+
+  function rememberSelection(accountId: string) {
+    selectAccount(accountId);
+    // Update this history entry before navigating so Back reopens the same overview.
+    const url = new URL(window.location.href);
+    url.searchParams.set("account", accountId);
+    window.history.replaceState(window.history.state, "", url);
+  }
+
+  if (isLoading || creditCardsLoading) {
     return (
-      <div className="flex min-w-0 flex-col gap-5 px-1">
+      <div className="flex min-w-0 flex-col gap-3 px-1">
         <AccountsHeader />
         <Skeleton className="h-24 rounded-[10px]" />
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className={TILE_GRID}>
           {Array.from({ length: 3 }, (_, i) => (
-            <Skeleton key={i} className="h-36 rounded-[10px]" />
+            <Skeleton key={i} className="h-28 rounded-[10px]" />
           ))}
         </div>
       </div>
@@ -445,28 +458,23 @@ export function AccountsWorkspace() {
       type="button"
       onClick={openAdd}
       className={cn(
-        "group/add flex items-center justify-center gap-2.5 border-dashed border-border-strong text-foreground/60 transition-[background,border-color,color,transform] duration-200 hover:border-primary-accent-text hover:bg-gradient-to-br hover:from-primary/20 hover:to-primary/5 hover:text-foreground",
-        view === "grid" ? "min-h-36 flex-col rounded-[14px] border-2 py-6" : "border-t px-4 py-3",
+        "flex items-center justify-center gap-1.5 text-muted-foreground outline-none hover:bg-secondary/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-safe:transition-colors",
+        view === "grid" ? "min-h-8 self-center justify-self-start rounded-lg border border-dashed border-border-strong/65 bg-card px-2.5 py-1" : "px-3 py-2",
       )}
     >
-      <span className="flex size-10 items-center justify-center rounded-full border-2 border-dashed border-current transition-transform duration-200 group-hover/add:scale-110 group-hover/add:rotate-90">
-        <Plus className="size-4.5" />
-      </span>
-      <span className="flex flex-col text-center">
-        <span className="text-sm font-semibold">Add account</span>
-        {view === "grid" && <span className="text-xs">Bank, card, wallet or cash</span>}
-      </span>
+      <Plus className="size-3.5" aria-hidden />
+      <span className="text-xs font-medium">Add account</span>
     </button>
   );
 
   return (
-    <div className="flex min-w-0 flex-col gap-5 px-1 lg:flex-row lg:items-start">
-      <div className="flex min-w-0 flex-1 flex-col gap-5">
+    <div className="flex min-w-0 flex-col gap-3 px-1 lg:flex-row lg:items-start">
+      <div className="flex min-w-0 flex-1 flex-col gap-4">
         <AccountsCompactBar progress={barProgress} reduceMotion={barReduceMotion} top={barTop} totalBalance={accountsStats.totalBalance} onAdd={openAdd} />
         <AccountsHeader onAdd={openAdd} titleRef={watchTitle} />
         <AccountsStats accountCount={moneyAccounts.length} onExplain={openBreakdown} />
 
-        <section aria-label="My accounts" className="flex flex-col gap-3">
+        <section aria-label="My accounts" className="flex flex-col gap-2">
           <AccountsToolbar
             count={moneyAccounts.length}
             search={search}
@@ -479,20 +487,20 @@ export function AccountsWorkspace() {
           />
 
           {moneyAccounts.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 rounded-[10px] border border-dashed border-border-strong bg-card py-12 text-center">
-              <p className="font-heading text-base font-semibold text-foreground">No accounts yet</p>
+            <div className="flex flex-col items-center justify-center gap-1.5 rounded-[10px] border border-dashed border-border-strong bg-card px-3 py-5 text-center">
+              <p className="font-heading text-sm font-semibold text-foreground">No accounts yet</p>
               <p className="text-sm text-muted-foreground">Add your first bank, wallet or cash account to get started.</p>
               <button
                 type="button"
                 onClick={openAdd}
-                className="mt-2 flex h-9 items-center gap-1.5 rounded-[6px] border border-primary-accent-text bg-primary px-3.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
+                className="mt-1 flex h-8 items-center gap-1.5 rounded-md border border-primary-accent-text bg-primary px-2.5 text-xs font-semibold text-primary-foreground hover:opacity-90"
               >
                 <Plus className="size-4" strokeWidth={2.25} />
                 Add Account
               </button>
             </div>
           ) : filtered.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 rounded-[10px] border border-border-strong/60 bg-card py-10 text-center">
+            <div className="flex flex-col items-center gap-1.5 rounded-[10px] border border-border-strong/60 bg-card px-3 py-5 text-center">
               <p className="text-sm font-semibold text-foreground">No accounts match this search or type.</p>
               <button
                 type="button"
@@ -505,98 +513,57 @@ export function AccountsWorkspace() {
                 Clear filters
               </button>
             </div>
-          ) : view === "grid" ? (
-            <Stagger className="grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(15rem,1fr))]">
+          ) : (
+            <Stagger className={collectionClass}>
               {filtered.map((account) => (
                 <AccountTile
                   key={account.id}
+                  variant={view}
                   account={account}
-                  active={account.id === effectiveId}
-                  onSelect={() => {
-                    setSelectedId(account.id);
-                    setOverviewOpen(true);
-                  }}
+                  active={overviewOpen && account.id === effectiveId}
+                  onSelect={() => selectAccount(account.id)}
+                  onNavigateToTransactions={() => rememberSelection(account.id)}
                   onExplain={() => openBreakdown({ kind: "account", accountId: account.id })}
                 />
               ))}
               {addTile}
             </Stagger>
-          ) : (
-            <div className="flex flex-col divide-y divide-border-strong/40 overflow-hidden rounded-[14px] border border-border-strong/60 bg-card shadow-e1">
-              {filtered.map((account) => (
-                <AccountTile
-                  key={account.id}
-                  variant="list"
-                  account={account}
-                  active={account.id === effectiveId}
-                  onSelect={() => {
-                    setSelectedId(account.id);
-                    setOverviewOpen(true);
-                  }}
-                  onExplain={() => openBreakdown({ kind: "account", accountId: account.id })}
-                />
-              ))}
-              {addTile}
-            </div>
           )}
         </section>
 
-        {cardAccounts.length > 0 && (
-          <section aria-label="Credit cards" className="flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="inline-flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">
-                <CreditCard className="size-3.5 text-foreground" strokeWidth={1.75} />
-                Credit cards · {cardAccounts.length}
-              </h2>
-              <Link
-                href="/credit-cards"
-                className="inline-flex items-center gap-1 text-xs font-semibold text-primary-accent-text hover:underline"
-              >
-                Manage in Credit Cards
-                <ArrowRight className="size-3.5" />
-              </Link>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Card balances are what you owe, so they aren&apos;t counted in Total balance. Statements, limits and payments live in Credit Cards.
-            </p>
-            <div className="flex flex-col divide-y divide-border-strong/40 overflow-hidden rounded-[10px] border border-border-strong/70 bg-card shadow-e1">
-              {cardAccounts.map((card) => {
-                const owed = Math.max(0, -card.balance);
-                return (
-                  <button
-                    key={card.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedId(card.id);
-                      setOverviewOpen(true);
-                    }}
-                    className={cn(
-                      "flex items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-secondary",
-                      card.id === effectiveId && overviewOpen && "bg-primary/10",
-                    )}
-                  >
-                    <span
-                      className={cn("flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-black/10", card.palette.onGradient)}
-                      style={{ background: card.palette.gradient }}
-                    >
-                      <CreditCard className="size-4" strokeWidth={1.75} />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold text-foreground">{card.name}</span>
-                      {card.mask && <span className="block text-xs text-muted-foreground">•••• {card.mask}</span>}
-                    </span>
-                    <span className="flex flex-col items-end">
-                      <span className="text-[11px] text-muted-foreground">Outstanding</span>
-                      <span className={cn("text-sm font-semibold tabular-nums", owed > 0 ? "text-expense" : "text-foreground")}>
-                        {formatCurrency(owed)}
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        )}
+        <section aria-label="Credit cards" className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-border-strong/50 pb-1.5">
+            <h2 className="inline-flex items-center gap-1.5 font-heading text-sm font-semibold text-foreground">
+              <CreditCard className="size-3.5 text-muted-foreground" aria-hidden />
+              Credit cards
+              <span className="rounded-full bg-secondary px-1.5 text-[11px] font-semibold text-muted-foreground tabular-nums">{cardAccounts.length}</span>
+            </h2>
+            <Link
+              href="/credit-cards"
+              className="inline-flex min-h-7 items-center gap-1 rounded-sm text-xs font-semibold text-primary-accent-text hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+            >
+              Manage in Credit Cards
+              <ArrowRight className="size-3.5" aria-hidden />
+            </Link>
+          </div>
+          {cardAccounts.length === 0 ? (
+            <p className="rounded-[10px] border border-dashed border-border-strong bg-card px-3 py-3 text-center text-sm text-muted-foreground">No credit cards yet</p>
+          ) : (
+            <Stagger className={collectionClass}>
+              {cardAccounts.map((card) => (
+                <AccountTile
+                  key={card.id}
+                  variant={view}
+                  account={card}
+                  creditCard
+                  active={overviewOpen && card.id === effectiveId}
+                  onSelect={() => selectAccount(card.id)}
+                  onNavigateToTransactions={() => rememberSelection(card.id)}
+                />
+              ))}
+            </Stagger>
+          )}
+        </section>
 
         <RecentAccountTransactions />
       </div>
@@ -604,14 +571,13 @@ export function AccountsWorkspace() {
       {overviewOpen && selected && (
         <AccountOverviewPanel
           account={selected}
+          creditCard={cardAccountIds.has(selected.id)}
           linkedFunds={linkedPendingForAccount(linkedFunds, selected.id)}
           onClose={() => setOverviewOpen(false)}
           // Card accounts hold what you owe, not money — their breakdown lives in Credit Cards.
           onExplainBalance={cardAccountIds.has(selected.id) ? undefined : () => openBreakdown({ kind: "account", accountId: selected.id })}
           onViewTransactions={() => {
-            // Stamp the selection onto THIS history entry first, synchronously: a `router.replace` here would be
-            // discarded by the `router.push` below (a new navigation preempts a pending one), so Back wouldn't reopen it.
-            window.history.replaceState(window.history.state, "", `${window.location.pathname}?account=${encodeURIComponent(selected.id)}`);
+            rememberSelection(selected.id);
             router.push(transactionsHrefForAccount(selected.id));
           }}
           onEdit={() => {

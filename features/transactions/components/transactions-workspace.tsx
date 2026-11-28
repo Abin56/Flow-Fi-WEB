@@ -1,6 +1,6 @@
 "use client";
 
-import { AccountLabel, AccountMark, AccountOptions } from "@/components/finance/account-label";
+import { AccountLabel, AccountPickerMark, AccountSelect } from "@/components/finance/account-label";
 import { AccountChip } from "@/components/finance/account-chip";
 import {
   ArrowDownLeft,
@@ -104,7 +104,7 @@ import { DateInput } from "@/components/forms/date-input";
 import { StatementFootnote, StatementHeader, StatementNeedsAccount, StatementTable } from "@/features/transactions/components/transactions-statement-view";
 import { buildTransactionStatementView } from "@/features/transactions/lib/transaction-statement";
 import { PeoplePaymentsByMonth } from "@/features/transactions/components/people-payments-by-month";
-import { AccountBalanceHover, AccountBalanceRail, AccountFilterMenu, SelectedAccountBalance, accountBalanceViewFor, type AccountBalanceView } from "@/features/transactions/components/account-balance-preview";
+import { AccountBalanceHover, AccountBalanceOverview, AccountFilterMenu, SelectedAccountLink, accountBalanceViewFor, type AccountBalanceView } from "@/features/transactions/components/account-balance-preview";
 
 /**
  * Corner-ribbon tag for a Loan/EMI-generated transaction card — "EMI" only for a payment tied to
@@ -233,10 +233,10 @@ type FormKind = "expense" | "income" | "transfer";
 
 export function TransactionsWorkspace() {
   const { rows, accounts, categories, isLoading } = useTransactionRows();
-  // Canonical card standings (shared limits pooled) — only for the Add Transfer preview's available-credit warning.
+  // The canonical card standings feed both the transfer preview and the balance displays.
   const { standings: cardStandings, isLoading: standingsLoading } = useCreditCardStandings();
   const cardAvailableCredit = useMemo(() => new Map(cardStandings.map((s) => [s.card.accountId, s.available])), [cardStandings]);
-  // Balance previews (filter menu, selected-account line, row hover) read these same standings and each
+  // Balance previews (overview, filter menu, row hover) read these same standings and each
   // account's stored balance — display only, nothing recomputed.
   const standingByAccountId = useMemo(() => new Map(cardStandings.map((s) => [s.card.accountId, s])), [cardStandings]);
   const balanceFor = (a: Account): AccountBalanceView => accountBalanceViewFor(a, standingByAccountId, standingsLoading);
@@ -555,7 +555,7 @@ export function TransactionsWorkspace() {
         value: a.id,
         // Last 4 tells same-named accounts apart (e.g. two "Freedom" cards); the logo shows the bank.
         label: a.accountNumberLast4 ? `${a.name} •••• ${a.accountNumberLast4}` : a.name,
-        icon: <AccountMark account={a} size={18} />,
+        icon: <AccountPickerMark account={a} size={18} />,
       })),
     },
     {
@@ -942,8 +942,7 @@ export function TransactionsWorkspace() {
           </div>
         </div>
 
-        {/* Every account's current balance, always on screen — a chip is a one-click shortcut to the Account filter. */}
-        <AccountBalanceRail
+        <AccountBalanceOverview
           accounts={accounts}
           balanceFor={balanceFor}
           activeId={accountFilter}
@@ -983,8 +982,7 @@ export function TransactionsWorkspace() {
             <button type="button" onClick={clearFilters} className="ml-1 text-xs font-semibold text-primary-accent-text hover:underline">
               Clear filters
             </button>
-            {/* One account filtered → its balance as of now, on this same line (Statement view already shows it in its header). */}
-            {selectedAccount && !statementMode && <SelectedAccountBalance account={selectedAccount} view={balanceFor(selectedAccount)} />}
+            {selectedAccount && !statementMode && <SelectedAccountLink account={selectedAccount} view={balanceFor(selectedAccount)} />}
           </div>
         )}
       </div>
@@ -1315,14 +1313,7 @@ function SplitFormFields({
       </label>
       <label className="flex flex-col gap-1">
         <span className="text-xs font-medium text-muted-foreground">Account</span>
-        <Select value={form.accountId} onValueChange={(v) => setForm((f) => ({ ...f, accountId: v }))}>
-          <SelectTrigger className="h-10 w-full rounded-xl">
-            <SelectValue placeholder="Select account" />
-          </SelectTrigger>
-          <SelectContent>
-            <AccountOptions accounts={accounts} label={(a) => <AccountLabel account={a} />} />
-          </SelectContent>
-        </Select>
+        <AccountSelect accounts={accounts} value={form.accountId} onChange={(v) => setForm((f) => ({ ...f, accountId: v }))} className="h-10 rounded-xl" placeholder="Select account" />
       </label>
       <label className="flex flex-col gap-1">
         <span className="text-xs font-medium text-muted-foreground">Category</span>

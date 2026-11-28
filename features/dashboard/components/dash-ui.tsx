@@ -7,8 +7,7 @@ export const DASH_LABEL = "text-[11px] font-semibold tracking-[0.06em] text-mute
 export const DASH_PANEL =
   "overflow-hidden rounded-[12px] border border-border-strong/60 bg-card shadow-e1 transition-[box-shadow,border-color] duration-300 hover:border-border-strong hover:shadow-e2";
 
-/** One compact list row: used by every list panel so rows line up across the grid. */
-export const DASH_ROW = "flex items-center gap-3 px-4 py-2 transition-colors duration-150 hover:bg-secondary/55";
+export const DASH_ROW = "flex items-center gap-2 px-3 py-1 transition-colors duration-150 hover:bg-secondary/55";
 
 export function DashPanel({ className, children, label }: { className?: string; children: React.ReactNode; label?: string }) {
   return (
@@ -25,15 +24,17 @@ export function DashPanelHeader({
   href,
   hrefLabel = "View all",
   aside,
+  compact = false,
 }: {
   icon: LucideIcon;
   title: string;
   href?: string;
   hrefLabel?: string;
   aside?: React.ReactNode;
+  compact?: boolean;
 }) {
   return (
-    <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border-strong/45 px-4">
+    <div className={cn("flex shrink-0 items-center justify-between border-b border-border-strong/45", compact ? "h-9 gap-2 px-3" : "h-11 gap-3 px-4")}>
       <h2 className="flex min-w-0 items-center gap-2 font-heading text-[14px] font-semibold text-foreground">
         <Icon className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
         <span className="truncate">{title}</span>
@@ -62,12 +63,12 @@ export function DashLink({ href, children, className }: { href: string; children
   );
 }
 
-export function DashEmpty({ title, description, action }: { title: string; description: string; action?: React.ReactNode }) {
+export function DashEmpty({ title, description, action, compact = false }: { title: string; description: string; action?: React.ReactNode; compact?: boolean }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-1 px-4 py-6 text-center">
+    <div className={cn("flex flex-1 flex-col items-center justify-center gap-1 text-center", compact ? "px-3 py-3" : "px-4 py-6")}>
       <p className="text-sm font-semibold text-foreground">{title}</p>
       <p className="text-xs text-muted-foreground">{description}</p>
-      {action && <div className="mt-2">{action}</div>}
+      {action && <div className={compact ? "mt-0.5" : "mt-2"}>{action}</div>}
     </div>
   );
 }
@@ -77,7 +78,7 @@ export function DashFooterLink({ href, children }: { href: string; children: Rea
   return (
     <Link
       href={href}
-      className="group/link mt-auto flex shrink-0 items-center justify-center gap-1 border-t border-border-strong/40 px-4 py-2 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/10"
+      className="group/link mt-auto flex min-h-7 shrink-0 items-center justify-center gap-1 border-t border-border-strong/40 px-3 text-xs font-semibold text-primary-accent-text transition-colors hover:bg-primary/10"
     >
       {children}
       <ArrowRight className="size-3 transition-transform duration-200 group-hover/link:translate-x-0.5" strokeWidth={2} />

@@ -44,30 +44,30 @@ export function BillCard({ row, onClick }: { row: BillRow; onClick: () => void }
       <button
         type="button"
         onClick={onClick}
-        className="flex w-full flex-col gap-3 rounded-3xl border border-border/60 bg-card p-4 text-left transition-shadow hover:shadow-e1"
+        className="flex h-full w-full min-w-0 flex-col gap-1.5 rounded-xl border border-border-strong/55 bg-card p-2.5 text-left transition-colors hover:border-border-strong focus-visible:ring-2 focus-visible:ring-primary-accent-text focus-visible:outline-none"
       >
         <div className="flex items-start justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/12 text-primary-accent-text">
-              <Icon className="size-4" />
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/12 text-primary-accent-text">
+              <Icon className="size-4" aria-hidden />
             </span>
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-foreground">{bill.name}</p>
-              <p className="truncate text-xs text-muted-foreground">{category?.name ?? RECURRENCE_LABEL[bill.recurrence]}</p>
+              <p className="truncate text-sm leading-tight font-semibold text-foreground" title={bill.name}>{bill.name}</p>
+              <p className="truncate text-xs text-muted-foreground" title={category?.name}>{category?.name ?? RECURRENCE_LABEL[bill.recurrence]}</p>
             </div>
           </div>
           <ClayBadge tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</ClayBadge>
         </div>
 
-        <div className="flex items-center justify-between text-sm">
-          <CurrencyCell amount={-(occurrence?.amount ?? bill.amount)} className="text-base font-semibold" />
+        <div className="mt-auto flex flex-wrap items-baseline justify-between gap-x-2 text-sm">
+          <CurrencyCell amount={-(occurrence?.amount ?? bill.amount)} className="text-sm font-semibold" />
           <DateCell date={occurrence?.dueDate ?? bill.nextDueDate} />
         </div>
 
         {account && (
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <BankLogo bankId={account.bankId} size={16} shape="square" />
-            {account.name}
+            <span className="truncate" title={account.name}>{account.name}</span>
           </div>
         )}
       </button>

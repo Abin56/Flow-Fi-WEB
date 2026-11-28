@@ -53,7 +53,23 @@ async function waitClosed(dlg, ms = 20000) {
 /* ───────────────────────────── 1. render ───────────────────────────── */
 scenario("accts-sweep-render", "Accounts sweep: all sections render with seeded data, figures match persisted balances, no errors, no overflow (desktop / dark / tablet / mobile)", async ({ page, logs }, chk) => {
   const seen = track404(page);
+  const longName = "Bank of India Savings Account";
+  await h.createDocUnderUser("accounts/qa-long-account-name", {
+    name: longName, type: "bank", bankAccountSubtype: "savings", colorValue: 0xff334e9a,
+    accountNumberLast4: "1234", openingBalance: 0, currentBalance: 0,
+    createdAt: new Date(), updatedAt: new Date(), deletedAt: null,
+  });
   await openAccounts(page);
+  const longHeading = mine(page).getByRole("heading", { name: longName, exact: true });
+  const fullNameFits = () => longHeading.evaluate((heading) => {
+    const range = document.createRange();
+    range.selectNodeContents(heading);
+    const text = range.getBoundingClientRect();
+    const box = heading.getBoundingClientRect();
+    return text.right <= box.right + 1 && text.bottom <= box.bottom + 1;
+  });
+  chk("desktop: a long account name is visible in full", await fullNameFits());
+  chk("account name with its type keeps the masked number without repeating the type", (await mine(page).getByText("•••• 1234", { exact: true }).count()) === 1);
   const main = flat(await page.locator("main").innerText());
   await h.shot(page, "accts-sweep-desktop-light");
   for (const [label, re] of [
@@ -62,7 +78,7 @@ scenario("accts-sweep-render", "Accounts sweep: all sections render with seeded 
     ["In banks", /In banks/i],
     ["Cash on hand", /Cash on hand/i],
     ["My accounts", /My accounts/],
-    ["Credit cards strip", /credit cards · 1/i],
+    ["Credit cards", /credit cards\s+1/i],
     ["Recent transactions", /Recent transactions/],
   ]) chk(`section present: ${label}`, re.test(main), re);
   chk("no 'NaN' / 'undefined' / 'Infinity' text", !/NaN|undefined|Infinity/.test(main), (main.match(/.{0,30}(NaN|undefined|Infinity).{0,30}/) || [""])[0]);
@@ -85,10 +101,13 @@ scenario("accts-sweep-render", "Accounts sweep: all sections render with seeded 
     const tile = flat(await mine(page).innerText());
     chk(`tile "${a.name}" shows ${fmt(a.currentBalance)}`, tile.includes(a.name) && tile.includes(fmt(a.currentBalance)), tile.slice(0, 160));
   }
-  const strip = flat(await page.getByRole("region", { name: "Credit cards" }).innerText());
-  chk("credit-card strip shows ₹12,000 outstanding (seed purchase)", /Outstanding\s*₹12,000/.test(strip), strip.slice(0, 220));
-  const recent = flat(await page.getByRole("region", { name: "Recent transactions" }).innerText());
+  const cards = flat(await page.getByRole("region", { name: "Credit cards" }).innerText());
+  chk("credit card tile shows ₹12,000 outstanding (seed purchase)", /Outstanding\s*₹12,000/.test(cards), cards.slice(0, 220));
+  const recentRegion = page.getByRole("region", { name: "Recent transactions" });
+  const recent = flat(await recentRegion.innerText());
+  const ledger = recentRegion.getByRole("table", { name: "Recent transactions" });
   chk("recent transactions list has rows (not the empty state)", !/No transactions yet/.test(recent) && /₹/.test(recent), recent.slice(0, 160));
+  chk("recent transactions has labelled ledger columns", (await ledger.getByRole("columnheader").allTextContents()).join(", ") === "Description, Account, Type, Date, Amount");
 
   // Overview panel is open by default (primary/first account).
   chk("account overview panel opens by default", (await panel(page).count()) === 1);
@@ -110,6 +129,10 @@ scenario("accts-sweep-render", "Accounts sweep: all sections render with seeded 
   await h.shot(page, "accts-sweep-mobile");
   const o3 = await overflow();
   chk("mobile 390px: no horizontal overflow", o3.sw <= o3.cw + 1 && o3.mw <= o3.mc + 1, JSON.stringify(o3));
+  chk("mobile: a long account name is visible in full", await fullNameFits());
+  chk("mobile ledger keeps description and amount visible", (await ledger.getByRole("columnheader").allTextContents()).join(", ") === "Description, Amount");
+  await ledger.scrollIntoViewIfNeeded();
+  await h.shot(page, "accts-sweep-mobile-ledger");
 
   // Accessible names: every button / link / input on the page is labelled.
   await page.setViewportSize({ width: 1366, height: 768 });
@@ -284,12 +307,12 @@ scenario("accts-sweep-controls", "Accounts sweep: toolbar, tiles, overview panel
     chk(`link "${name}" opens ${path}`, ok && !/This page could not be found|Something went wrong|Application error/i.test(body), page.url());
   }
 
-  // Credit-card strip row selects the card account: balance shown is what's owed, no "explain" for card
+  // Selecting the credit card opens the existing account overview.
   await openAccounts(page);
   await page.getByRole("region", { name: "Credit cards" }).getByRole("button", { name: /QA Credit Card/ }).click();
   await page.waitForTimeout(600);
   const cov = flat(await panel(page).innerText());
-  chk("card row selects the card: overview shows QA Credit Card", /QA Credit Card/.test(cov), cov.slice(0, 160));
+  chk("card tile selects the card: overview shows QA Credit Card", /QA Credit Card/.test(cov), cov.slice(0, 160));
   chk("card overview has no balance 'Explain' button (breakdown lives in Credit Cards)", (await panel(page).getByRole("button", { name: /^Explain .* balance$/ }).count()) === 0);
   chk("card overview shows the account holder and last-4 (QA Tester / 4242)", /QA Tester/.test(cov) && /4242/.test(cov), cov.slice(0, 260));
   await h.shot(page, "accts-sweep-card-overview");
@@ -298,6 +321,42 @@ scenario("accts-sweep-controls", "Accounts sweep: toolbar, tiles, overview panel
   const errs = realErrors(logs, seen);
   chk("no console errors / page errors during the click sweep", errs.length === 0, errs.slice(0, 5).join(" || "));
   void names;
+});
+
+scenario("accts-sweep-tile-transactions", "Accounts and credit card tiles open their own transaction history", async ({ page }, chk) => {
+  await openAccounts(page);
+  const accounts = await accts();
+  const cards = page.getByRole("region", { name: "Credit cards" });
+  const bankName = "QA Bank";
+  const cardName = "QA Credit Card";
+  chk("bank and card have tiles in separate grids",
+    (await mine(page).getByRole("heading", { level: 3, name: bankName }).count()) === 1 &&
+    (await mine(page).getByRole("heading", { level: 3, name: cardName }).count()) === 0 &&
+    (await cards.getByRole("heading", { level: 3, name: cardName }).count()) === 1);
+  await page.getByRole("radio", { name: "List view" }).click();
+  chk("list view applies to both sections", (await mine(page).locator("h3").count()) === 0 && (await cards.locator("h3").count()) === 0);
+  await h.shot(page, "accounts-and-cards-list");
+  await page.getByRole("radio", { name: "Grid view" }).click();
+  await h.shot(page, "accounts-and-cards-grid");
+
+  for (const [section, name, ownTxn, otherTxn] of [
+    [mine(page), bankName, "QA groceries", "QA card purchase"],
+    [cards, cardName, "QA card purchase", "QA groceries"],
+  ]) {
+    const { id } = accounts.find((account) => account.name === name);
+    if (name === cardName) {
+      await page.setViewportSize({ width: 390, height: 844 });
+      chk("mobile: the Accounts layout fits the viewport", await page.locator("main").evaluate((main) => main.scrollWidth <= main.clientWidth + 1));
+    }
+    await section.getByRole("link", { name: `View ${name} transactions` }).click();
+    await page.waitForURL((url) => url.pathname.startsWith("/transactions") && url.searchParams.get("account") === id);
+    const rows = page.locator("tbody tr");
+    await rows.getByText(ownTxn, { exact: true }).waitFor();
+    chk(`${name} opens Transactions with only its own rows`, (await rows.getByText(otherTxn, { exact: true }).count()) === 0);
+    await page.goBack();
+    await panel(page).getByText(name, { exact: true }).first().waitFor();
+    chk(`Back restores ${name} in the overview`, new URL(page.url()).searchParams.get("account") === id);
+  }
 });
 
 /* ───────────────────────────── 3. add: validation ───────────────────────────── */
@@ -543,8 +602,8 @@ scenario("accts-sweep-add-create", "Accounts sweep: create bank / cash / wallet 
     const prof = cardsAfter.find((c) => c.accountId === a.id);
     chk("credit card: a CreditCardProfile was created and linked (limit 80,000, due 25, statement 5)", cardsAfter.length === cardsBefore + 1 && !!prof && prof.creditLimit === 80000 && prof.paymentDueDay === 25 && prof.statementDay === 5, JSON.stringify(prof && { l: prof.creditLimit, d: prof.paymentDueDay, s: prof.statementDay }));
     await page.waitForTimeout(1200);
-    const strip = flat(await page.getByRole("region", { name: "Credit cards" }).innerText());
-    chk("credit card appears in the Credit cards strip (count 2) and is not a money tile", /credit cards · 2/i.test(strip) && /HDFC Bank Credit Card/.test(strip) && !/HDFC Bank Credit Card/.test(flat(await mine(page).innerText())), strip.slice(0, 180));
+    const cards = flat(await page.getByRole("region", { name: "Credit cards" }).innerText());
+    chk("new credit card appears in the Credit cards grid (count 2)", /credit cards\s+2/i.test(cards) && /HDFC Bank Credit Card/.test(cards) && !/HDFC Bank Credit Card/.test(flat(await mine(page).innerText())), cards.slice(0, 180));
   }
 
   // Totals follow the new accounts (cards excluded)
@@ -679,7 +738,7 @@ scenario("accts-sweep-edit-delete", "Accounts sweep: edit an account (persisted,
   const rest = (await accts()).filter((x) => x.type !== "card").reduce((s, x) => s + x.currentBalance, 0);
   chk("Total balance follows the delete", summary.includes("₹" + Math.round(rest).toLocaleString("en-IN")), summary.slice(0, 140));
 
-  // Delete the seeded credit card from the strip → goes through the credit-card cascade (profile removed too)
+  // Delete the seeded credit card from its overview → goes through the credit-card cascade (profile removed too)
   const cardBefore = (await h.list("creditCards")).filter((c) => !c.deletedAt);
   await page.getByRole("region", { name: "Credit cards" }).getByRole("button", { name: /QA Credit Card/ }).click();
   await page.waitForTimeout(500);

@@ -2,7 +2,8 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { AccountLabel, AccountMark, AccountSelect, accountKind, groupAccountsByKind, isCreditCardAccount } from "./account-label";
+import { useState } from "react";
+import { AccountLabel, AccountMark, AccountSelect, accountKind, creditCardOption, groupAccountsByKind, isCreditCardAccount } from "./account-label";
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
@@ -79,5 +80,46 @@ describe("AccountSelect sections", () => {
     await user.click(screen.getByRole("combobox"));
     const listbox = await screen.findByRole("listbox");
     expect(within(listbox).queryByText("Bank & cash accounts")).toBeNull();
+  });
+
+  it("uses the stored ARGB and legacy card colors in the list and keeps the swatch when a card is selected", async () => {
+    const user = userEvent.setup();
+    const octane = { ...credit, bankId: "sbi", colorValue: 0xffc62828 };
+    const legacy = { ...debit, colorValue: 3 };
+    function Harness() {
+      const [value, setValue] = useState("");
+      return <AccountSelect accounts={[bank, legacy, octane, { ...credit, id: "virtual", name: "Virtual card" }]} value={value} onChange={setValue} />;
+    }
+
+    render(<Harness />);
+    const trigger = screen.getByRole("combobox");
+    await user.click(trigger);
+    const list = within(await screen.findByRole("listbox"));
+    const option = list.getByRole("option", { name: /Octane/ });
+    expect(option.style.getPropertyValue("--account-card-color")).toBe("#c62828");
+    expect(option.querySelector("img")?.getAttribute("src")).toMatch(/\/banks\/logos\/sbi\./);
+    expect(list.getByRole("option", { name: /SBI Debit/ }).style.getPropertyValue("--account-card-color")).toBe("#0f766e");
+    expect(list.getByRole("option", { name: /Virtual card/ }).style.getPropertyValue("--account-card-color")).toBe("");
+
+    await user.keyboard("o{Enter}");
+    expect(within(trigger).getByText("Octane")).toBeTruthy();
+    expect(within(trigger).getByText("•••• 3456")).toBeTruthy();
+    expect(trigger.querySelector<HTMLElement>("[data-account-kind=credit]")?.style.getPropertyValue("--account-card-color")).toBe("#c62828");
+  });
+
+  it("selects a card profile by its own ID and keeps the original empty choice available", async () => {
+    const user = userEvent.setup();
+    const option = creditCardOption({ id: "profile", issuer: "sbi", lastFourDigits: "9876" }, { ...credit, colorValue: 6 });
+    const onChange = vi.fn();
+    const { rerender } = render(<AccountSelect accounts={[option]} value="" onChange={onChange} placeholder="Choose card" clearable />);
+    const trigger = screen.getByRole("combobox");
+    await user.click(trigger);
+    await user.click(await screen.findByRole("option", { name: /Octane.*9876/ }));
+    expect(onChange).toHaveBeenCalledWith("profile");
+
+    rerender(<AccountSelect accounts={[option]} value="profile" onChange={onChange} placeholder="Choose card" clearable />);
+    await user.click(trigger);
+    await user.click(await screen.findByRole("option", { name: "Choose card" }));
+    expect(onChange).toHaveBeenLastCalledWith("");
   });
 });
