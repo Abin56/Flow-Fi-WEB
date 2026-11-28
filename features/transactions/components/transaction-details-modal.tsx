@@ -521,9 +521,8 @@ export function TransactionDetailsModal({
   /** Card Pay bill — "Refresh bill": an authoritative fresh read of the card's bill (Firestore, canonical
    *  scope + People). Resolves to the statement normal Pay Now would pay now (null: nothing payable). Never saves. */
   onRefreshBill?: ((accountId: string) => Promise<{ accountId: string; statementId: string; remaining: number } | null>) | null;
-  /** Add mode + transfer only — what this payment pays (card Pay bill: statement vs full outstanding), shown
-   *  under the amount while the To account is `accountId`. Display only; never changes the amount. */
-  paymentScope?: { accountId: string; content: ReactNode } | null;
+  /** Card Pay bill — show what the entered amount covers while the To account is `accountId`. */
+  paymentScope?: { accountId: string; render: (amount: number) => ReactNode } | null;
   /** Card Pay bill — the statement normal Pay Now was paying when the dialog opened. An amount within it is
    *  saved as a payment OF that statement: the write refuses it if that statement changed meanwhile. */
   statementIntent?: { accountId: string; statementId: string; remaining: number } | null;
@@ -649,7 +648,7 @@ export function TransactionDetailsModal({
   // succeeds, or the To card changes), never re-read from live data mid-action: a stale dialog then fails
   // at the write instead of silently paying whatever statement is oldest by Save time.
   const [intentSnapshot, setIntentSnapshot] = useState<{ for: string; intent: typeof statementIntent }>({ for: "", intent: null });
-  const intentFor = `${transferKey}|${statementIntent?.accountId ?? ""}`;
+  const intentFor = `${transferKey}|${paymentScope?.accountId ?? statementIntent?.accountId ?? ""}`;
   if (open && intentSnapshot.for !== intentFor) setIntentSnapshot({ for: intentFor, intent: statementIntent });
   // "Refresh bill" after a refused stale Save: an AUTHORITATIVE fresh read (`onRefreshBill`), then
   // re-snapshot that statement. Never saves — the user reviews the refreshed bill and presses Pay again.
@@ -1055,8 +1054,17 @@ export function TransactionDetailsModal({
     // "the first eligible account" (that would be a silent choice).
     if (!transaction && next !== "transfer") setAccountId((current) => accountAfterKindSwitch({ next, currentId: current, accounts }));
   }
+  const visiblePaymentScope = !transaction && kind === "transfer" && paymentScope?.accountId === destinationAccountId ? paymentScope : null;
+  const intent = intentSnapshot.intent;
+  const paymentAmount = Number(amount);
+  // A payment beyond the opened statement uses the card's normal oldest-first allocation.
+  const paymentStatement = intent != null && intent.accountId === destinationAccountId && paymentAmount <= intent.remaining + 0.005 ? intent : null;
+  const staleBillPreview = visiblePaymentScope != null && paymentAmount > 0 && paymentStatement != null
+    && (statementIntent?.statementId !== paymentStatement.statementId || paymentAmount > statementIntent.remaining + 0.005);
+  const billError = staleBillPreview || billChanged;
+  const errorText = staleBillPreview && !billChanged ? "This bill changed. Refresh it to review your payment." : formError;
   // A field-validation banner clears together with its field's highlight once that field is fixed.
-  const showFormError = formError != null && (invalidField == null || liveInvalid?.field === invalidField);
+  const showFormError = errorText != null && (billError || invalidField == null || liveInvalid?.field === invalidField);
 
   // Re-entry gate for handleSave: `saving` only flips after the async duplicate check, so without this a
   // rapid double Enter (or Enter + click) could start two saves. Gates re-entry only — no save logic here.
@@ -1183,10 +1191,6 @@ export function TransactionDetailsModal({
             idempotencyKey: transferKey,
           });
         } else if (kind === "transfer") {
-          // Within the opened statement → a payment OF that statement (beyond it is the explicit full / extra choice).
-          const intent = intentSnapshot.intent;
-          const cardStatementIntent =
-            intent != null && intent.accountId === destinationAccountId && amountValue <= intent.remaining + 0.005 ? { statementId: intent.statementId } : null;
           await actions.createTransferPair({
             amount: amountValue,
             dateTime,
@@ -1199,7 +1203,7 @@ export function TransactionDetailsModal({
             notes,
             idempotencyKey: transferKey,
             enforceFunds: true,
-            cardStatementIntent,
+            cardStatementIntent: paymentStatement != null ? { statementId: paymentStatement.statementId } : null,
             fee: ownTransfer ? transferFeeParams({ feeText: transferFee, chargedTo: feeChargedTo, feeCategoryId, viaApp }) : null,
             peopleGateAcknowledgement: gatePeopleAck
               ? { acknowledgedUnsettledPeople: true, reason: "Card bill paid independently of People repayments" }
@@ -1833,13 +1837,13 @@ export function TransactionDetailsModal({
                 className="flex items-start gap-2 rounded-[6px] border border-danger/50 bg-danger/10 px-3 py-2 text-xs font-medium text-danger"
               >
                 <Info className="mt-px size-3.5 shrink-0" strokeWidth={2} />
-                <span className="flex-1">{formError}</span>
+                <span className="flex-1">{errorText}</span>
                 {ownerEditLink != null && (
                   <Link href={ownerEditLink.href} className="shrink-0 font-semibold underline underline-offset-2">
                     {ownerEditLink.label}
                   </Link>
                 )}
-                {billChanged && (
+                {billError && (
                   <button
                     type="button"
                     onClick={() => void refreshBill()}
@@ -1968,8 +1972,8 @@ export function TransactionDetailsModal({
                 </div>
               )}
             </div>
-            {!transaction && kind === "transfer" && paymentScope != null && paymentScope.accountId === destinationAccountId && (
-              <div className="px-4 py-3 sm:px-6">{paymentScope.content}</div>
+            {visiblePaymentScope != null && !billError && (
+              <div className="px-4 py-3 sm:px-6">{visiblePaymentScope.render(paymentAmount)}</div>
             )}
 
             <FormSection accent={kind} icon={Shapes} title="Details">
@@ -2208,6 +2212,10 @@ export function TransactionDetailsModal({
                         value={destinationAccountId}
                         onChange={(id) => {
                           setDestinationAccountId(id);
+                          if (billChanged) {
+                            setBillChanged(false);
+                            setFormError(null);
+                          }
                           onDestinationAccountChange?.(id);
                         }}
                         placeholder="Select destination account"

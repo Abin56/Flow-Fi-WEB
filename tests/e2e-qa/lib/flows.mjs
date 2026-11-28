@@ -235,13 +235,9 @@ export async function openPayWholeCard(page) {
   const full = page.getByRole("button", { name: /Pay full outstanding/ }).first();
   const bill = page.getByRole("button", { name: /^Pay bill ₹12,000/ }).first();
   await full.or(bill).first().waitFor({ timeout: 30000 });
-  if ((await full.count()) > 0 && (await full.isVisible())) {
-    await full.click();
-    await page.getByText("PAYING FULL CARD OUTSTANDING").waitFor();
-    return "PAYING FULL CARD OUTSTANDING";
-  }
-  await bill.click();
-  // The Pay bill dialog names the bill it pays: "Current bill" (shown uppercase), its period and due date.
-  await page.getByRole("dialog").last().getByText("Current bill", { exact: true }).first().waitFor();
-  return "Current bill";
+  const payingFull = await full.isVisible();
+  await (payingFull ? full : bill).click();
+  const heading = payingFull ? "Payment breakdown" : "Statement bill";
+  await page.getByRole("region", { name: "Bill payment details" }).getByRole("heading", { name: heading }).waitFor();
+  return heading;
 }

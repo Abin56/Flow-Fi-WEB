@@ -51,7 +51,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useSharedCreditLimits } from "@/hooks/use-credit-cards";
-import { payBillAmount, payBillChargeScope, type CardBill, type CardStatementPaymentScope, type PayBillChoice } from "@/lib/engines/card-cycle-bills";
+import { payBillAmount, payBillChargeScope, type CardStatementPaymentScope, type PayBillChoice } from "@/lib/engines/card-cycle-bills";
 import { statementWindowForDate } from "@/lib/repositories/credit-card-repository";
 import { LinkedFundsPayNotice } from "@/features/people/components/linked-funds";
 import { useLinkedFunds } from "@/features/people/hooks/use-linked-funds";
@@ -81,8 +81,11 @@ import { CardLimitSection } from "@/features/credit-cards/components/card-limit-
 import { CardFormPreview, type PreviewCard } from "@/features/credit-cards/components/card-form-preview";
 import { CreditUsageBar, CreditUsageBreakdownView } from "@/features/credit-cards/components/credit-usage-bar";
 import { ActivityEmpty, CardBillParts, CardBillsView, CardSpendingView, CardTransactionsView, DuePill, type ActivityTxnRow } from "@/features/credit-cards/components/card-activity-views";
+import { CardStatementOverview } from "@/features/credit-cards/components/card-statement-overview";
+import { PayBillDialogScope } from "@/features/credit-cards/components/pay-bill-dialog-scope";
 import { useCreditUsageBreakdowns } from "@/features/credit-cards/hooks/use-credit-usage-breakdown";
-import { cardBillBreakdowns, cardDueStatus, type CardBillBreakdown, type CreditUsageBreakdown } from "@/features/credit-cards/lib/card-usage-breakdown";
+import { cardStatementCycles, formatCardStatementPeriod } from "@/features/credit-cards/lib/card-statement-period";
+import { cardBillBreakdowns, cardDueStatus, cardStatementProgress, statementFeeCategoryIds, type CardBillBreakdown, type CreditUsageBreakdown } from "@/features/credit-cards/lib/card-usage-breakdown";
 import { compareTransactionsNewestFirst } from "@/lib/models/transaction";
 import { useAuthStore } from "@/store/auth-store";
 import { fetchCardBillState } from "@/lib/repositories/repository-factory";
@@ -194,12 +197,6 @@ function formatShortDate(date: Date): string {
   return date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
 
-/** A bill's own statement period, e.g. "2 Aug – 1 Sep". */
-function billPeriodLabel(b: Pick<CardBill, "periodStart" | "periodEnd">): string {
-  const fmt = (d: Date) => d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-  return `${fmt(b.periodStart)} – ${fmt(b.periodEnd)}`;
-}
-
 export function CreditCardsWorkspace() {
   const { items: creditCards, isLoading: cardsLoading } = useCreditCardViewItems();
   const { totals: engineTotals, isLoading: totalsLoading } = useCreditCardTotals();
@@ -214,6 +211,7 @@ export function CreditCardsWorkspace() {
 
   const { data: people = [] } = usePeople();
   const { rows: transactionRows, accounts: txnAccounts, categories: txnCategories } = useTransactionRows();
+  const feeCategoryIds = useMemo(() => statementFeeCategoryIds(txnCategories), [txnCategories]);
   const transactionActions = useTransactionActions();
   // One-time repair of stored statement totals written by the old credit-as-charge formula (writes only when provably affected).
   useStoredStatementTotalRepair();
@@ -246,6 +244,19 @@ export function CreditCardsWorkspace() {
   }
   // The statement normal Pay Now is paying (the dialog snapshots it per payment action).
   const payCurrentStatement = payDestScope?.current ?? null;
+  const payCycles = payDestCard && payDestScope
+    ? cardStatementCycles(freshPayState?.card ?? payDestCard.card, freshPayState?.bills ?? payDestCard.bills, payCurrentStatement)
+    : null;
+  const payStatementProgress = useMemo(() => {
+    if (usage.isLoading || !payDestCard || !payCurrentStatement) return null;
+    return cardStatementProgress(payCurrentStatement, {
+      bills: freshPayState?.bills ?? payDestCard.bills,
+      cardTransactions: freshPayState?.transactions ?? usage.transactionsByAccountId.get(payDestCard.card.accountId) ?? [],
+      financed: usage.financed,
+      transferTargets: usage.financedTransferTargets,
+      feeCategoryIds,
+    });
+  }, [feeCategoryIds, freshPayState, payCurrentStatement, payDestCard, usage]);
   const payBreakdown = !usage.isLoading && payDestCard && payCurrentStatement
     ? (freshPayState ? cardBillBreakdowns({
         bills: freshPayState.bills,
@@ -601,6 +612,18 @@ export function CreditCardsWorkspace() {
   // (`activeCardId` set) always wins over this default.
   const defaultActiveCard = creditCards.find((c) => c.isPrimary) ?? creditCards[0];
   const activeCard = (activeCardId != null ? creditCards.find((c) => c.id === activeCardId) : undefined) ?? defaultActiveCard;
+  const activeCycles = activeCard ? cardStatementCycles(activeCard.card, activeCard.bills, activeCard.statementPayment.current) : null;
+  const displayedBill = activeCycles?.bill ?? null;
+  const activeStatementProgress = useMemo(() => {
+    if (usage.isLoading || !activeCard || !displayedBill) return null;
+    return cardStatementProgress(displayedBill, {
+      bills: activeCard.bills,
+      cardTransactions: usage.transactionsByAccountId.get(activeCard.card.accountId) ?? [],
+      financed: usage.financed,
+      transferTargets: usage.financedTransferTargets,
+      feeCategoryIds,
+    });
+  }, [activeCard, displayedBill, feeCategoryIds, usage]);
   // What the Card activity tabs show: the selected card, or every card with "All cards".
   const activityCards = activityAllCards || !activeCard ? creditCards : creditCards.filter((c) => c.id === activeCard.id);
   // Every live card transaction (newest first) for the scope, so an empty list really means none recorded.
@@ -1137,6 +1160,7 @@ export function CreditCardsWorkspace() {
       {/* Stays perfectly still while the activity sheet slides over it — the dim comes from the sheet's own backdrop
           (one cheap fixed layer), never from scaling/fading this grid, which repainted every card on each frame. */}
       <div className="grid grid-cols-1 gap-4 @min-[992px]/credit-cards:grid-cols-[minmax(0,1fr)_clamp(304px,30cqw,352px)] @min-[992px]/credit-cards:items-start">
+        <div className="flex min-w-0 flex-col gap-4">
         {/* ── Card selection ── */}
         {/* scroll-mt-20: "Manage cards" (More menu) scrolls here, and the compact bar covers the top 56px */}
         <section id="my-credit-cards" aria-label="My credit cards" className="@container/cards flex min-w-0 scroll-mt-20 flex-col gap-3">
@@ -1284,9 +1308,13 @@ export function CreditCardsWorkspace() {
             </div>
           )}
         </section>
+          {activeCard && activeCycles && (
+            <CardStatementOverview cardName={activeCard.name} cycles={activeCycles} progress={activeStatementProgress} />
+          )}
+        </div>
 
         <aside style={{ top: stackTop }} className="flex min-w-0 flex-col gap-4 @min-[992px]/credit-cards:sticky">
-          {activeCard && activeUsage && (
+          {activeCard && activeUsage && activeCycles && (
             <SelectedCardPanel
               card={activeCard}
               usage={activeUsage}
@@ -1296,7 +1324,7 @@ export function CreditCardsWorkspace() {
                 const sibling = creditCards.find((c) => c.id === id);
                 return sibling ? bankIdOf(sibling) : null;
               }}
-              nextClose={statementWindowForDate(activeCard.card, new Date()).periodEnd}
+              cycles={activeCycles}
               reduceMotion={reduceMotion}
               onPayBill={() => payStatement(activeCard)}
               onPayFull={() => payFull(activeCard)}
@@ -1391,11 +1419,12 @@ export function CreditCardsWorkspace() {
             >
           {activityTab === "bills" && (
             <div id="upcoming-statements" className="scroll-mt-32">
-              {!activityAllCards && activeCard ? (
+              {!activityAllCards && activeCard && activeCycles ? (
                 <CardBillsView
                   card={activeCard}
                   breakdowns={usage.isLoading ? undefined : usage.billBreakdownsByCardId.get(activeCard.id)}
-                  nextClose={statementWindowForDate(activeCard.card, new Date()).periodEnd}
+                  cycles={activeCycles}
+                  statementProgress={activeStatementProgress}
                   onPayStatement={() => payStatement(activeCard)}
                   onPayFull={() => payFull(activeCard)}
                   onHistory={() => openCardHistory(activeCard)}
@@ -1437,7 +1466,7 @@ export function CreditCardsWorkspace() {
                               </div>
                             </td>
                             <td className={cn(CC_TD, "hidden text-xs font-medium text-foreground/85 tabular-nums md:table-cell")}>
-                              {bill ? billPeriodLabel(bill) : <span className="text-foreground/70">Next closes {formatShortDate(nextClose)}</span>}
+                              {bill ? formatCardStatementPeriod(bill) : <span className="text-foreground/70">Next closes {formatShortDate(nextClose)}</span>}
                             </td>
                             <td className={cn(CC_TD, "text-right")}>
                               {bill ? (
@@ -1601,16 +1630,17 @@ export function CreditCardsWorkspace() {
               : null
           }
           paymentScope={
-            payDestCard
+            payDestCard && payDestScope && payCycles
               ? {
                   accountId: payDestCard.card.accountId,
-                  content: (
+                  render: (amount) => (
                     <PayBillDialogScope
-                      scope={payDestScope ?? payScopeOf(payDestCard)}
+                      scope={payDestScope}
+                      bills={freshPayState?.bills ?? payDestCard.bills}
                       breakdown={payBreakdown}
-                      ownOutstanding={freshPayState ? freshPayState.scope.cardOutstanding : payDestCard.ownUsage}
-                      // The choice made outside belongs to the card it was made on; a switched To card reads as a statement payment.
-                      choice={payDestCard.id === payCard?.id ? payChoice : "statement"}
+                      cycles={payCycles}
+                      progress={payStatementProgress}
+                      amount={amount}
                     />
                   ),
                 }
@@ -1908,7 +1938,7 @@ function SelectedCardPanel({
   billBreakdown,
   bankId,
   siblingBankId,
-  nextClose,
+  cycles,
   reduceMotion,
   linkedNotice,
   onPayBill,
@@ -1924,7 +1954,7 @@ function SelectedCardPanel({
   billBreakdown?: CardBillBreakdown;
   bankId: string | null;
   siblingBankId: (siblingId: string) => string | null;
-  nextClose: Date;
+  cycles: ReturnType<typeof cardStatementCycles>;
   reduceMotion: boolean | null;
   linkedNotice: React.ReactNode;
   onPayBill: () => void;
@@ -2051,14 +2081,18 @@ function SelectedCardPanel({
           )}
         </div>
         <CardBillParts split={billBreakdown} />
-        <dl className="grid grid-cols-2 divide-x divide-border-strong/40 rounded-[8px] bg-card py-1.5 text-xs ring-1 ring-border-strong/40">
-          <div className="min-w-0 px-2.5">
+        <dl className="grid grid-cols-2 gap-y-1.5 rounded-[8px] bg-card py-1.5 text-xs ring-1 ring-border-strong/40">
+          <div className="col-span-2 border-b border-border-strong/40 px-2.5 pb-1.5">
+            <dt className="text-[10px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">{bill ? "Statement period" : "Last closed cycle"}</dt>
+            <dd className="font-semibold text-foreground tabular-nums">{formatCardStatementPeriod(cycles.statement)}</dd>
+          </div>
+          <div className="min-w-0 border-r border-border-strong/40 px-2.5">
             <dt className="text-[10px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">Payment due</dt>
             <dd className={cn("truncate font-semibold tabular-nums", due.tone === "overdue" ? "text-expense" : "text-foreground")}>{bill ? formatShortDate(bill.dueDate) : "No bill due"}</dd>
           </div>
           <div className="min-w-0 px-2.5">
             <dt className="text-[10px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">Next statement</dt>
-            <dd className="truncate font-semibold text-foreground tabular-nums">{formatShortDate(nextClose)}</dd>
+            <dd className="truncate font-semibold text-foreground tabular-nums">{formatShortDate(cycles.next.periodEnd)}</dd>
           </div>
         </dl>
         {bill && (later > 0.005 || scope.unbilled > 0.005) && (
@@ -2152,107 +2186,3 @@ const CC_PANEL_ACTION =
   "flex h-9 items-center justify-center gap-1.5 rounded-[8px] border border-border-strong/70 bg-card px-1 text-[12.5px] font-semibold text-foreground outline-none transition-colors hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring";
 const CC_PANEL_LINK =
   "flex h-10 items-center justify-between px-4 text-sm font-semibold text-foreground outline-none transition-colors [&+&]:border-t [&+&]:border-border-strong/40 hover:bg-secondary/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset";
-
-/**
- * Inside Pay bill, under the amount: which ONE bill the pre-filled amount pays — its period, due date and
- * (when partly paid) what's left — then, quieter, what stays on the card for later. Full mode says
- * plainly it pays the card's whole current outstanding, itemised.
- */
-function PayBillDialogScope({ scope, ownOutstanding, choice, breakdown }: { scope: CardStatementPaymentScope; ownOutstanding: number; choice: PayBillChoice; breakdown?: CardBillBreakdown }) {
-  const row = "flex items-baseline justify-between gap-3";
-  const label = "text-foreground/75";
-  const figure = "font-semibold text-foreground tabular-nums";
-  const bill = scope.current;
-  const full = choice === "full";
-  const eyebrow = "text-[11px] font-bold tracking-[0.08em] uppercase";
-  return (
-    <div className="mt-2 overflow-hidden rounded-[8px] border border-border-strong text-xs" data-testid="pay-bill-scope">
-      {full ? (
-        <div className="bg-secondary/40 px-3.5 py-2.5">
-          <p className={cn(eyebrow, "mb-1.5 text-foreground/80")}>Paying full card outstanding</p>
-          <dl className="space-y-0.5">
-            {bill && (
-              <div className={row}>
-                <dt className={label}>Current bill · {billPeriodLabel(bill)}</dt>
-                <dd className={figure}>{formatCurrency(bill.remaining)}</dd>
-              </div>
-            )}
-            {scope.later.map((b) => (
-              <div key={b.id} className={row}>
-                <dt className={label}>Next statement · {billPeriodLabel(b)}</dt>
-                <dd className={figure}>{formatCurrency(b.remaining)}</dd>
-              </div>
-            ))}
-            {scope.unbilled > 0 && (
-              <div className={row}>
-                <dt className={label}>New purchases (not billed yet)</dt>
-                <dd className={figure}>{formatCurrency(scope.unbilled)}</dd>
-              </div>
-            )}
-            <div className={cn(row, "border-t border-border-strong pt-1")}>
-              <dt className="font-semibold text-foreground">Card outstanding</dt>
-              <dd className={cn(figure, "text-sm")}>{formatCurrency(ownOutstanding)}</dd>
-            </div>
-          </dl>
-        </div>
-      ) : bill == null ? (
-        <p className="bg-secondary/40 px-3.5 py-2.5 font-medium text-foreground/80">No bill is due on this card — nothing has been billed and left unpaid.</p>
-      ) : (
-        <>
-          <div className={cn("px-3.5 py-2.5", scope.currentOverdue ? "bg-expense/8" : "bg-primary/10")}>
-            <div className={row}>
-              <p className={cn(eyebrow, scope.currentOverdue ? "text-expense" : "text-foreground/80")}>{scope.currentOverdue ? "Overdue bill" : "Current bill"}</p>
-              <p className="text-base font-bold text-foreground tabular-nums">{formatCurrencyExact(bill.remaining)}</p>
-            </div>
-            <dl className="mt-1 space-y-0.5">
-              <div className={row}>
-                <dt className={label}>Statement period</dt>
-                <dd className="font-medium text-foreground tabular-nums">{billPeriodLabel(bill)}</dd>
-              </div>
-              <div className={row}>
-                <dt className={label}>{scope.currentOverdue ? "Was due" : "Due date"}</dt>
-                <dd className={cn("font-medium tabular-nums", scope.currentOverdue ? "text-expense" : "text-foreground")}>{formatShortDate(bill.dueDate)}</dd>
-              </div>
-              {bill.amountPaid > 0.005 && (
-                <>
-                  <div className={row}>
-                    <dt className={label}>Original bill</dt>
-                    <dd className={figure}>{formatCurrencyExact(bill.totalAmount)}</dd>
-                  </div>
-                  <div className={row}>
-                    <dt className={label}>Already paid</dt>
-                    <dd className={figure}>{formatCurrencyExact(bill.amountPaid)}</dd>
-                  </div>
-                </>
-              )}
-            </dl>
-            {breakdown && <div className="mt-2"><CardBillParts split={breakdown} /></div>}
-          </div>
-          {(scope.later.length > 0 || scope.unbilled > 0) && (
-            <dl className="space-y-0.5 border-t border-border-strong/70 px-3.5 py-2 text-foreground/80">
-              <p className={cn(eyebrow, "mb-0.5 text-foreground/70")}>Stays on the card · not in this payment</p>
-              {scope.later.map((b) => (
-                <div key={b.id} className={row}>
-                  <dt className={label}>
-                    Next statement · {billPeriodLabel(b)} · due {formatShortDate(b.dueDate)}
-                  </dt>
-                  <dd className="font-medium text-foreground/85 tabular-nums">{formatCurrency(b.remaining)}</dd>
-                </div>
-              ))}
-              {scope.unbilled > 0 && (
-                <div className={row}>
-                  <dt className={label}>New purchases (not billed yet)</dt>
-                  <dd className="font-medium text-foreground/85 tabular-nums">{formatCurrency(scope.unbilled)}</dd>
-                </div>
-              )}
-              <div className={cn(row, "border-t border-border-strong/60 pt-1")}>
-                <dt className={label}>Card outstanding</dt>
-                <dd className="font-semibold text-foreground/90 tabular-nums">{formatCurrency(scope.cardOutstanding)}</dd>
-              </div>
-            </dl>
-          )}
-        </>
-      )}
-    </div>
-  );
-}

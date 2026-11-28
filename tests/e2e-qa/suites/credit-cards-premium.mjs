@@ -86,6 +86,8 @@ scenario("ccux-breakdown-labels", "Credit Cards: Loan/EMI vs Purchases adds up t
   const bills = flat(await sheet.getByRole("region", { name: "Bills on this card" }).innerText());
   chk("bill list: paid bill marked Paid, last cycle Part paid, open cycle listed", /Paid/.test(bills) && /Part paid/.test(bills) && /Open cycle/.test(bills), bills);
   chk("Bills view: remaining ₹6,000 with Bill · Paid · Remaining summary", /Bill ₹8,000 · Paid ₹2,000 · Remaining ₹6,000/.test(flat(await sheet.innerText())));
+  const statementPeriod = await sheet.locator("dl > div").filter({ has: page.getByText("Statement period", { exact: true }) }).locator("dd").first().innerText();
+  chk("Statement shows the bill's date range and year", /\d+ \w+ – \d+ \w+ \d{4}/.test(statementPeriod), statementPeriod);
 
   await sheet.getByRole("tab", { name: /Transactions/ }).click();
   await page.waitForTimeout(800);
@@ -108,8 +110,23 @@ scenario("ccux-breakdown-labels", "Credit Cards: Loan/EMI vs Purchases adds up t
   await page.waitForTimeout(900);
   chk("Esc closes the sheet", (await sheet.count()) === 0);
 
-  const panel = flat(await page.getByRole("region", { name: "Selected card" }).innerText());
+  const selected = page.getByRole("region", { name: "Selected card" });
+  const panel = flat(await selected.innerText());
   chk("panel: QA Credit Card breakdown Purchases ₹11,500 · Not split ₹6,000; bill ₹6,000", /Purchases[^₹]*₹11,500/.test(panel) && /Not split[^₹]*₹6,000/.test(panel) && /Remaining bill/i.test(panel) && /Bill ₹8,000 · Paid ₹2,000 · Remaining ₹6,000/.test(panel), panel.slice(0, 400));
+  chk("panel and Statement show the same period", await selected.getByText(statementPeriod, { exact: true }).isVisible(), statementPeriod);
+  await selected.getByRole("button", { name: "Pay bill", exact: true }).click();
+  const payment = page.getByRole("region", { name: "Bill payment details" });
+  await payment.getByText(statementPeriod, { exact: true }).waitFor();
+  chk("Pay bill shows the same period and ₹6,000 due", /Statement bill\s+₹6,000/.test(await payment.innerText()));
+  const amount = page.getByLabel("Amount *", { exact: true });
+  await amount.fill("2000");
+  chk("a ₹2,000 payment stays on the same statement and leaves ₹4,000 due", await payment.getByText(statementPeriod, { exact: true }).isVisible()
+    && /Remaining after payment\s+₹4,000/.test(await payment.innerText()));
+  await amount.fill("7000");
+  chk("a ₹7,000 payment applies ₹6,000 to the statement and ₹1,000 to the open cycle", /Statement bill · Due [^₹]+₹6,000/.test(await payment.innerText())
+    && /Open cycle · Advance payment\s+₹1,000/.test(await payment.innerText()));
+  await page.keyboard.press("Escape");
+  await payment.waitFor({ state: "hidden" });
 
   // ── List view: the breakdown per card ──
   await page.getByRole("radio", { name: "List" }).click();

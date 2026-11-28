@@ -24,6 +24,7 @@ const group = { count: 0, total: 0, items: [] };
 const data = {
   isLoading: false,
   financialView: { spent: 9700, spentBreakdown: { "My Expenses": 4200 }, mySpent: MY_SPENT, net: 0, myNet: 0, income: 0, spentChangePercent: null, mySpentChangePercent: null },
+  spendingFromAccounts: { loanPayments: { amount: 0, rows: [] }, expenses: { amount: 0, rows: [] } },
   expenseRows: [],
   accountSpends: [],
   bills: group,

@@ -2,6 +2,7 @@
  * My Money compact redesign (UI-only) — density, layout and themes on synthetic emulator data. Read-only.
  *   npm run test:e2e-qa -- mmux- --copy
  */
+import { readFile } from "node:fs/promises";
 import { scenario } from "../lib/core.mjs";
 import * as h from "../lib/harness.mjs";
 
@@ -21,6 +22,90 @@ async function monthlyAmountsVisible(page) {
     return month.innerText.includes(amount === "not started yet" ? "—" : amount);
   }));
 }
+
+scenario("mm-account-spending", "My Money and Month Cycle show direct loan debits and export separate account spending CSVs", async ({ page }, chk) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const bank = await h.accountBalance("QA Bank");
+  const loan = (await h.list("loans")).find((row) => row.name === "QA Loan 12");
+  const date = new Date();
+  const base = { dateTime: date, createdAt: date, accountId: bank.id, type: "expense", categoryId: "uncategorized", deletedAt: null };
+  const expenseDescription = "QA account expense for household supplies and recurring utility bills paid from the savings account";
+  await page.evaluate((uid) => {
+    const key = `flowfi:user-preferences:${uid}`;
+    const preferences = JSON.parse(localStorage.getItem(key) ?? "{}");
+    localStorage.setItem(key, JSON.stringify({ ...preferences, monthCycleStartDay: 17 }));
+    window.dispatchEvent(new CustomEvent("flowfi:user-preferences-changed", { detail: uid }));
+  }, await h.authUid());
+  await h.createDocUnderUser("transactions/qa-account-spend-loan", {
+    ...base, description: "QA direct loan debit", amount: 5321.23, loanId: loan.id, paymentAllocationType: "regularEmi",
+  });
+  await h.createDocUnderUser("transactions/qa-account-spend-expense", { ...base, description: expenseDescription, amount: 123.45 });
+
+  await open(page);
+  const year = page.getByRole("region", { name: "Spending this year" });
+  const period = page.getByRole("region", { name: "Spending this period" });
+  const yearDetails = year.getByRole("button", { name: /^View details for account spending/ });
+  const paidAmount = /^₹5,321\.23$/;
+  chk("direct loan debit appears in the period and year", await period.locator("dd").filter({ hasText: paidAmount }).isVisible() && await year.locator("dd").filter({ hasText: paidAmount }).isVisible());
+  for (const width of [900, 1280, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    const layout = await yearDetails.evaluate((trigger) => {
+      const main = document.querySelector("main");
+      return { overflow: main.scrollWidth - main.clientWidth, summaryHeight: trigger.parentElement.parentElement.offsetHeight };
+    });
+    chk(`desktop spending summary stays compact at ${width}px`, layout.overflow <= 1 && layout.summaryHeight <= 112, JSON.stringify(layout));
+  }
+  await h.shot(page, "my-money-account-spending");
+  const getPageHeight = () => page.locator("main").evaluate((main) => main.scrollHeight);
+  const pageHeight = await getPageHeight();
+  await yearDetails.click();
+  const details = page.getByRole("dialog", { name: "From your accounts" });
+  const months = details.getByRole("region", { name: "Monthly account breakdown" });
+  chk("year shows twelve monthly rows with the loan debit in its own month", await months.getByRole("row").count() === 13 && await months.getByRole("cell", { name: "₹5,321.23", exact: true }).count() === 1);
+  chk("custom cycle rows show the full cycle date range", await months.getByRole("columnheader", { name: "Cycle ends" }).isVisible() && await months.getByRole("rowheader", { name: /17 .*16 / }).count() === 12);
+  const scrolling = await months.evaluate((list) => {
+    list.scrollTop = list.scrollHeight;
+    return { scrollTop: list.scrollTop, headerTop: Math.round(list.querySelector("thead").getBoundingClientRect().top - list.getBoundingClientRect().top) };
+  });
+  chk("details scroll internally with a fixed table heading and no page growth", scrolling.scrollTop > 0 && Math.abs(scrolling.headerTop) <= 1 && pageHeight === await getPageHeight(), JSON.stringify(scrolling));
+  await h.shot(page, "my-money-account-spending-details");
+  await details.getByRole("tab", { name: "Transactions" }).click();
+  chk("transactions view shows loan and expense details", await details.getByRole("row", { name: /QA direct loan debit.*QA Bank/ }).isVisible() && await details.getByRole("row", { name: /QA account expense.*QA Bank/ }).isVisible());
+  chk("long descriptions fit inside the transactions view", await details.getByText(expenseDescription, { exact: true }).evaluate((text) => {
+    const list = text.closest('[data-slot="scroll-area"]');
+    return text.scrollWidth <= text.clientWidth + 1 && text.clientHeight >= 2 * parseFloat(getComputedStyle(text).lineHeight) - 1 && list.scrollWidth <= list.clientWidth + 1;
+  }));
+  await page.keyboard.press("Escape");
+  await details.waitFor({ state: "hidden" });
+  await yearDetails.evaluate((trigger) => trigger === document.activeElement || new Promise((resolve) => requestAnimationFrame(() => resolve(trigger === document.activeElement))))
+    .then((restored) => chk("closing details returns focus to its action", restored));
+
+  const personalSpend = await page.getByRole("region", { name: "Period summary" }).getByText("My spending", { exact: true })
+    .evaluate((label) => label.parentElement.nextElementSibling.textContent);
+
+  for (const [scope, label, expected, unexpected, filename] of [
+    [year, /Export Loan \/ EMI paid CSV/, '"QA direct loan debit","QA Bank",5321.23', "QA account expense", "flowfi-loan-emi-payments-"],
+    [period, /Export Other expenses CSV/, `"${expenseDescription}","QA Bank",123.45`, "QA direct loan debit", "flowfi-other-expenses-"],
+  ]) {
+    await scope.getByRole("button", { name: /^View details for account spending/ }).click();
+    const downloadPromise = page.waitForEvent("download");
+    await details.getByRole("button", { name: label }).click();
+    const download = await downloadPromise;
+    const csv = await readFile(await download.path(), "utf8");
+    chk(`${filename} export contains only the intended group`, download.suggestedFilename().startsWith(filename) && csv.includes(expected) && !csv.includes(unexpected));
+    await details.getByRole("button", { name: "Close", exact: true }).click();
+    await details.waitFor({ state: "hidden" });
+  }
+
+  await h.go(page, "/month-cycle");
+  const cycle = page.getByRole("region", { name: "Cycle summary" });
+  await cycle.getByText("₹5,321.23", { exact: true }).waitFor();
+  await cycle.getByRole("button", { name: personalSpend, exact: true }).waitFor();
+  chk("the existing My Spend figure agrees across pages", await cycle.getByRole("button", { name: personalSpend, exact: true }).isVisible(), personalSpend);
+  await cycle.getByRole("button", { name: /^View details for account spending/ }).click();
+  chk("Month Cycle has the same debit and both exports", await details.getByText("₹5,321.23", { exact: true }).count() === 2 && await details.getByRole("button", { name: /^Export.*CSV/ }).count() === 2);
+  await h.shot(page, "month-cycle-account-spending");
+});
 
 for (const [w, hgt] of [
   [900, 768],

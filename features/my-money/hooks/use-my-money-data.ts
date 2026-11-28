@@ -49,6 +49,7 @@ import type { Category } from "@/lib/models/category";
 import type { CreditCardProfile, Statement } from "@/lib/models/credit-card";
 import type { Person } from "@/lib/models/person";
 import type { Transaction } from "@/lib/models/transaction";
+import { accountSpendingForRange, accountSpendingRows } from "@/features/my-money/lib/account-spending";
 import { buildCompletedEvents, buildCycleObligations, makeCardLookup } from "@/features/my-money/lib/cycle-obligations";
 import { groupCompleted, spendComparison, summarizeToPay, summarizeYearSpend } from "@/features/my-money/lib/my-money";
 
@@ -254,6 +255,10 @@ export function useMyMoneyData() {
     };
   }, [peopleRows, followUpsByPersonId, statementsByPersonId, cycleRange, now, deferralsByPerson, startDay]);
 
+  const accountSpendRows = useMemo(() => accountSpendingRows({
+    transactions, accounts, cards, context: mySpendCtx, isCustomCycle,
+  }), [transactions, accounts, cards, mySpendCtx, isCustomCycle]);
+
   // ── My spending: My Spend engine, Month Cycle bucketing ──
   const spending = useMemo(() => {
     const bucketDate = (t: Transaction) => mySpendBucketDate(t, isCustomCycle);
@@ -279,8 +284,9 @@ export function useMyMoneyData() {
       purchaseCount: rows.length,
       topCategories,
       comparison: spendComparison(summary.mySpend, previous, isPast),
+      fromAccounts: accountSpendingForRange(accountSpendRows, cycleRange),
     };
-  }, [spendTxns, mySpendCtx, isCustomCycle, cycleRange, previousRange, spendCategories, isPast]);
+  }, [spendTxns, mySpendCtx, isCustomCycle, cycleRange, previousRange, spendCategories, isPast, accountSpendRows]);
 
   // ── Spending this year: the same My Spend rows, bucketed into the year's twelve cycles (extra to the period view) ──
   // The year follows the selected period until the panel's own year stepper is used.
@@ -289,16 +295,18 @@ export function useMyMoneyData() {
   const yearSpending = useMemo(() => {
     const monthRanges = Array.from({ length: 12 }, (_, m) => cycleRangeForMonth(startDay, year, m));
     const bucketDate = (t: Transaction) => mySpendBucketDate(t, isCustomCycle);
-    const yearEntries = (y: number, ranges: { start: Date; end: Date }[]) =>
+    const yearEntries = (ranges: { start: Date; end: Date }[]) =>
       mySpendRows({ transactions: spendTxns, ctx: mySpendCtx, bucketDate, range: { start: ranges[0].start, end: ranges[11].end } }).map((r) => ({
         date: bucketDate(r.transaction),
         myAmount: r.myAmount,
         categoryId: r.transaction.categoryId,
       }));
-    const summary = summarizeYearSpend(yearEntries(year, monthRanges), monthRanges, now);
+    const summary = summarizeYearSpend(yearEntries(monthRanges), monthRanges, now);
     const previousRanges = Array.from({ length: 12 }, (_, m) => cycleRangeForMonth(startDay, year - 1, m));
-    const previousTotal = summarizeYearSpend(yearEntries(year - 1, previousRanges), previousRanges, now).total;
+    const previousTotal = summarizeYearSpend(yearEntries(previousRanges), previousRanges, now).total;
     const yearComplete = monthRanges[11].end.getTime() < now.getTime();
+    const range = { start: monthRanges[0].start, end: monthRanges[11].end };
+    const fromAccounts = accountSpendingForRange(accountSpendRows, range);
     const categoryById = new Map(spendCategories.map((c) => [c.id, c]));
     const topCategories: SpendCategory[] = [...summary.byCategoryId.entries()]
       .filter(([, amount]) => amount > 0)
@@ -314,6 +322,12 @@ export function useMyMoneyData() {
       year,
       isCurrentYear: year === now.getFullYear(),
       rangeLabel: `${shortDate(monthRanges[0].start)} ${monthRanges[0].start.getFullYear()} – ${shortDate(monthRanges[11].end)} ${monthRanges[11].end.getFullYear()}`,
+      range,
+      fromAccounts,
+      monthlyFromAccounts: monthRanges.map((monthRange) => {
+        const groups = accountSpendingForRange(accountSpendRows, monthRange);
+        return { loanPayments: groups.loanPayments.amount, expenses: groups.expenses.amount };
+      }),
       ...summary,
       topCategories,
       comparison: spendComparison(summary.total, previousTotal, yearComplete),
@@ -324,7 +338,7 @@ export function useMyMoneyData() {
         isOverridden: yearOverride != null && yearOverride !== cycleRange.end.getFullYear(),
       },
     };
-  }, [year, yearOverride, cycleRange, startDay, isCustomCycle, spendTxns, mySpendCtx, spendCategories, now]);
+  }, [year, yearOverride, cycleRange, startDay, isCustomCycle, spendTxns, mySpendCtx, spendCategories, now, accountSpendRows]);
 
   // ── Completed: payments made in the period ──
   const completed = useMemo(

@@ -66,6 +66,7 @@ import { useMySpendContext } from "@/hooks/use-my-spend-context";
 import { useSpendTransactions, withBuiltInChargeCategory } from "@/hooks/use-lender-charge-spend";
 import { isLenderChargeBillingRow } from "@/lib/engines/lender-charge-accounting";
 import { mySpendRows, summarizeMySpend } from "@/lib/engines/my-spend";
+import { accountSpendingForRange, accountSpendingRows } from "@/features/my-money/lib/account-spending";
 import { monthCycleFinancialInputs } from "@/lib/engines/financial-view-inputs";
 import { compareTransactionsNewestFirst, isNonIncomeExpenseMovement, isPersonFunded, type Transaction } from "@/lib/models/transaction";
 
@@ -299,6 +300,10 @@ export function useMonthCycleData() {
   }, [isCustomCycle, cycleRange, monthCycleStartDay, transactions, spendTransactions, creditCards, emis, expenses, emiPayments, loanScheduledPayments, mySpendCtx]);
 
   const savingsRatePercent = financialView.income > 0 ? Math.round((financialView.net / financialView.income) * 100) : 0;
+
+  const spendingFromAccounts = useMemo(() => accountSpendingForRange(accountSpendingRows({
+    transactions, accounts, cards: creditCards, context: mySpendCtx, isCustomCycle,
+  }), cycleRange), [transactions, accounts, creditCards, mySpendCtx, isCustomCycle, cycleRange]);
 
   // --- The actual transactions behind `financialView.spent`/`mySpent` — same expense-in-range
   //     filter and Expense join `myExpenses()`/`combinedExpenses()` sum over, projected to rows
@@ -587,6 +592,7 @@ export function useMonthCycleData() {
     isFollowingGlobalCycle,
     followGlobalCycle,
     financialView,
+    spendingFromAccounts,
     savingsRatePercent,
     expenseRows,
     budgetOverview,

@@ -25,6 +25,7 @@ const group = { count: 0, total: 0, items: [] };
 const data = {
   isLoading: false,
   financialView: { spent: SPENT, spentBreakdown: BREAKDOWN, mySpent: MY_SPENT, net: 0, myNet: 0, income: 0, spentChangePercent: null, mySpentChangePercent: null },
+  spendingFromAccounts: { loanPayments: { amount: 0, rows: [] }, expenses: { amount: 0, rows: [] } },
   expenseRows: [{ id: "t1", description: "Dinner", category: "Food", categoryIconKey: "food", account: "SBI", accountType: "bank", date: new Date(2026, 8, 20), fullAmount: 3000, myAmount: 1000, isSplit: true }],
   accountSpends: [],
   bills: group,

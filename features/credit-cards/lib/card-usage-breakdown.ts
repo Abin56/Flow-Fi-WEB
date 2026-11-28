@@ -158,10 +158,15 @@ interface BillBreakdownInput {
   transferTargets?: ReadonlyMap<string, string>;
 }
 
+interface BillTransfers {
+  matchedLoanEmi: number;
+  loanEmi: number;
+  people: number;
+}
+
 /** Replays only the transfer-funded part of the canonical oldest-first settlement for display. */
-function linkedEmiPaid({ bills, cardTransactions, financed, transferTargets }: BillBreakdownInput): Map<string, number> {
-  const paid = new Map<string, number>();
-  if (!transferTargets?.size) return paid;
+function billTransfers({ bills, cardTransactions, financed, transferTargets }: BillBreakdownInput): Map<string, BillTransfers> {
+  const paid = new Map<string, BillTransfers>();
   // A linked principal transfer only identifies an EMI portion if it reached the bill holding its purchase.
   const billByPurchase = new Map<string, string>();
   for (const bill of bills) {
@@ -178,18 +183,23 @@ function linkedEmiPaid({ bills, cardTransactions, financed, transferTargets }: B
   let index = 0;
   for (const payment of payments) {
     const agreement = payment.emiId ? `emi:${payment.emiId}` : payment.loanId ? `loan:${payment.loanId}` : null;
-    const purchase = agreement && payment.installmentPaymentId ? transferTargets.get(agreement) : undefined;
+    const linkedInstallment = agreement != null && payment.installmentPaymentId != null;
+    const purchase = linkedInstallment ? transferTargets?.get(agreement) : undefined;
     const relatedBill = purchase && financed.get(purchase) === payment.accountId ? billByPurchase.get(purchase) : undefined;
     let left = payment.amount;
     while (left > EPS && index < slots.length) {
       const slot = slots[index];
       const applied = Math.min(left, slot.left);
+      const transfers = paid.get(slot.id) ?? { matchedLoanEmi: 0, loanEmi: 0, people: 0 };
+      if (linkedInstallment) transfers.loanEmi += applied;
+      else if (payment.isPersonLedgerMovement) transfers.people += applied;
       if (purchase && slot.id === relatedBill) {
         const outstanding = purchaseLeft.get(purchase) ?? 0;
         const matched = Math.min(applied, Math.max(0, outstanding));
-        paid.set(slot.id, (paid.get(slot.id) ?? 0) + matched);
+        transfers.matchedLoanEmi += matched;
         purchaseLeft.set(purchase, round2(outstanding - matched));
       }
+      paid.set(slot.id, transfers);
       left = round2(left - applied);
       slot.left = round2(slot.left - applied);
       if (slot.left <= EPS) index++;
@@ -214,7 +224,7 @@ export function cardBillBreakdowns(input: BillBreakdownInput): ReadonlyMap<strin
     net.set(bill.id, entry);
   }
 
-  const emiPaid = linkedEmiPaid(input);
+  const transfers = input.transferTargets?.size ? billTransfers(input) : null;
   const result = new Map<string, CardBillBreakdown>();
   for (const bill of bills) {
     const netBill = net.get(bill.id);
@@ -228,7 +238,7 @@ export function cardBillBreakdowns(input: BillBreakdownInput): ReadonlyMap<strin
     else if (billed.loanEmi <= EPS) remaining = { loanEmi: 0, purchases: bill.remaining };
     else if (billed.purchases <= EPS) remaining = { loanEmi: bill.remaining, purchases: 0 };
     else {
-      const linked = round2(Math.min(emiPaid.get(bill.id) ?? 0, billed.loanEmi, bill.amountPaid));
+      const linked = round2(Math.min(transfers?.get(bill.id)?.matchedLoanEmi ?? 0, billed.loanEmi, bill.amountPaid));
       const loanEmi = round2(billed.loanEmi - linked);
       if (loanEmi <= EPS || bill.amountPaid - linked <= EPS) {
         remaining = { loanEmi, purchases: round2(bill.remaining - loanEmi) };
@@ -237,6 +247,79 @@ export function cardBillBreakdowns(input: BillBreakdownInput): ReadonlyMap<strin
     result.set(bill.id, { billed, remaining });
   }
   return result;
+}
+
+const FEE_CATEGORIES = new Set([
+  "fees", "bank fees", "bank charges", "card fees", "card charges", "fees & charges", "interest",
+  "gst", "igst", "cgst", "sgst", "gst & fees",
+]);
+
+export function statementFeeCategoryIds(categories: readonly { id: string; name: string }[]): ReadonlySet<string> {
+  return new Set(categories.filter((category) => FEE_CATEGORIES.has(category.name.trim().toLowerCase())).map((category) => category.id));
+}
+
+export interface CardStatementProgress {
+  /** Charges and statement-period credits. Null when the available rows do not reconcile to the bill. */
+  activity: {
+    purchases: number;
+    loanEmi: number;
+    fees: number;
+    peopleCredits: number;
+    otherCredits: number;
+  } | null;
+  applied: number;
+  loanEmiPayments: number;
+  peoplePayments: number;
+  otherPayments: number;
+  adjustments: number;
+}
+
+/** Explains the canonical statement total and balance using only movements already posted on this card. */
+export function cardStatementProgress(
+  bill: CardBill,
+  input: BillBreakdownInput & { feeCategoryIds: ReadonlySet<string> },
+): CardStatementProgress {
+  const { bills, cardTransactions, financed, feeCategoryIds } = input;
+  const charges = new Set(bill.chargeIds);
+  const saved = bill.isMaterialized ? [] : bills.filter((b) => b.isMaterialized);
+  let purchases = 0;
+  let loanEmi = 0;
+  let fees = 0;
+  let peopleCredits = 0;
+  let otherCredits = 0;
+  for (const t of cardTransactions) {
+    if (!countsTowardCardStatement(t)) continue;
+    if (t.type === "income") {
+      if (!containsDay(bill, t.dateTime) || saved.some((b) => containsDay(b, t.dateTime))) continue;
+      if (t.isPersonLedgerMovement) peopleCredits += t.amount;
+      else otherCredits += t.amount;
+    } else if (charges.has(t.id)) {
+      if (t.transferFeeForId != null || feeCategoryIds.has(t.categoryId)) fees += t.amount;
+      else if (isLoanEmiLinked(t, financed)) loanEmi += t.amount;
+      else purchases += t.amount;
+    }
+  }
+  const activity = {
+    purchases: round2(purchases),
+    loanEmi: round2(loanEmi),
+    fees: round2(fees),
+    peopleCredits: round2(peopleCredits),
+    otherCredits: round2(otherCredits),
+  };
+  const explainedTotal = round2(activity.purchases + activity.loanEmi + activity.fees - activity.peopleCredits - activity.otherCredits);
+  const applied = round2(Math.max(0, bill.totalAmount) - bill.remaining);
+  const transferTotal = round2(Math.min(applied, bill.paidByTransfers ?? 0));
+  const transfers = transferTotal > EPS ? billTransfers(input).get(bill.id) : undefined;
+  const loanEmiPayments = round2(Math.min(transferTotal, transfers?.loanEmi ?? 0));
+  const peoplePayments = round2(Math.min(transferTotal - loanEmiPayments, transfers?.people ?? 0));
+  return {
+    activity: Math.abs(explainedTotal - bill.totalAmount) < EPS ? activity : null,
+    applied,
+    loanEmiPayments,
+    peoplePayments,
+    otherPayments: round2(transferTotal - loanEmiPayments - peoplePayments),
+    adjustments: round2(applied - transferTotal),
+  };
 }
 
 /**

@@ -45,6 +45,7 @@ import { formatCurrency } from "@/lib/format";
 import { ordinalDay } from "@/lib/engines/month-cycle-range";
 import { cn } from "@/lib/utils";
 import { MonthCyclePurposePanel } from "@/features/people/components/purpose-money-signals";
+import { AccountSpendingBreakdown } from "@/features/my-money/components/account-spending-breakdown";
 import { categoryIconFor, categoryToneFor, type ToneName } from "@/features/transactions/hooks/use-transactions-data";
 import {
   useMonthCycleData,
@@ -1172,6 +1173,7 @@ export function MonthCycleWorkspace() {
             </SummaryTile>
           </div>
         </div>
+        <AccountSpendingBreakdown spending={data.spendingFromAccounts} range={data.cycleRange} startDay={data.monthCycleStartDay} exportPeriod={data.monthLabel} />
       </section>
       </Reveal>
 

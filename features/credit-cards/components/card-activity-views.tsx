@@ -35,6 +35,7 @@ import { formatCurrency, formatCurrencyExact } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { CreditCardViewItem } from "@/features/credit-cards/hooks/use-credit-cards-data";
 import { cardFaceGradient } from "@/features/credit-cards/components/credit-card-tile";
+import { formatCardStatementPeriod } from "@/features/credit-cards/lib/card-statement-period";
 import {
   cardDueStatus,
   classifyCardTransaction,
@@ -57,9 +58,6 @@ function daysFromToday(date: Date): number {
 }
 function shortDate(date: Date, year = true): string {
   return date.toLocaleDateString("en-IN", year ? { day: "numeric", month: "short", year: "numeric" } : { day: "numeric", month: "short" });
-}
-function periodLabel(b: { periodStart: Date; periodEnd: Date }): string {
-  return `${shortDate(b.periodStart, false)} – ${shortDate(b.periodEnd, false)}`;
 }
 
 export const DUE_TONE_CLASS: Record<CardDueTone, string> = {
@@ -231,7 +229,7 @@ export function CardBillsView({
         {/* Dates — when it was billed, when it's due, when the next one closes */}
         <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-[14px] border border-border-strong/60 bg-border-strong/40 shadow-e1">
           {[
-            { icon: FileText, label: "Statement", value: bill ? periodLabel(bill) : "—", hint: bill ? (bill.isMaterialized ? "Saved statement" : "Worked out from card days") : "No unpaid bill" },
+            { icon: FileText, label: "Statement period", value: bill ? formatCardStatementPeriod(bill) : "—", hint: bill ? (bill.isMaterialized ? "Saved statement" : "Worked out from card days") : "No unpaid bill" },
             {
               icon: CalendarClock,
               label: "Payment due",
@@ -247,7 +245,7 @@ export function CardBillsView({
                 <m.icon className="size-3.5" strokeWidth={2} />
                 {m.label}
               </dt>
-              <dd className={cn("truncate text-[15px] font-bold tabular-nums", m.danger ? "text-expense" : m.muted ? "font-medium text-foreground/60" : "text-foreground")}>{m.value}</dd>
+              <dd className={cn("text-[15px] font-bold tabular-nums", m.danger ? "text-expense" : m.muted ? "font-medium text-foreground/60" : "text-foreground")}>{m.value}</dd>
               <dd className="truncate text-[11px] text-muted-foreground tabular-nums">{m.hint}</dd>
             </div>
           ))}
@@ -292,8 +290,8 @@ export function CardBillsView({
                 const parts = breakdowns?.get(b.id)?.billed;
                 return (
                   <tr key={b.id} className={cn("transition-colors hover:bg-secondary/40 [&>td]:border-t [&>td]:border-border-strong/35", isCurrent && "bg-primary/[0.07]")}>
-                    <td className="truncate px-4 py-2 font-medium text-foreground tabular-nums">
-                      {periodLabel(b)}
+                    <td className="px-4 py-2 font-medium text-foreground tabular-nums">
+                      {formatCardStatementPeriod(b)}
                       {isCurrent && <span className="ml-2 rounded-[4px] bg-primary/25 px-1.5 py-px text-[10px] font-bold text-primary-accent-text">PAY NOW</span>}
                       {parts && (
                         <div className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">

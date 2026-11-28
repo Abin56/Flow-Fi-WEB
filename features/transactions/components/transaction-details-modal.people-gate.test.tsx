@@ -392,6 +392,36 @@ describe("Card bill — never waits on People repayments", () => {
 
 
 describe("Pay bill — stale statement: refused, then an explicit Refresh bill (never auto-pays)", () => {
+  it("hides the payment preview when the opened statement is paid elsewhere", async () => {
+    const user = userEvent.setup();
+    const onRefreshBill = vi.fn(async () => null);
+    const props = {
+      open: true,
+      onOpenChange: () => {},
+      row: null,
+      expense: null,
+      people,
+      accounts,
+      categories,
+      actions: actions as never,
+      defaultKind: "transfer" as const,
+      initialDestinationAccountId: "octane",
+      initialAmount: 1000,
+      paymentScope: { accountId: "octane", render: (amount: number) => <p>Payment preview {amount}</p> },
+      onRefreshBill,
+    };
+    const view = render(<TransactionDetailsModal {...props} statementIntent={{ accountId: "octane", statementId: "stmt-A", remaining: 1000 }} />);
+    expect(screen.getByText("Payment preview 1000")).toBeTruthy();
+
+    view.rerender(<TransactionDetailsModal {...props} statementIntent={null} />);
+    expect(screen.queryByText(/Payment preview/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Refresh bill" }));
+    expect(onRefreshBill).toHaveBeenCalledWith("octane");
+    expect(amountInput().value).toBe("");
+    expect(screen.getByText("Payment preview 0")).toBeTruthy();
+    nothingSaved();
+  });
+
   it("another device paid ₹4,000 of the ₹10,000 bill: stale Save refused → Refresh loads ₹6,000 → nothing saved until Pay is pressed", async () => {
     const user = userEvent.setup();
     actions.createTransferPair.mockRejectedValueOnce(new CardStatementChangedError());

@@ -17,6 +17,10 @@ vi.mock("next/link", () => ({
 }));
 
 const NOW = new Date(2026, 9, 12, 10);
+const fromAccounts = {
+  loanPayments: { amount: 2500, rows: [] },
+  expenses: { amount: 2400, rows: [] },
+};
 const base = (over: Partial<ObligationItem> & Pick<ObligationItem, "key" | "title" | "dueDate" | "remaining">): ObligationItem => ({
   kind: "loan",
   sourceId: over.key,
@@ -80,6 +84,7 @@ const data = {
     collectedInPeriod: 0,
   },
   spending: {
+    fromAccounts,
     mySpend: 4200,
     sharedMine: 800,
     othersShare: 1600,
@@ -89,6 +94,9 @@ const data = {
   },
   yearSpending: {
     year: 2026,
+    range: { start: new Date(2026, 0, 1), end: new Date(2026, 11, 31, 23, 59, 59, 999) },
+    fromAccounts,
+    monthlyFromAccounts: Array.from({ length: 12 }, (_, month) => ({ loanPayments: month === 9 ? 2500 : 0, expenses: month === 9 ? 2400 : 0 })),
     isCurrentYear: true,
     rangeLabel: "1 Jan 2026 – 31 Dec 2026",
     ...summarizeYearSpend(
@@ -153,6 +161,8 @@ describe("MyMoneyWorkspace", () => {
     expect(year.getAllByText(formatCurrency(10200))).toHaveLength(2);
     // Average over the 10 months that have begun by NOW (Jan–Oct).
     expect(year.getByText(formatCurrency(1020))).toBeTruthy();
+    expect(year.getByText("Loan / EMI paid").nextElementSibling?.textContent).toBe(formatCurrency(2500));
+    expect(year.getByText("Other expenses", { selector: "dt" }).nextElementSibling?.textContent).toBe(formatCurrency(2400));
     expect(year.getByText("Highest month").nextElementSibling?.textContent).toContain("Sep");
     const categories = year.getByText("Spending by category").closest("details")!;
     expect(categories.open).toBe(false);

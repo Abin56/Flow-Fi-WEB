@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 import { useCompactHeader } from "@/components/layout/compact-header";
 import { ScrollNav } from "@/components/layout/scroll-nav";
 import { MyMoneyCompactBar } from "@/features/my-money/components/my-money-compact-bar";
+import { AccountSpendingBreakdown } from "@/features/my-money/components/account-spending-breakdown";
 import { categoryIconFor, categoryToneFor, type ToneName } from "@/features/transactions/hooks/use-transactions-data";
 import { useMyMoneyData, type CollectItem, type MyMoneyData, type SpendCategory } from "@/features/my-money/hooks/use-my-money-data";
 import { daysUntil, type CompletedGroup, type ObligationItem, type ObligationKind, type ObligationStatus, type SharedPerson } from "@/features/my-money/lib/my-money";
@@ -364,7 +365,7 @@ function Summary({ data }: { data: MyMoneyData }) {
               `${spending.purchaseCount} purchase${spending.purchaseCount === 1 ? "" : "s"}`
             )
           }
-          tip="What you spent on yourself this period, including your part of shared expenses. Moving money and paying back debt are excluded."
+          tip="Your own spending this period, including your share of shared expenses and any installments that record a purchase. See From your accounts for direct loan and EMI payments."
         />
         <SummaryCell
           label="Paid"
@@ -941,7 +942,7 @@ function YearSpendingPanel({ data }: { data: MyMoneyData }) {
   const categories = showAll ? ys.topCategories : ys.topCategories.slice(0, CATEGORY_PREVIEW);
   const { comparison } = ys;
   return (
-    <section id="mm-year-spending" aria-labelledby="mm-year" className={cn(PANEL, "@container/year border-primary-accent-text/42")}>
+    <div id="mm-year-spending" className={cn(PANEL, "@container/year border-primary-accent-text/42")}>
       <div className="flex items-center gap-2.5 border-b border-primary-accent-text/20 bg-linear-to-r from-primary/22 to-primary/7 px-3 py-2 max-[359px]:gap-1.5 max-[359px]:px-2 max-[359px]:py-1 sm:px-4 md:gap-2 md:px-3 md:py-1.5">
         <span aria-hidden className="hidden size-7 shrink-0 items-center justify-center rounded-md bg-primary/35 text-primary-accent-text @min-[21rem]/year:flex">
           <BarChart3 className="size-4" strokeWidth={1.9} />
@@ -970,7 +971,7 @@ function YearSpendingPanel({ data }: { data: MyMoneyData }) {
         </div>
       </div>
 
-      <div className="grid gap-3 bg-linear-to-b from-primary/9 to-transparent to-55% p-3 max-[359px]:gap-2 max-[359px]:p-2 sm:px-4 md:gap-2 md:p-2.5">
+      <div className="grid gap-3 bg-linear-to-b from-primary/9 to-transparent to-55% p-3 max-[359px]:gap-2 max-[359px]:p-2 sm:px-4 md:gap-2 md:px-2.5 md:py-2">
         <div className="min-w-0">
           <div className="max-[359px]:flex max-[359px]:flex-wrap max-[359px]:items-baseline max-[359px]:gap-x-2 md:flex md:flex-wrap md:items-baseline md:gap-x-2">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -1024,7 +1025,7 @@ function YearSpendingPanel({ data }: { data: MyMoneyData }) {
           )}
         </details>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -1121,11 +1122,11 @@ function YearSpendingChart({ data }: { data: MyMoneyData }) {
 function SpendingPanel({ data }: { data: MyMoneyData }) {
   const [showAll, setShowAll] = useState(false);
   const { spending } = data;
-  if (spending.mySpend <= 0 && spending.othersShare <= 0) return null;
   const categories = showAll ? spending.topCategories : spending.topCategories.slice(0, CATEGORY_PREVIEW);
   return (
     <section aria-labelledby="mm-spending" className={cn(PANEL, "@container/period-spending")}>
       <PanelHeader id="mm-spending" icon={ShoppingBag} title="Spending this period" action={{ href: "/transactions", label: "Transactions", labelClassName: "md:@max-[18rem]/period-spending:sr-only" }} />
+      <AccountSpendingBreakdown spending={spending.fromAccounts} range={data.cycleRange} startDay={data.startDay} exportPeriod={data.periodLabel} />
 
       {categories.length === 0 && (
         <p className="px-3 py-3 text-xs text-foreground/70 sm:px-4">No spending on yourself this period.</p>
@@ -1206,6 +1207,7 @@ export function MyMoneyWorkspace() {
   const data = useMyMoneyData();
   const { watch: watchTitle, progress: barProgress, reduceMotion: barReduceMotion, barTop } = useCompactHeader();
   if (data.isLoading) return <LoadingState />;
+  const year = data.yearSpending;
   return (
     <div className="flex min-w-0 flex-col gap-3 px-1 max-[359px]:gap-2">
       <MyMoneyCompactBar progress={barProgress} reduceMotion={barReduceMotion} top={barTop} data={data} next={data.toPay.next} />
@@ -1213,7 +1215,19 @@ export function MyMoneyWorkspace() {
       <Summary data={data} />
       <MoneyPanels
         payments={<ToPayPanel data={data} />}
-        year={<YearSpendingPanel data={data} />}
+        year={
+          <section aria-labelledby="mm-year" className="grid min-w-0 gap-2">
+            <YearSpendingPanel data={data} />
+            <AccountSpendingBreakdown
+              spending={year.fromAccounts}
+              range={year.range}
+              startDay={data.startDay}
+              exportPeriod={String(year.year)}
+              months={year.monthlyFromAccounts}
+              className={PANEL}
+            />
+          </section>
+        }
         activity={<><CollectPanel data={data} /><SpendingPanel data={data} /></>}
       />
       <ScrollNav />
